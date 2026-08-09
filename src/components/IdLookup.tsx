@@ -15,20 +15,24 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [copiedDetailIdx, setCopiedDetailIdx] = useState<number | null>(null);
   const [expandedRowIdx, setExpandedRowIdx] = useState<number | null>(null);
 
-  // Extract unique Saída values from loaded rows
+  const matches: LookupMatch[] = useMemo(() => {
+    return searchIdsInRows(inputText, rows);
+  }, [inputText, rows]);
+
+  // Extract unique Saída values from found search matches (or loaded rows if no search)
   const availableSaidas = useMemo(() => {
     const set = new Set<string>();
-    rows.forEach((r) => {
+    const foundRows = matches.length > 0
+      ? matches.filter((m) => m.found && m.row).map((m) => m.row!)
+      : rows;
+
+    foundRows.forEach((r) => {
       if (r.saida && r.saida.trim()) {
         set.add(r.saida.trim());
       }
     });
     return Array.from(set).sort();
-  }, [rows]);
-
-  const matches: LookupMatch[] = useMemo(() => {
-    return searchIdsInRows(inputText, rows);
-  }, [inputText, rows]);
+  }, [rows, matches]);
 
   // Apply Saída filter to matches & sort by Group (1, 2, 3...) then ID
   const filteredMatches = useMemo(() => {

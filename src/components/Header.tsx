@@ -67,16 +67,20 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-[11px] font-bold tracking-wider">
                 {totalRows > 0 ? `${totalRows} IDs CARREGADOS` : 'AGUARDANDO CSV'}
               </span>
+              <span className="text-gray-500 mx-1">|</span>
+              <span className="text-[10px] text-amber-400 font-semibold uppercase">
+                COLEÇÃO: COLETOR
+              </span>
             </div>
 
             {totalRows > 0 && (
               <button
                 onClick={onClear}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-mono text-gray-300 hover:text-red-400 hover:bg-red-950/40 border border-gray-700 hover:border-red-800 transition-colors"
-                title="Limpar dados"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono bg-red-950/60 text-red-300 hover:text-white hover:bg-red-900 border border-red-800 transition-all font-bold"
+                title="Apagar e zerar dados da coleção coletor no Firebase"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Limpar</span>
+                <span>Apagar & Zerar</span>
               </button>
             )}
           </div>
