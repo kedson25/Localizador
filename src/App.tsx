@@ -22,7 +22,7 @@ export default function App() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // On mount, load stored CSV from Firebase Firestore 'coletor' collection
+  // On mount, load stored CSV from Firebase Firestore
   useEffect(() => {
     async function initFromFirebase() {
       setLoadingFirebase(true);
@@ -35,10 +35,9 @@ export default function App() {
           setGroups(parsed.groups);
           setHeaders(parsed.headers);
           setActiveTab('lookup');
-          showNotification(`Dados carregados da coleção 'coletor' no Firebase! (${parsed.rows.length} IDs)`);
         }
       } catch (err) {
-        console.error('Erro ao carregar do Firebase:', err);
+        console.error('Erro ao carregar dados:', err);
       } finally {
         setLoadingFirebase(false);
       }
@@ -54,12 +53,12 @@ export default function App() {
     setGroups(parsed.groups);
     setHeaders(parsed.headers);
 
-    // Save to Firebase 'coletor' collection
+    // Save to Firebase
     const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
     if (saved) {
-      showNotification(`Dados processados e salvos com sucesso na coleção 'coletor' no Firebase! (${parsed.rows.length} IDs)`);
+      showNotification(`Dados processados e salvos com sucesso! (${parsed.rows.length} IDs)`);
     } else {
-      showNotification('Processado localmente (atenção: falha ao salvar no Firebase).');
+      showNotification('Processado localmente.');
     }
   };
 
@@ -70,9 +69,9 @@ export default function App() {
     setHeaders([]);
     setActiveTab('upload');
 
-    // Clear from Firebase 'coletor' collection
+    // Clear from Firebase
     await clearColetor();
-    showNotification('Dados zerados e removidos da coleção \'coletor\' no Firebase com sucesso!');
+    showNotification('Dados zerados com sucesso!');
   };
 
   return (
@@ -107,7 +106,7 @@ export default function App() {
         {loadingFirebase && (
           <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-2 rounded text-xs font-mono flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
-            Verificando dados na coleção 'coletor' no Firebase...
+            Carregando dados salvos...
           </div>
         )}
 
