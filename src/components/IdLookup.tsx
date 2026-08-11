@@ -160,9 +160,9 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             </label>
 
             <div className="flex items-center gap-2">
-              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100/90 rounded-md text-xs font-bold transition-colors shadow-2xs">
+              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100/90 rounded-md text-xs font-bold transition-colors shadow-2xs" title="Carregar arquivo CSV com os IDs a consultar (Coluna A: A2 em diante)">
                 <Upload className="w-3.5 h-3.5 text-amber-700" />
-                <span>Carregar CSV (Coluna A: A2 em diante)</span>
+                <span>Carregar faltantes</span>
                 <input
                   type="file"
                   accept=".csv,.txt,.tsv"
