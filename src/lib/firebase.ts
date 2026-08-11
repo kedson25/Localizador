@@ -27,6 +27,7 @@ export const db = getFirestore(app);
 
 const COLETOR_COLLECTION = 'coletor';
 const MAIN_DOC_ID = 'current_csv';
+const LOCAL_STORAGE_KEY = 'coletor_current_csv_data';
 
 export interface ColetorData {
   rawText: string;
@@ -36,62 +37,118 @@ export interface ColetorData {
 }
 
 /**
+ * Helper to prevent Firebase calls from hanging indefinitely on network issues
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('Firebase operation timed out')), ms)
+    ),
+  ]);
+}
+
+/**
  * Save CSV raw text and metadata to Firebase Firestore collection 'coletor'
+ * and syncs with localStorage as instant backup.
  */
 export async function saveToColetor(rawText: string, totalRows: number, fileName?: string): Promise<boolean> {
+  const localData: ColetorData = {
+    rawText,
+    totalRows,
+    fileName: fileName || 'relatorio.csv',
+    updatedAt: new Date().toISOString(),
+  };
+
+  // Always persist locally first for instant offline availability
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localData));
+  } catch (err) {
+    console.warn('Falha ao salvar no localStorage:', err);
+  }
+
+  // Attempt Firestore sync
   try {
     const coletorRef = doc(db, COLETOR_COLLECTION, MAIN_DOC_ID);
-    await setDoc(coletorRef, {
-      rawText,
-      totalRows,
-      fileName: fileName || 'relatorio.csv',
-      updatedAt: serverTimestamp(),
-    });
+    await withTimeout(
+      setDoc(coletorRef, {
+        rawText,
+        totalRows,
+        fileName: fileName || 'relatorio.csv',
+        updatedAt: serverTimestamp(),
+      }),
+      3500
+    );
     return true;
   } catch (error) {
-    console.error('Erro ao salvar no Firestore (coleção coletor):', error);
-    return false;
+    console.warn('Aviso: Firestore offline ou indisponível (dados salvos localmente):', error);
+    return true; // Local save succeeded
   }
 }
 
 /**
  * Load saved CSV data from Firebase Firestore collection 'coletor'
+ * with local cache fallback for instant load and offline resilience.
  */
 export async function loadFromColetor(): Promise<ColetorData | null> {
+  // 1. Try reading from LocalStorage first for instant responsiveness
+  let localData: ColetorData | null = null;
+  try {
+    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (cached) {
+      localData = JSON.parse(cached) as ColetorData;
+    }
+  } catch (err) {
+    console.warn('Erro ao ler cache local:', err);
+  }
+
+  // 2. Attempt fetching latest version from Firestore with timeout
   try {
     const coletorRef = doc(db, COLETOR_COLLECTION, MAIN_DOC_ID);
-    const snap = await getDoc(coletorRef);
+    const snap = await withTimeout(getDoc(coletorRef), 3000);
+
     if (snap.exists()) {
-      return snap.data() as ColetorData;
+      const remoteData = snap.data() as ColetorData;
+      if (remoteData && remoteData.rawText) {
+        try {
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(remoteData));
+        } catch (_) {}
+        return remoteData;
+      }
     }
-    return null;
   } catch (error) {
-    console.error('Erro ao carregar do Firestore (coleção coletor):', error);
-    return null;
+    console.warn('Não foi possível conectar ao Firestore (usando cache local):', error);
   }
+
+  return localData;
 }
 
 /**
- * Clear/Delete CSV data from Firebase Firestore collection 'coletor'
+ * Clear/Delete CSV data from Firebase Firestore collection 'coletor' and LocalStorage.
  */
 export async function clearColetor(): Promise<boolean> {
   try {
-    // Delete main document
-    const coletorRef = doc(db, COLETOR_COLLECTION, MAIN_DOC_ID);
-    await deleteDoc(coletorRef);
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+  } catch (err) {
+    console.warn('Erro ao limpar localStorage:', err);
+  }
 
-    // If there are other documents in 'coletor', delete them in batch
-    const querySnap = await getDocs(collection(db, COLETOR_COLLECTION));
+  try {
+    const coletorRef = doc(db, COLETOR_COLLECTION, MAIN_DOC_ID);
+    await withTimeout(deleteDoc(coletorRef), 3000);
+
+    const querySnap = await withTimeout(getDocs(collection(db, COLETOR_COLLECTION)), 3000);
     if (!querySnap.empty) {
       const batch = writeBatch(db);
       querySnap.forEach((docSnap) => {
         batch.delete(docSnap.ref);
       });
-      await batch.commit();
+      await withTimeout(batch.commit(), 3000);
     }
     return true;
   } catch (error) {
-    console.error('Erro ao apagar da coleção coletor no Firestore:', error);
-    return false;
+    console.warn('Firestore offline ao apagar (dados limpos localmente):', error);
+    return true;
   }
 }
+

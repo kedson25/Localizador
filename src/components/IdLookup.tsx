@@ -79,7 +79,11 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
 
     return Array.from(map.entries())
       .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      .sort((a, b) => {
+        if (a.name === 'ERROS') return 1;
+        if (b.name === 'ERROS') return -1;
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      });
   }, [filteredMatches]);
 
   const handleCopyResultsText = () => {
@@ -109,21 +113,70 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     setTimeout(() => setCopiedDetailIdx(null), 2000);
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (!content) return;
+
+      const rawLines = content.split(/\r?\n/);
+      const validLines = rawLines.filter((l) => l.trim() !== '');
+
+      if (validLines.length <= 1) {
+        setInputText('');
+        return;
+      }
+
+      // Ignore index 0 (A1 header), process index 1 onwards (A2, A3...)
+      const extractedIds: string[] = [];
+      for (let i = 1; i < validLines.length; i++) {
+        const line = validLines[i].trim();
+        if (!line) continue;
+
+        // Get value from Column A (first column before delimiter)
+        const firstCol = line.split(/[,;\t]/)[0]?.trim().replace(/^["']|["']$/g, '');
+        if (firstCol) {
+          extractedIds.push(firstCol);
+        }
+      }
+
+      setInputText(extractedIds.join('\n'));
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   return (
     <div className="space-y-3">
       {/* Top Search Input Box */}
       <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm relative overflow-hidden">
         <div className="max-w-3xl space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
               Consultar Lista de IDs
             </label>
 
-            {rows.length > 0 && (
-              <span className="text-[11px] font-mono text-gray-500 bg-gray-100 px-2.5 py-0.5 rounded border border-gray-200">
-                {rows.length} IDs indexados
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100/90 rounded-md text-xs font-bold transition-colors shadow-2xs">
+                <Upload className="w-3.5 h-3.5 text-amber-700" />
+                <span>Carregar CSV (Coluna A: A2 em diante)</span>
+                <input
+                  type="file"
+                  accept=".csv,.txt,.tsv"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+
+              {rows.length > 0 && (
+                <span className="text-[11px] font-mono text-gray-500 bg-gray-100 px-2.5 py-1 rounded border border-gray-200">
+                  {rows.length} IDs indexados
+                </span>
+              )}
+            </div>
           </div>
 
           <p className="text-xs text-gray-600">
@@ -259,10 +312,14 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             {foundGroupCounts.map((g) => (
               <div
                 key={g.name}
-                className="bg-amber-50/70 border border-amber-200 px-2 py-0.5 rounded text-xs flex items-center gap-1 font-mono"
+                className={`px-2 py-0.5 rounded text-xs flex items-center gap-1 font-mono border ${
+                  g.name === 'ERROS'
+                    ? 'bg-red-50 border-red-300 text-red-900 font-bold'
+                    : 'bg-amber-50/70 border-amber-200'
+                }`}
               >
-                <span className="text-amber-900 font-bold">{g.name}:</span>
-                <span className="text-gray-900 font-black bg-white px-1.5 py-0.2 rounded border border-amber-200">
+                <span className={g.name === 'ERROS' ? 'text-red-700 font-bold' : 'text-amber-900 font-bold'}>{g.name}:</span>
+                <span className="text-gray-900 font-black bg-white px-1.5 py-0.2 rounded border border-gray-200">
                   {g.count} {g.count === 1 ? 'ID' : 'IDs'}
                 </span>
               </div>
@@ -313,10 +370,17 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
 
                         <td className="py-2 px-3 whitespace-nowrap">
                           {match.found && match.row ? (
-                            <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded text-[11px] border border-amber-200">
-                              <Layers className="w-3 h-3 text-amber-700" />
-                              {match.row.group}
-                            </span>
+                            match.row.group === 'ERROS' ? (
+                              <span className="inline-flex items-center gap-1 bg-red-100 text-red-900 font-bold px-2 py-0.5 rounded text-[11px] border border-red-300">
+                                <AlertCircle className="w-3 h-3 text-red-600" />
+                                {match.row.group}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded text-[11px] border border-amber-200">
+                                <Layers className="w-3 h-3 text-amber-700" />
+                                {match.row.group}
+                              </span>
+                            )
                           ) : (
                             <span className="inline-flex items-center gap-1 bg-red-50 text-red-700 font-bold px-2 py-0.5 rounded text-[10px] border border-red-200">
                               <AlertCircle className="w-3 h-3 text-red-500" />

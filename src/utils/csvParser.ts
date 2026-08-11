@@ -62,7 +62,7 @@ export function parseCsvText(rawText: string): { rows: CsvRow[]; groups: GroupSu
   let currentGroup = 'GRUPO 1';
   let rowIndexCounter = 0;
 
-  const groupRegex = /^\s*(GRUPO\s*\d+|GRUPO\s+[A-Za-z0-9_-]+)/i;
+  const groupRegex = /^\s*((?:GRUPO|CPG|SACOLA|SACOLAS|SAC|GROUP)\s*[-_]?\s*[A-Za-z0-9_-]+)/i;
 
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
@@ -104,6 +104,11 @@ export function parseCsvText(rawText: string): { rows: CsvRow[]; groups: GroupSu
       continue;
     }
 
+    // Identify if ID consists of exactly 11 numeric digits (e.g. 47712645205)
+    // Whatever is different is separated into group 'ERROS'
+    const is11Digits = /^\d{11}$/.test(cleanId);
+    const assignedGroup = is11Digits ? currentGroup : 'ERROS';
+
     // Build raw fields mapping
     const rawFields: Record<string, string> = {};
     headers.forEach((h, idx) => {
@@ -121,7 +126,7 @@ export function parseCsvText(rawText: string): { rows: CsvRow[]; groups: GroupSu
       id: rawId,
       originalId: rawId,
       cleanId: cleanId,
-      group: currentGroup,
+      group: assignedGroup,
       saida: getVal('Saída', 1) || getVal('Saida', 1),
       motivo: getVal('MOTIVO', 2),
       reversao: getVal('Reversão', 3) || getVal('Reversao', 3),
@@ -156,7 +161,11 @@ export function parseCsvText(rawText: string): { rows: CsvRow[]; groups: GroupSu
       count: groupRows.length,
       rows: groupRows,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    .sort((a, b) => {
+      if (a.name === 'ERROS') return 1;
+      if (b.name === 'ERROS') return -1;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
   return { rows, groups, headers };
 }
