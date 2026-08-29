@@ -13,13 +13,20 @@ import { ControleRefugo } from './components/ControleRefugo';
 import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('tools');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    const saved = localStorage.getItem('activeTab');
+    return (saved as ActiveTab) || 'tools';
+  });
   const [rawText, setRawText] = useState<string>('');
   const [rows, setRows] = useState<CsvRow[]>([]);
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
+
+  useEffect(() => {
+    localStorage.setItem('activeTab', activeTab);
+  }, [activeTab]);
 
   const showNotification = (msg: string) => {
     setNotification(msg);

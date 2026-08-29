@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download } from 'lucide-react';
 import { RefugoRow } from '../types';
-import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans } from '../lib/firebase';
+import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans } from '../lib/firebase';
 
 interface ScannedItem {
   id: string;
@@ -26,21 +26,21 @@ export function ControleRefugo() {
       if (data && data.rawText) {
         parseCSV(data.rawText, false);
       }
-      
-      const savedScanned = await loadRefugoScans();
-      if (savedScanned) {
-        setScannedItems(savedScanned);
-      }
     };
     fetchRefugo();
-  }, []);
 
-  useEffect(() => {
-    // Save scanned items
-    if (scannedItems.length >= 0) {
-      saveRefugoScans(scannedItems);
-    }
-  }, [scannedItems]);
+    // Listen to real-time scans
+    const unsubscribe = listenToRefugoScans((scans) => {
+      // Fix dates since Firestore might not return Date objects directly
+      const parsedScans = scans.map(s => ({
+        ...s,
+        scannedAt: s.scannedAt ? (typeof s.scannedAt === 'string' ? new Date(s.scannedAt) : s.scannedAt) : new Date()
+      }));
+      setScannedItems(parsedScans);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const parseCSV = (text: string, saveToDb: boolean = true) => {
     Papa.parse(text, {
@@ -78,6 +78,7 @@ export function ControleRefugo() {
       parseCSV(text);
       // Reset scans when new file is loaded
       setScannedItems([]);
+      saveRefugoScans([]);
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -115,10 +116,14 @@ export function ControleRefugo() {
 
     if (foundRow) {
       setLastScanResult({ status: 'success', message: `ROTA VÁLIDA: ${foundRow.rota}` });
-      setScannedItems(prev => [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found' }, ...prev]);
+      const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found' }, ...scannedItems];
+      setScannedItems(newScans);
+      saveRefugoScans(newScans);
     } else {
       setLastScanResult({ status: 'error', message: `NÃO ENCONTRADO na lista de faltantes!` });
-      setScannedItems(prev => [{ id: cleanInput, rota: 'Desconhecida', scannedAt: new Date(), status: 'not_found' }, ...prev]);
+      const newScans: ScannedItem[] = [{ id: cleanInput, rota: 'Desconhecida', scannedAt: new Date(), status: 'not_found' }, ...scannedItems];
+      setScannedItems(newScans);
+      saveRefugoScans(newScans);
     }
 
     setBipInput('');

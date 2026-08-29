@@ -9,6 +9,7 @@ import {
   deleteDoc,
   writeBatch,
   serverTimestamp,
+  onSnapshot,
 } from 'firebase/firestore';
 
 const firebaseConfig = {
@@ -305,4 +306,28 @@ export async function clearRefugoScans(): Promise<boolean> {
     console.warn('Firestore offline ao apagar scans:', error);
     return true;
   }
+}
+
+export function listenToRefugoScans(callback: (scans: any[]) => void): () => void {
+  const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
+  
+  // Real-time listener
+  const unsubscribe = onSnapshot(refugoScansRef, (snap) => {
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data && data.scans) {
+        // Sync local storage on update
+        try {
+          localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(data.scans));
+        } catch (_) {}
+        callback(data.scans);
+      }
+    } else {
+      callback([]); // document was deleted or doesn't exist
+    }
+  }, (error) => {
+    console.warn('Erro ao escutar scans em tempo real:', error);
+  });
+
+  return unsubscribe;
 }
