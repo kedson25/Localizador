@@ -33,4 +33,10 @@ export interface LookupMatch {
   matchedGroup?: string;
 }
 
-export type ActiveTab = 'lookup' | 'remove' | 'upload';
+export interface RefugoRow {
+  id: string;
+  rota: string;
+  rawFields: Record<string, string>;
+}
+
+export type ActiveTab = 'tools' | 'lookup' | 'remove' | 'report' | 'upload' | 'refugo';

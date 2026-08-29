@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { ActiveTab, CsvRow, GroupSummary } from './types';
 import { parseCsvText } from './utils/csvParser';
 import { Header } from './components/Header';
+import { ToolsHub } from './components/ToolsHub';
 import { IdLookup } from './components/IdLookup';
 import { IdRemover } from './components/IdRemover';
+import { WhatsappReport } from './components/WhatsappReport';
 import { CsvUploader } from './components/CsvUploader';
 import { StatsSummary } from './components/StatsSummary';
+import { ControleRefugo } from './components/ControleRefugo';
 import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('upload');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('tools');
   const [rawText, setRawText] = useState<string>('');
   const [rows, setRows] = useState<CsvRow[]>([]);
   const [groups, setGroups] = useState<GroupSummary[]>([]);
@@ -34,7 +38,6 @@ export default function App() {
           setRows(parsed.rows);
           setGroups(parsed.groups);
           setHeaders(parsed.headers);
-          setActiveTab('lookup');
         }
       } catch (err) {
         console.error('Erro ao carregar dados:', err);
@@ -67,7 +70,7 @@ export default function App() {
     setRows([]);
     setGroups([]);
     setHeaders([]);
-    setActiveTab('upload');
+    setActiveTab('tools');
 
     // Clear from Firebase
     await clearColetor();
@@ -75,18 +78,30 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F3F4F6] text-[#1F2937] flex flex-col font-sans selection:bg-blue-500 selection:text-white">
-      {/* Top Fixed High Density Header */}
-      <Header
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        onClear={handleClear}
-        totalRows={rows.length}
-        totalGroups={groups.length}
-      />
+    <div className="min-h-screen bg-[#EBEBEB] text-[#333333] flex flex-col font-sans selection:bg-[#3483FA] selection:text-white">
+      {/* Global Theme Header */}
+      {activeTab !== 'tools' && (
+        <header className="bg-[#FFE600] px-4 py-3 sticky top-0 z-50 shadow-sm flex items-center justify-between">
+          <button 
+            onClick={() => setActiveTab('tools')}
+            className="flex items-center gap-2 text-sm font-bold text-[#333333] hover:text-black transition-colors bg-white/60 hover:bg-white/80 px-3 py-1.5 rounded-md"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Voltar
+          </button>
+          
+          <div className="text-xs font-bold text-[#2D3277]/70 uppercase hidden sm:block">
+            {activeTab === 'lookup' && 'Consultar IDs'}
+            {activeTab === 'remove' && 'Remover IDs'}
+            {activeTab === 'report' && 'Reporte WhatsApp'}
+            {activeTab === 'upload' && 'Importar CSV'}
+            {activeTab === 'refugo' && 'Controle Refugo'}
+          </div>
+        </header>
+      )}
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-4">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
         {/* Floating Notification */}
         {notification && (
           <div className="bg-[#111827] text-white px-4 py-2.5 rounded shadow-md text-xs font-mono flex items-center justify-between border border-gray-700 animate-in fade-in">
@@ -110,10 +125,21 @@ export default function App() {
           </div>
         )}
 
-        {/* Stats Summary Bar */}
-        <StatsSummary totalRows={rows.length} groups={groups} />
-
         {/* Tab Views */}
+        {activeTab === 'tools' && (
+          <ToolsHub
+            onSelectTab={setActiveTab}
+            totalRows={rows.length}
+            groups={groups}
+            onClear={handleClear}
+          />
+        )}
+
+        {/* Stats Summary Bar for lookup */}
+        {activeTab === 'lookup' && (
+          <StatsSummary totalRows={rows.length} groups={groups} />
+        )}
+
         {activeTab === 'lookup' && (
           <IdLookup
             rows={rows}
@@ -128,11 +154,21 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'report' && (
+          <WhatsappReport
+            rows={rows}
+          />
+        )}
+
+        {activeTab === 'refugo' && (
+          <ControleRefugo />
+        )}
+
         {activeTab === 'upload' && (
           <CsvUploader
             onLoadText={(text) => {
               handleParseAndSave(text);
-              setActiveTab('lookup');
+              setActiveTab('tools');
             }}
             currentTotalRows={rows.length}
           />
