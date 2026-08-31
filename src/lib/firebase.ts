@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
+  initializeFirestore,
   getFirestore,
   collection,
   doc,
@@ -24,7 +25,17 @@ const firebaseConfig = {
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-export const db = getFirestore(app);
+
+let firestoreDb;
+try {
+  firestoreDb = initializeFirestore(app, {
+    experimentalForceLongPolling: true,
+  });
+} catch (e) {
+  firestoreDb = getFirestore(app);
+}
+
+export const db = firestoreDb;
 
 const REFUGO_COLLECTION = 'refugo';
 const MAIN_REFUGO_DOC_ID = 'current_refugo_csv';
@@ -96,6 +107,9 @@ export async function loadRefugo(): Promise<RefugoData | null> {
         } catch (_) {}
         return remoteData;
       }
+    } else {
+      try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_KEY); } catch (_) {}
+      return null;
     }
   } catch (error) {
     console.warn('Não foi possível conectar ao Firestore para refugo:', error);
@@ -117,6 +131,32 @@ export async function clearRefugo(): Promise<boolean> {
     console.warn('Firestore offline ao apagar refugo:', error);
     return true;
   }
+}
+
+export function listenToRefugo(callback: (data: RefugoData | null) => void): () => void {
+  const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
+  
+  const unsubscribe = onSnapshot(refugoRef, (snap) => {
+    if (snap.exists()) {
+      const data = snap.data() as RefugoData;
+      if (data && data.rawText) {
+        try {
+          localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify(data));
+        } catch (_) {}
+        callback(data);
+      } else {
+        try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_KEY); } catch (_) {}
+        callback(null);
+      }
+    } else {
+      try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_KEY); } catch (_) {}
+      callback(null); // document was deleted or doesn't exist
+    }
+  }, (error) => {
+    console.warn('Erro ao escutar refugo em tempo real:', error);
+  });
+
+  return unsubscribe;
 }
 
 export interface ColetorData {
@@ -280,12 +320,18 @@ export async function loadRefugoScans(): Promise<any[] | null> {
     const snap = await withTimeout(getDoc(refugoScansRef), 3000);
     if (snap.exists()) {
       const remoteData = snap.data();
-      if (remoteData && remoteData.scans) {
+      if (remoteData && Array.isArray(remoteData.scans)) {
         try {
           localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(remoteData.scans));
         } catch (_) {}
         return remoteData.scans;
+      } else {
+        try { localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify([])); } catch (_) {}
+        return [];
       }
+    } else {
+      try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_SCANS_KEY); } catch (_) {}
+      return [];
     }
   } catch (error) {
     console.warn('Não foi possível conectar ao Firestore para scans:', error);
@@ -315,14 +361,18 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
   const unsubscribe = onSnapshot(refugoScansRef, (snap) => {
     if (snap.exists()) {
       const data = snap.data();
-      if (data && data.scans) {
+      if (data && Array.isArray(data.scans)) {
         // Sync local storage on update
         try {
           localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(data.scans));
         } catch (_) {}
         callback(data.scans);
+      } else {
+        try { localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify([])); } catch (_) {}
+        callback([]);
       }
     } else {
+      try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_SCANS_KEY); } catch (_) {}
       callback([]); // document was deleted or doesn't exist
     }
   }, (error) => {

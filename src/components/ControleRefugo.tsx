@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download } from 'lucide-react';
 import { RefugoRow } from '../types';
-import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans } from '../lib/firebase';
+import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo } from '../lib/firebase';
 
 interface ScannedItem {
   id: string;
@@ -17,20 +17,28 @@ export function ControleRefugo() {
   const [bipInput, setBipInput] = useState('');
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
+  const [baseDate, setBaseDate] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Load persisted refugo data
-    const fetchRefugo = async () => {
-      const data = await loadRefugo();
+    // Listen to real-time refugo base
+    const unsubRefugo = listenToRefugo((data) => {
       if (data && data.rawText) {
         parseCSV(data.rawText, false);
+        if (data.updatedAt) {
+          const d = typeof data.updatedAt === 'string' ? new Date(data.updatedAt) : (data.updatedAt.toDate ? data.updatedAt.toDate() : new Date(data.updatedAt));
+          setBaseDate(d.toLocaleString('pt-BR'));
+        } else {
+          setBaseDate(null);
+        }
+      } else {
+        setRows([]);
+        setBaseDate(null);
       }
-    };
-    fetchRefugo();
+    });
 
     // Listen to real-time scans
-    const unsubscribe = listenToRefugoScans((scans) => {
+    const unsubScans = listenToRefugoScans((scans) => {
       // Fix dates since Firestore might not return Date objects directly
       const parsedScans = scans.map(s => ({
         ...s,
@@ -39,7 +47,10 @@ export function ControleRefugo() {
       setScannedItems(parsedScans);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubRefugo();
+      unsubScans();
+    };
   }, []);
 
   const parseCSV = (text: string, saveToDb: boolean = true) => {
@@ -68,27 +79,38 @@ export function ControleRefugo() {
 
   const cleanDigits = (str: string) => str.replace(/\D/g, '');
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const text = event.target?.result as string;
-      parseCSV(text);
-      // Reset scans when new file is loaded
+      
+      // Force clean scans before loading new base to avoid mixing
+      await clearRefugoScans();
       setScannedItems([]);
-      saveRefugoScans([]);
+      setLastScanResult(null);
+
+      parseCSV(text, true);
     };
     reader.readAsText(file);
     e.target.value = '';
   };
 
   const clearData = async () => {
-    if (window.confirm("Deseja realmente limpar a base de faltantes?")) {
+    if (window.confirm("Deseja realmente limpar a base de faltantes? (Isso também apagará os itens bipados)")) {
       await clearRefugo();
       await clearRefugoScans();
       setRows([]);
+      setScannedItems([]);
+      setLastScanResult(null);
+    }
+  };
+
+  const clearScans = async () => {
+    if (window.confirm("Deseja limpar apenas o histórico de pacotes bipados?")) {
+      await clearRefugoScans();
       setScannedItems([]);
       setLastScanResult(null);
     }
@@ -119,9 +141,17 @@ export function ControleRefugo() {
       const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found' }, ...scannedItems];
       setScannedItems(newScans);
       saveRefugoScans(newScans);
+      
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance(foundRow.rota);
+        msg.lang = 'pt-BR';
+        msg.rate = 1.2;
+        window.speechSynthesis.speak(msg);
+      }
     } else {
-      setLastScanResult({ status: 'error', message: `NÃO ENCONTRADO na lista de faltantes!` });
-      const newScans: ScannedItem[] = [{ id: cleanInput, rota: 'Desconhecida', scannedAt: new Date(), status: 'not_found' }, ...scannedItems];
+      setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}` });
+      const newScans: ScannedItem[] = [{ id: cleanInput, rota: '', scannedAt: new Date(), status: 'not_found' }, ...scannedItems];
       setScannedItems(newScans);
       saveRefugoScans(newScans);
     }
@@ -130,17 +160,16 @@ export function ControleRefugo() {
     inputRef.current?.focus();
   };
 
-  const pendingRows = rows.filter(r => !scannedItems.some(s => s.id === r.id && s.status === 'found'));
   const foundItems = scannedItems.filter(s => s.status === 'found');
 
-  const exportPendingCSV = () => {
-    if (pendingRows.length === 0) return;
-    const csvContent = "ID,ROTA\n" + pendingRows.map(r => `${r.id},${r.rota}`).join("\n");
+  const exportScannedCSV = () => {
+    if (scannedItems.length === 0) return;
+    const csvContent = "ID,ROTA\n" + scannedItems.map(r => `${r.id},${r.status === 'found' ? r.rota : 'SEM ROTA'}`).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", "pacotes_nao_encontrados.csv");
+    link.setAttribute("download", "log_coletor_bipados.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -244,20 +273,17 @@ export function ControleRefugo() {
             </div>
           </div>
 
-          {/* Pending List Area / Backlog */}
+          {/* Scanned List Area */}
           <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col h-full min-h-[500px]">
             {/* Headers and Controls */}
             <div className="flex flex-col gap-4 mb-4 pb-4 border-b border-gray-100">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-[#333333] uppercase tracking-wider">
-                  Status do Backlog
-                </h3>
+              <div className="flex items-center justify-end">
                 <div className="flex items-center gap-3">
                   <span className="text-xs font-bold text-gray-400 bg-gray-50 px-2.5 py-1 rounded-md border border-gray-200">
-                    Base: {rows.length}
+                    Base: {rows.length} {baseDate && <span className="font-normal ml-1">({baseDate})</span>}
                   </span>
-                  <span className="bg-[#FFE600] text-[#333333] px-3 py-1 rounded-full font-mono text-xs font-bold">
-                    {pendingRows.length} pendentes
+                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-mono text-xs font-bold">
+                    {scannedItems.length} Bipados
                   </span>
                 </div>
               </div>
@@ -275,45 +301,55 @@ export function ControleRefugo() {
                   <Trash2 className="w-4 h-4" />
                   Limpar
                 </button>
-                {pendingRows.length > 0 && (
-                  <button
-                    onClick={exportPendingCSV}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 text-[#333333] text-xs font-bold rounded-lg transition-colors border border-gray-300 shadow-sm ml-auto"
-                  >
-                    <Download className="w-4 h-4" />
-                    Baixar CSV
-                  </button>
+                {scannedItems.length > 0 && (
+                  <>
+                    <button
+                      onClick={clearScans}
+                      className="px-3 py-1.5 text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors flex items-center gap-1.5 ml-auto"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Limpar Bipados
+                    </button>
+                    <button
+                      onClick={exportScannedCSV}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 text-[#333333] text-xs font-bold rounded-lg transition-colors border border-gray-300 shadow-sm"
+                    >
+                      <Download className="w-4 h-4" />
+                      Baixar Bipados (CSV)
+                    </button>
+                  </>
                 )}
               </div>
             </div>
             
             <div className="overflow-y-auto flex-1 pr-2 space-y-2">
-              {foundItems.length > 0 && foundItems.map((item, idx) => (
-                <div key={`found-${idx}`} className="flex justify-between items-center p-3 rounded-lg border border-emerald-200 bg-emerald-50 opacity-75 hover:opacity-100 transition-opacity">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                    <span className="font-mono font-bold text-emerald-900 text-sm line-through decoration-emerald-500/50">{item.id}</span>
-                  </div>
-                  <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
-                    Rota: {item.rota}
-                  </span>
-                </div>
-              ))}
-
-              {pendingRows.length > 0 ? (
-                pendingRows.map((row, idx) => (
-                  <div key={`pending-${idx}`} className="flex justify-between items-center p-3 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
-                    <span className="font-mono font-bold text-[#333333] text-sm">{row.id}</span>
-                    <span className="bg-white shadow-sm border border-gray-200 text-gray-700 px-2.5 py-1 rounded text-xs font-bold">
-                      Rota: {row.rota}
-                    </span>
+              {scannedItems.length > 0 ? (
+                scannedItems.map((item, idx) => (
+                  <div key={`scan-${idx}`} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${item.status === 'found' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="flex items-center gap-2">
+                      {item.status === 'found' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-red-500" />
+                      )}
+                      <span className={`font-mono font-bold text-sm ${item.status === 'found' ? 'text-emerald-900' : 'text-red-900'}`}>{item.id}</span>
+                    </div>
+                    {item.status === 'found' ? (
+                      <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
+                        Rota: {item.rota}
+                      </span>
+                    ) : (
+                      <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded text-xs font-bold border border-red-200">
+                        SEM ROTA
+                      </span>
+                    )}
                   </div>
                 ))
               ) : (
                 <div className="flex flex-col items-center justify-center py-10 text-center text-gray-500">
-                   <CheckCircle2 className="w-12 h-12 text-emerald-400 mb-3" />
-                   <p className="text-base font-bold text-[#333333]">Todos os pacotes foram encontrados!</p>
-                   <p className="text-sm mt-1">A lista de pendências está vazia.</p>
+                   <Barcode className="w-12 h-12 text-gray-300 mb-3" />
+                   <p className="text-base font-bold text-[#333333]">Nenhum pacote bipado</p>
+                   <p className="text-sm mt-1">Comece a ler os pacotes para ver o histórico.</p>
                 </div>
               )}
             </div>
