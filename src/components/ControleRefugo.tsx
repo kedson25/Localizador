@@ -11,6 +11,31 @@ interface ScannedItem {
   status: 'found' | 'not_found';
 }
 
+let audioCtx: AudioContext | null = null;
+const playBeep = () => {
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+    
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15);
+    
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+  } catch (e) {
+    console.error("Audio beep error:", e);
+  }
+};
+
 export function ControleRefugo() {
   const [rows, setRows] = useState<RefugoRow[]>([]);
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
@@ -120,7 +145,22 @@ export function ControleRefugo() {
     e.preventDefault();
     if (!bipInput.trim()) return;
 
-    const cleanInput = bipInput.trim().toUpperCase();
+    let processedInput = bipInput.trim();
+    
+    // Replace dirt patterns (dÇ4, dÇ⁴) with 4
+    processedInput = processedInput.replace(/d[çc]⁴/gi, '4');
+    processedInput = processedInput.replace(/d[çc]4/gi, '4');
+    
+    // Extract ID starting with 47 if there is one
+    const match47 = processedInput.match(/(47\d+)/);
+    if (match47) {
+      processedInput = match47[1];
+    } else {
+      // Fallback: just remove trailing 'm'
+      processedInput = processedInput.replace(/m$/i, '');
+    }
+
+    const cleanInput = processedInput.toUpperCase();
     const cleanInputDigits = cleanDigits(cleanInput);
     
     // Check if already scanned
@@ -137,14 +177,19 @@ export function ControleRefugo() {
     });
 
     if (foundRow) {
-      setLastScanResult({ status: 'success', message: `ROTA VÁLIDA: ${foundRow.rota}` });
+      const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
+      const message = isHibrida ? `ROTA VÁLIDA: ${foundRow.rota} (HÍBRIDA)` : `ROTA VÁLIDA: ${foundRow.rota}`;
+      
+      setLastScanResult({ status: 'success', message });
       const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found' }, ...scannedItems];
       setScannedItems(newScans);
       saveRefugoScans(newScans);
       
-      if ('speechSynthesis' in window) {
+      playBeep();
+
+      if (isHibrida && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        const msg = new SpeechSynthesisUtterance(foundRow.rota);
+        const msg = new SpeechSynthesisUtterance("Rota Híbrida");
         msg.lang = 'pt-BR';
         msg.rate = 1.2;
         window.speechSynthesis.speak(msg);
