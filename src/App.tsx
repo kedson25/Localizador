@@ -125,7 +125,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"}`}>
+      <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : location.pathname === "/listas" ? "px-4 sm:px-6 py-6 space-y-4" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"}`}>
         {/* Floating Notification */}
         {notification && (
           <div className="bg-[#111827] text-white px-4 py-2.5 rounded shadow-md text-xs font-mono flex items-center justify-between border border-gray-700 animate-in fade-in">

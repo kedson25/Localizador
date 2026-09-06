@@ -30,6 +30,7 @@ import {
   CheckCheck,
   Zap
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { 
   listenToRefugoScans, 
   saveRefugoScans, 
@@ -592,7 +593,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
 
     return (
-      <div className="max-w-7xl mx-auto space-y-6 pb-12 animate-in fade-in duration-300">
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full space-y-6 pb-12"
+      >
         {/* Header Principal */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -615,36 +620,58 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         </div>
 
         {/* Resumo de Métricas Topo */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div className="bg-white border border-gray-200 p-4 rounded-xl flex items-center gap-4 shadow-sm">
-            <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">
-              <Package className="w-6 h-6" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          <motion.div 
+            whileHover={{ y: -5 }}
+            className="bg-white border border-gray-200 p-6 rounded-2xl flex items-center gap-4 shadow-sm transition-all hover:shadow-md border-b-4 border-b-blue-500"
+          >
+            <div className="p-4 bg-blue-50 text-blue-600 rounded-xl">
+              <Package className="w-7 h-7" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-[#333333]">{totalListas}</p>
-              <p className="text-xs text-gray-500 font-medium">Total de Listas</p>
+              <p className="text-3xl font-bold text-[#333333] tracking-tight">{totalListas}</p>
+              <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Total de Listas</p>
             </div>
-          </div>
+          </motion.div>
 
-          <div className="bg-white border border-gray-200 p-4 rounded-xl flex items-center gap-4 shadow-sm">
-            <div className="p-3 bg-amber-50 text-amber-600 rounded-lg">
-              <Clock className="w-6 h-6" />
+          <motion.div 
+            whileHover={{ y: -5 }}
+            className="bg-white border border-gray-200 p-6 rounded-2xl flex items-center gap-4 shadow-sm transition-all hover:shadow-md border-b-4 border-b-amber-500"
+          >
+            <div className="p-4 bg-amber-50 text-amber-600 rounded-xl">
+              <Clock className="w-7 h-7" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-[#333333]">{listasAtivas}</p>
-              <p className="text-xs text-gray-500 font-medium">Listas Em Andamento</p>
+              <p className="text-3xl font-bold text-[#333333] tracking-tight">{listasAtivas}</p>
+              <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Em Andamento</p>
             </div>
-          </div>
+          </motion.div>
 
-          <div className="bg-white border border-gray-200 p-4 rounded-xl flex items-center gap-4 shadow-sm sm:col-span-2 lg:col-span-1">
-            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
-              <CheckCircle2 className="w-6 h-6" />
+          <motion.div 
+            whileHover={{ y: -5 }}
+            className="bg-white border border-gray-200 p-6 rounded-2xl flex items-center gap-4 shadow-sm transition-all hover:shadow-md border-b-4 border-b-emerald-500"
+          >
+            <div className="p-4 bg-emerald-50 text-emerald-600 rounded-xl">
+              <CheckCircle2 className="w-7 h-7" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-emerald-600">{totalItensColetados}</p>
-              <p className="text-xs text-gray-500 font-medium">Total de IDs Coletados</p>
+              <p className="text-3xl font-bold text-emerald-600 tracking-tight">{totalItensColetados}</p>
+              <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">IDs Coletados</p>
             </div>
-          </div>
+          </motion.div>
+
+          <motion.div 
+            whileHover={{ y: -5 }}
+            className="hidden xl:flex bg-gradient-to-br from-[#3483FA] to-blue-700 p-6 rounded-2xl items-center gap-4 shadow-md text-white border-b-4 border-b-blue-900"
+          >
+            <div className="p-4 bg-white/20 text-white rounded-xl backdrop-blur-sm">
+              <Zap className="w-7 h-7" />
+            </div>
+            <div>
+              <p className="text-lg font-bold leading-tight">Coleta Rápida</p>
+              <p className="text-[10px] text-white/80 font-medium uppercase tracking-wider">Otimizado para agilidade</p>
+            </div>
+          </motion.div>
         </div>
 
         {/* TABELA DE LISTAS (EXIBIÇÃO EM LISTA E NÃO EM BLOCOS) */}
@@ -880,13 +907,42 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </div>
           </div>
         )}
-      </div>
+      </motion.div>
     );
   }
 
   // -------------------------------------------------------------
   // VIEW 2: TELA DE COLETA DA LISTA ATIVA (COM DADOS REAIS E PAINEL DIREITO SEM PENDENTES)
   // -------------------------------------------------------------
+  const getShortSaida = (saida: string) => {
+    if (!saida) return '-';
+    if (saida.includes('AM')) return 'AM';
+    if (saida.includes('PM')) return 'PM';
+    if (saida.includes('SD')) return 'SD';
+    if (saida.toLowerCase().includes('rota')) return 'ROTA';
+    return saida;
+  };
+
+  const getMotivoStyle = (motivo: string) => {
+    const m = motivo?.toLowerCase() || '';
+    if (!m || m === 'sem motivo' || m === 'pendente' || m === '-') {
+      return 'bg-gray-100 text-gray-400 border-gray-200';
+    }
+    
+    if (m.includes('desconteinerizado')) return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+    if (m.includes('branca')) return 'bg-slate-50 text-slate-700 border-slate-200';
+    if (m.includes('onway')) return 'bg-blue-50 text-blue-700 border-blue-200';
+    if (m.includes('inventário')) return 'bg-purple-50 text-purple-700 border-purple-200';
+    if (m.includes('parcial')) return 'bg-orange-50 text-orange-700 border-orange-200';
+    if (m.includes('insucesso')) return 'bg-red-50 text-red-700 border-red-200';
+    if (m.includes('bipado')) return 'bg-cyan-50 text-cyan-700 border-cyan-200';
+    if (m.includes('transferência')) return 'bg-violet-50 text-violet-700 border-violet-200';
+    if (m.includes('roteirizado')) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (m.includes('aguardando')) return 'bg-amber-50 text-amber-700 border-amber-200';
+    
+    return 'bg-blue-50 text-blue-700 border-blue-200';
+  };
+
   const totalColetados = listaAtiva.itens.length;
 
   // Saídas presentes apenas nos IDs que realmente foram inseridos/bipados
@@ -915,154 +971,37 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   });
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 pb-12 animate-in fade-in duration-300">
-      {/* Top Header */}
-      <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <button
-            onClick={() => setActiveListaId(null)}
-            className="w-full sm:w-auto px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Voltar pras Listas
-          </button>
-
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-bold text-[#333333] truncate max-w-[200px] sm:max-w-none">{listaAtiva.nome}</h2>
-              {listaAtiva.rota && listaAtiva.rota !== 'Geral' && (
-                <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded text-xs font-mono font-bold flex items-center gap-1">
-                  <MapPin className="w-3 h-3" /> Rota: {listaAtiva.rota}
-                </span>
-              )}
-              <span className="bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded text-xs font-semibold">
-                {listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM'}
-              </span>
-            </div>
-            <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
-              Criado por <strong className="text-gray-700">{listaAtiva.responsavel}</strong> em {listaAtiva.data}.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setShowModalLote(true)}
-            className="flex-1 sm:flex-none px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 border border-blue-200 transition-colors cursor-pointer"
-          >
-            <ListPlus className="w-4 h-4" />
-            Colar Lote
-          </button>
-
-          <button
-            onClick={() => exportListaCSV(listaAtiva)}
-            className="flex-1 sm:flex-none px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            CSV
-          </button>
-
-          {listaAtiva.status === 'em_andamento' && (
-            <button
-              onClick={() => handleFinalizarLista(listaAtiva.id)}
-              className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Finalizar
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* GRID COM SCANNER + TABELA À ESQUERDA E PAINEL DIREITO */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="w-full space-y-4 pb-12"
+    >
+      {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
         
-        {/* COLUNA ESQUERDA (2 COLS) — SCANNER + TABELA DE IDS */}
-        <div className="lg:col-span-2 space-y-4">
-          
-          {/* Card Bip Scanner ("bip menor") */}
-          <div className="bg-white border border-gray-200 rounded-xl p-3 sm:p-4 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-              <div className="flex items-center gap-2">
-                <Barcode className="w-5 h-5 text-[#3483FA]" />
-                <span className="font-bold text-sm text-[#333333]">Leitor de Pacotes</span>
-              </div>
-
-              <button 
-                type="button" 
-                onClick={() => {
-                  setIsLocked(!isLocked);
-                  if (isLocked) setTimeout(() => inputRef.current?.focus(), 50);
-                }}
-                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border cursor-pointer ${
-                  isLocked 
-                    ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                }`}
-              >
-                {isLocked ? <><Lock className="w-3.5 h-3.5" /> Bip Travado</> : <><Unlock className="w-3.5 h-3.5" /> Bip Liberado</>}
-              </button>
-            </div>
-
-            {/* Form de Bip */}
-            <form onSubmit={handleBip} className="mt-3">
-              <div className="relative flex items-center">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Barcode className={`h-5 w-5 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
-                </div>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={bipInput}
-                  onChange={(e) => setBipInput(e.target.value)}
-                  onBlur={() => {
-                    if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
-                  }}
-                  disabled={isLocked}
-                  className={`block w-full pl-11 pr-24 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
-                    isLocked 
-                      ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
-                      : 'border-[#3483FA]/40 focus:ring-2 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-400'
-                  }`}
-                  placeholder={isLocked ? "Bip travado..." : "Bipe ou digite o ID do pacote..."}
-                  autoFocus
-                />
-                <button
-                  type="submit"
-                  disabled={isLocked || !bipInput.trim()}
-                  className="absolute right-1.5 top-1.5 bottom-1.5 px-4 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-lg text-xs transition-colors cursor-pointer"
-                >
-                  Bipar
-                </button>
-              </div>
-            </form>
-
-            {/* Feedback Bip */}
-            {lastScanResult && (
-              <div className={`mt-2.5 px-3 py-2 rounded-lg border text-xs flex items-center justify-between font-bold animate-in fade-in ${
-                lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
-              }`}>
-                <div className="flex items-center gap-2">
-                  {lastScanResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
-                  <span className="font-mono">{lastScanResult.code}</span>
-                  <span>— {lastScanResult.message}</span>
-                </div>
-                <span className="text-[10px] opacity-75 font-normal">Bip: 50ms</span>
-              </div>
-            )}
-          </div>
-
-          {/* Tabela de IDs Coletados com Seleção Individual e em Massa */}
+        {/* COLUNA ESQUERDA (3 COLS) — TABELA DE IDS COMPLETA */}
+        <div className="xl:col-span-3 space-y-4">
           <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
             
             {/* Header da Tabela + Busca + Ações de Seleção Rápida */}
             <div className="flex flex-col gap-3 pb-3 border-b border-gray-100">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <h3 className="font-bold text-base text-[#333333]">IDs Coletados na Lista</h3>
-                  <span className="bg-[#3483FA]/10 text-[#3483FA] px-2.5 py-0.5 rounded-full text-xs font-extrabold font-mono">
-                    {totalColetados} Coletados
-                  </span>
+                  <h3 className="font-bold text-base text-[#333333]">Lista Completa de IDs</h3>
+                  <div className="flex items-center gap-1.5">
+                    <span className="bg-[#3483FA]/10 text-[#3483FA] px-2.5 py-0.5 rounded-full text-xs font-extrabold font-mono">
+                      {totalColetados} Coletados
+                    </span>
+                    {selectedItemIds.length > 0 && (
+                      <button
+                        onClick={() => setSelectedItemIds([])}
+                        className="flex items-center gap-1 px-2 py-0.5 bg-red-50 text-red-600 border border-red-100 rounded-full text-[10px] font-black uppercase hover:bg-red-100 transition-colors animate-in zoom-in cursor-pointer"
+                      >
+                        <X className="w-3 h-3" />
+                        Desmarcar ({selectedItemIds.length})
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="relative">
@@ -1105,16 +1044,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       : 'Selecionar Todos'}
                   </button>
                 </div>
-
-                {selectedItemIds.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedItemIds([])}
-                    className="text-[11px] text-gray-500 hover:text-red-600 font-bold underline cursor-pointer"
-                  >
-                    Limpar Seleção ({selectedItemIds.length})
-                  </button>
-                )}
               </div>
             </div>
 
@@ -1171,11 +1100,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             )}
 
             {filteredItems.length > 0 ? (
-              <div className="overflow-x-auto border border-gray-300 rounded-xl">
+              <div className="overflow-x-auto border border-gray-300 rounded-2xl shadow-md max-h-[70vh]">
                 <table className="w-full text-xs text-gray-700 border-collapse">
-                  <thead className="bg-gray-100 border-b-2 border-gray-300 text-gray-700 font-bold uppercase tracking-wider">
+                  <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                     <tr>
-                      <th className="py-2.5 px-3 text-center w-12 border-r border-gray-300">
+                      <th className="py-4 px-3 text-center w-12 bg-gray-100 border-b border-r border-gray-300">
                         <input
                           type="checkbox"
                           checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))}
@@ -1184,28 +1113,28 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           title="Selecionar/Desmarcar Todos os visíveis"
                         />
                       </th>
-                      <th className="py-2.5 px-3 text-center border-r border-gray-300 w-12">#</th>
-                      <th className="py-2.5 px-3 text-left border-r border-gray-300">ID / Código</th>
-                      <th className="py-2.5 px-3 text-center border-r border-gray-300 w-24">Rota</th>
-                      <th className="py-2.5 px-3 text-center border-r border-gray-300 w-32">Saída</th>
-                      <th className="py-2.5 px-3 text-center border-r border-gray-300 w-48">Motivo</th>
-                      <th className="py-2.5 px-3 text-center border-r border-gray-300 w-40">Data / Hora</th>
-                      <th className="py-2.5 px-3 text-center w-24">Ações</th>
+                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-12 bg-gray-100">#</th>
+                      <th className="py-4 px-3 text-left border-b border-r border-gray-300 bg-gray-100">ID / Código</th>
+                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-24 bg-gray-100">Rota</th>
+                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-20 bg-gray-100">Saída</th>
+                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-48 bg-gray-100">Motivo</th>
+                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-40 bg-gray-100">Data / Hora</th>
+                      <th className="py-4 px-3 text-center border-b border-gray-300 w-24 bg-gray-100">Ações</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200 font-mono">
+                  <tbody className="divide-y divide-gray-300 font-sans">
                     {filteredItems.map((item, idx) => {
                       const isSelected = selectedItemIds.includes(item.id);
                       return (
                         <tr 
                           key={`item-${item.id}-${idx}`} 
-                          className={`transition-colors border-b border-gray-200 ${
+                          className={`transition-all border-b border-gray-300 group ${
                             isSelected 
-                              ? 'bg-blue-50 font-bold border-l-4 border-l-[#3483FA]' 
-                              : idx % 2 === 0 ? 'bg-white hover:bg-blue-50/30' : 'bg-gray-50/50 hover:bg-blue-50/30'
+                              ? 'bg-blue-50/90 font-bold' 
+                              : 'bg-white hover:bg-gray-50'
                           }`}
                         >
-                          <td className="py-2.5 px-3 text-center border-r border-gray-200 w-12">
+                          <td className="py-3 px-3 text-center w-12 border-r border-gray-300">
                             <input
                               type="checkbox"
                               checked={isSelected}
@@ -1213,46 +1142,49 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                               className="w-4 h-4 rounded text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                             />
                           </td>
-                          <td className="py-2.5 px-3 text-center text-gray-500 font-bold border-r border-gray-200 w-12">{filteredItems.length - idx}</td>
+                          <td className="py-3 px-3 text-center text-gray-500 font-bold w-12 border-r border-gray-300">{filteredItems.length - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-2.5 px-3 text-left font-bold text-[#333333] border-r border-gray-200 cursor-pointer hover:bg-amber-50/60 transition-colors"
+                            className="py-3 px-3 text-left font-bold text-[#333333] cursor-pointer hover:text-[#3483FA] transition-colors border-r border-gray-300"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            {item.codigo}
+                            <div className="flex items-center gap-2">
+                              <Barcode className="w-3.5 h-3.5 text-gray-400" />
+                              {item.codigo}
+                            </div>
                           </td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-2.5 px-3 text-center font-semibold text-[#3483FA] border-r border-gray-200 cursor-pointer hover:bg-amber-50/60 transition-colors w-24"
+                            className="py-3 px-3 text-center font-bold text-[#3483FA] cursor-pointer w-24 border-r border-gray-300"
                             title="Clique para alterar o motivo deste ID"
                           >
                             {item.rota}
                           </td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-2.5 px-3 text-center font-sans border-r border-gray-200 cursor-pointer hover:bg-amber-50/60 transition-colors w-32"
+                            className="py-3 px-3 text-center cursor-pointer w-20 border-r border-gray-300"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-semibold text-[11px] inline-block whitespace-nowrap">
-                              {item.saida}
+                            <span className="bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded font-black text-[10px] uppercase tracking-tighter">
+                              {getShortSaida(item.saida)}
                             </span>
                           </td>
                           {/* ÁREA CLICÁVEL DO MOTIVO - ABRE GAVETA DE ALTERAÇÃO INDIVIDUAL */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-2.5 px-3 text-center font-sans border-r border-gray-200 cursor-pointer hover:bg-amber-100/70 transition-colors w-48"
+                            className="py-3 px-3 text-center cursor-pointer w-48 border-r border-gray-300"
                             title="Clique para abrir a gaveta e alterar o motivo"
                           >
-                            <div className="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-2xs group mx-auto">
-                              <span>{item.motivo || 'Sem motivo'}</span>
-                              <Edit2 className="w-3 h-3 text-amber-700 opacity-70 group-hover:opacity-100" />
+                            <div className={`${getMotivoStyle(item.motivo)} border px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-2 shadow-sm group-hover:shadow-md mx-auto uppercase tracking-wide`}>
+                              <span>{item.motivo || 'Pendente'}</span>
+                              <Edit2 className="w-3 h-3 opacity-50 group-hover:opacity-100" />
                             </div>
                           </td>
-                          <td className="py-2.5 px-3 text-center text-gray-500 font-sans text-[11px] border-r border-gray-200 w-40">
+                          <td className="py-3 px-3 text-center text-gray-500 text-[11px] w-40 border-r border-gray-300">
                             {item.scannedAt}
                           </td>
-                          <td className="py-2.5 px-3 text-center w-24">
-                            <div className="flex items-center justify-center gap-1">
+                          <td className="py-3 px-3 text-center w-24">
+                            <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={() => handleCopy(item.codigo)}
                                 className="p-1 hover:bg-gray-200 text-gray-500 hover:text-black rounded transition-colors cursor-pointer"
@@ -1279,75 +1211,134 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               <div className="py-12 text-center text-gray-400">
                 <Barcode className="w-10 h-10 mx-auto text-gray-300 mb-2" />
                 <p className="font-bold text-gray-600 text-sm">Nenhum ID nesta lista ainda</p>
-                <p className="text-xs text-gray-400 mt-1">Bipe pacotes acima para dar entrada nesta lista.</p>
+                <p className="text-xs text-gray-400 mt-1">Bipe pacotes para dar entrada nesta lista.</p>
               </div>
             )}
           </div>
-
         </div>
 
-        {/* COLUNA DIREITA — PAINEL DE QUANTIDADE E QUEM ESTÁ ONLINE COLETANDO JUNTO (SEM PENDENTES) */}
-        <div className="space-y-4">
+        {/* COLUNA DIREITA — SCANNER + MÉTRICAS + OPERADORES */}
+        <div className="space-y-6">
           
+          {/* Card Bip Scanner (AGORA NA DIREITA PERTO DAS MÉTRICAS) */}
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA]"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+              <div className="flex items-center gap-2">
+                <Barcode className="w-5 h-5 text-[#3483FA]" />
+                <span className="font-bold text-sm text-[#333333]">Leitor de Pacotes</span>
+              </div>
+
+              <button 
+                type="button" 
+                onClick={() => {
+                  setIsLocked(!isLocked);
+                  if (isLocked) setTimeout(() => inputRef.current?.focus(), 50);
+                }}
+                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border cursor-pointer ${
+                  isLocked 
+                    ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                {isLocked ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
+              </button>
+            </div>
+
+            {/* Form de Bip */}
+            <form onSubmit={handleBip} className="mt-3">
+              <div className="relative flex items-center">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                  <Barcode className={`h-5 w-5 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
+                </div>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={bipInput}
+                  onChange={(e) => setBipInput(e.target.value)}
+                  onBlur={() => {
+                    if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
+                  }}
+                  disabled={isLocked}
+                  className={`block w-full pl-11 pr-3 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
+                    isLocked 
+                      ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'border-[#3483FA]/40 focus:ring-2 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-400'
+                  }`}
+                  placeholder="ID do pacote..."
+                  autoFocus
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isLocked || !bipInput.trim()}
+                className="w-full mt-2 py-2.5 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
+              >
+                Registrar Bip
+              </button>
+            </form>
+
+            {/* Feedback Bip */}
+            {lastScanResult && (
+              <div className={`mt-3 px-3 py-2 rounded-lg border text-[10px] flex items-center gap-2 font-bold animate-in slide-in-from-top-1 ${
+                lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
+              }`}>
+                {lastScanResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 shrink-0" />}
+                <div className="truncate">
+                  <span className="font-mono">{lastScanResult.code}</span> — {lastScanResult.message}
+                </div>
+              </div>
+            )}
+          </motion.div>
+
           {/* Painel 1: Quantidades e Métricas (APENAS O QUE EXISTE NOS IDS) */}
-          <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md space-y-5"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <PieChart className="w-5 h-5 text-[#3483FA]" />
                 <h3 className="font-bold text-sm text-[#333333]">Métricas de Coleta</h3>
               </div>
-              <span className="text-[10px] font-mono font-bold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+              <span className="flex items-center gap-1.5 bg-blue-50 text-[#3483FA] text-[10px] font-bold px-2 py-1 rounded-full border border-blue-100">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#3483FA] animate-pulse"></div>
                 Tempo Real
               </span>
             </div>
 
             {/* Total de Coletados Card Grande */}
-            <div className="bg-[#3483FA]/10 border border-[#3483FA]/20 p-4 rounded-xl text-center space-y-2">
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 p-5 rounded-2xl text-center space-y-3 shadow-inner">
               <div>
-                <p className="text-3xl font-black text-[#3483FA]">{totalColetados}</p>
-                <p className="text-xs font-bold text-gray-700 mt-0.5">Total de IDs Coletados</p>
+                <p className="text-4xl font-black text-[#3483FA] tracking-tighter">{totalColetados}</p>
+                <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-1">IDs Coletados</p>
               </div>
 
               {/* Botões de Ação Direta nas Métricas */}
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#3483FA]/20">
+              <div className="grid grid-cols-2 gap-3 pt-4 border-t border-blue-200/50">
                 {listaAtiva.status === 'em_andamento' && (
                   <button
                     type="button"
                     onClick={() => handleFinalizarLista(listaAtiva.id)}
-                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <CheckCircle2 className="w-4 h-4" />
                     Finalizar
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={handleAbrirVerificar}
-                  className="w-full py-2 bg-[#3483FA] hover:bg-blue-600 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
+                  className="w-full py-2.5 bg-[#3483FA] hover:bg-blue-600 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                 >
-                  <CheckSquare className="w-3.5 h-3.5" />
+                  <CheckSquare className="w-4 h-4" />
                   Verificar
                 </button>
               </div>
-            </div>
-
-            {/* Contagem por Saídas Presentes */}
-            <div className="pt-2 space-y-2">
-              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Quantidades por Saída</h4>
-              {saídasPresentes.length > 0 ? (
-                <div className="space-y-1.5 text-xs">
-                  {saídasPresentes.map(sKey => (
-                    <div key={sKey} className="flex justify-between items-center bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
-                      <span className="text-gray-700 font-semibold">{sKey}</span>
-                      <span className="font-mono font-bold text-[#3483FA] bg-white px-2.5 py-0.5 rounded border border-gray-200">
-                        {contagemSaidas[sKey] || 0}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-gray-400 italic">Nenhuma saída registrada ainda.</p>
-              )}
             </div>
 
             {/* Contagem por Motivos Presentes */}
@@ -1368,59 +1359,54 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <p className="text-xs text-gray-400 italic">Nenhum motivo registrado ainda.</p>
               )}
             </div>
-          </div>
+          </motion.div>
 
           {/* Painel 2: Quem Está Registrado no Sistema e Online na Tela */}
-          <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.1 }}
+            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md space-y-5"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-sm text-[#333333]">Usuários Registrados Online</h3>
+                <h3 className="font-bold text-sm text-[#333333]">Operadores Ativos</h3>
               </div>
-              <span className="flex items-center gap-1 bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-2 py-0.5 rounded-full border border-emerald-200">
+              <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-3 py-1 rounded-full border border-emerald-200 shadow-sm">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                {usuariosSistemaOnline.length} Conectados
+                {usuariosSistemaOnline.length} Online
               </span>
             </div>
 
-            <div className="space-y-2.5">
+            <div className="space-y-3">
               {usuariosSistemaOnline.map((user) => (
-                <div key={user.id} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-xl border border-gray-100">
-                  <div className="flex items-center gap-2.5">
+                <div key={user.id} className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100/80 rounded-2xl border border-gray-100 transition-colors">
+                  <div className="flex items-center gap-3">
                     <div className="relative">
-                      <div className="w-8 h-8 rounded-full bg-[#3483FA] text-white font-bold text-xs flex items-center justify-center shadow-2xs">
+                      <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#3483FA] to-blue-600 text-white font-bold text-sm flex items-center justify-center shadow-md">
                         {user.username.slice(0, 2).toUpperCase()}
                       </div>
-                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                      <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-[#333333] flex items-center gap-1">
+                      <p className="text-xs font-bold text-[#333333] flex items-center gap-1.5">
                         {user.username}
                         {user.username === operanteNome && (
-                          <span className="text-[9px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-mono font-normal">
-                            Você
+                          <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg font-bold">
+                            VOCÊ
                           </span>
                         )}
                       </p>
-                      <p className="text-[10px] text-gray-500 font-medium">
-                        {user.isAdmin ? 'Administrador' : 'Operador Registrado'}
+                      <p className="text-[10px] text-gray-500 font-medium tracking-tight">
+                        {user.isAdmin ? 'Administrador' : 'Operador'}
                       </p>
                     </div>
-                  </div>
-
-                  <div className="text-right">
-                    <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded border border-emerald-200">
-                      Online
-                    </span>
                   </div>
                 </div>
               ))}
             </div>
-
-            <p className="text-[11px] text-gray-400 text-center italic pt-1">
-              Operadores autenticados e ativos na sessão de coleta.
-            </p>
-          </div>
+          </motion.div>
 
         </div>
 
@@ -1856,6 +1842,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };
