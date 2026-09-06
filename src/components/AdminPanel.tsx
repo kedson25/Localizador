@@ -33,7 +33,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       return;
     }
     
-    // Verify directly from backend or fallback to session
+    // Verify directly from backend or fallback to currentUser
     const freshUser = await getUserById(currentUser.id);
     if ((freshUser && freshUser.isAdmin) || (!freshUser && currentUser.isAdmin)) {
       setIsVerifiedAdmin(true);
@@ -51,12 +51,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
 
   const toggleApproval = async (userId: string, currentStatus: boolean) => {
     await updateUserAdminStatus(userId, { isApproved: !currentStatus });
-    await fetchUsers();
+    fetchUsers();
   };
 
   const toggleAdmin = async (userId: string, currentStatus: boolean) => {
     await updateUserAdminStatus(userId, { isAdmin: !currentStatus });
-    await fetchUsers();
+    fetchUsers();
   };
 
   const toggleTabAccess = async (userId: string, currentGroups: string[], tabId: string) => {
@@ -65,7 +65,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       : [...currentGroups, tabId];
       
     await updateUserAdminStatus(userId, { allowedGroups: newGroups });
-    await fetchUsers();
+    fetchUsers();
   };
 
   if (loading) {

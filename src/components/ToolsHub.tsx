@@ -92,6 +92,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
       tag: 'Auditoria & Leitura',
       description: 'Carregue a planilha de faltantes. Utilize o leitor de código de barras físico para bipar os pacotes localizados.',
       icon: Barcode,
+  ListTodo,
       iconColor: 'text-[#3483FA]',
       badgeBg: 'bg-blue-50 text-[#3483FA] border-blue-200',
     }

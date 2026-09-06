@@ -33,13 +33,6 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('currentUser') || 'null'); } catch { return null; }
   });
   const isAuthenticated = !!currentUser;
-  const [isCollectionListOpen, setIsCollectionListOpen] = useState(false);
-
-  useEffect(() => {
-    if (location.pathname !== '/listas') {
-      setIsCollectionListOpen(false);
-    }
-  }, [location.pathname]);
 
 
 
@@ -115,7 +108,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#EBEBEB] text-[#333333] flex flex-col font-sans selection:bg-[#3483FA] selection:text-white">
       {/* Global Theme Header */}
-      {!isHome && location.pathname !== '/login' && !(location.pathname === '/listas' && isCollectionListOpen) && (
+      {!isHome && location.pathname !== '/login' && (
         <header className="bg-[#FFE600] px-4 py-3 sticky top-0 z-50 shadow-sm flex items-center justify-between">
           <Link 
             to="/"
@@ -132,11 +125,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className={`flex-1 w-full mx-auto ${
-        location.pathname === "/login" || (location.pathname.startsWith('/listas') && isCollectionListOpen) 
-          ? "p-0 max-w-none" 
-          : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"
-      }`}>
+      <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"}`}>
         {/* Floating Notification */}
         {notification && (
           <div className="bg-[#111827] text-white px-4 py-2.5 rounded shadow-md text-xs font-mono flex items-center justify-between border border-gray-700 animate-in fade-in">
@@ -209,10 +198,7 @@ export default function App() {
                 )}
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
-                  <>
-                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} onOpenChange={setIsCollectionListOpen} />} />
-                    <Route path="/listas/:listId" element={<ListasColeta currentUser={currentUser} onOpenChange={setIsCollectionListOpen} />} />
-                  </>
+                  <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
                 )}
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (

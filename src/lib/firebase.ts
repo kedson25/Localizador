@@ -2,9 +2,6 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   initializeFirestore,
   getFirestore,
-  setLogLevel,
-  persistentLocalCache,
-  persistentMultipleTabManager,
   collection,
   doc,
   setDoc,
@@ -15,11 +12,6 @@ import {
   serverTimestamp,
   onSnapshot,
 } from 'firebase/firestore';
-
-// Suppress Firestore verbose offline connection retry logs
-try {
-  setLogLevel('silent');
-} catch (_) {}
 
 const firebaseConfig = {
   apiKey: "AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA",
@@ -34,37 +26,9 @@ const firebaseConfig = {
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-let firestoreDb;
-try {
-  firestoreDb = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager()
-    }),
-    experimentalAutoDetectLongPolling: true,
-  });
-} catch (e) {
-  try {
-    firestoreDb = initializeFirestore(app, {
-      experimentalAutoDetectLongPolling: true,
-    });
-  } catch (e2) {
-    firestoreDb = getFirestore(app);
-  }
-}
-
-export const db = firestoreDb;
-
-/**
- * Helper to prevent Firebase calls from hanging indefinitely on network or offline issues
- */
-export function withTimeout<T>(promise: Promise<T>, ms: number = 2500): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('Firebase operation timed out')), ms)
-    ),
-  ]);
-}
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+});
 
 const REFUGO_COLLECTION = 'refugo';
 const MAIN_REFUGO_DOC_ID = 'current_refugo_csv';
@@ -165,6 +129,14 @@ export async function clearRefugo(): Promise<boolean> {
 export function listenToRefugo(callback: (data: RefugoData | null) => void): () => void {
   const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
   
+  // Immediately check local storage cache first
+  try {
+    const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_KEY);
+    if (cached) {
+      callback(JSON.parse(cached) as RefugoData);
+    }
+  } catch (_) {}
+
   const unsubscribe = onSnapshot(refugoRef, (snap) => {
     if (snap.exists()) {
       const data = snap.data() as RefugoData;
@@ -182,7 +154,13 @@ export function listenToRefugo(callback: (data: RefugoData | null) => void): () 
       callback(null); // document was deleted or doesn't exist
     }
   }, (error) => {
-    console.warn('Erro ao escutar refugo em tempo real:', error);
+    console.warn('Erro ao escutar refugo em tempo real (fallback local):', error);
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_KEY);
+      callback(cached ? (JSON.parse(cached) as RefugoData) : null);
+    } catch (_) {
+      callback(null);
+    }
   });
 
   return unsubscribe;
@@ -195,6 +173,17 @@ export interface ColetorData {
   fileName?: string;
 }
 
+/**
+ * Helper to prevent Firebase calls from hanging indefinitely on network issues
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('Firebase operation timed out')), ms)
+    ),
+  ]);
+}
 
 /**
  * Save CSV raw text and metadata to Firebase Firestore collection 'coletor'
@@ -375,6 +364,14 @@ export async function clearRefugoScans(): Promise<boolean> {
 export function listenToRefugoScans(callback: (scans: any[]) => void): () => void {
   const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
   
+  // Immediately check local storage cache first
+  try {
+    const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_SCANS_KEY);
+    if (cached) {
+      callback(JSON.parse(cached));
+    }
+  } catch (_) {}
+
   // Real-time listener
   const unsubscribe = onSnapshot(refugoScansRef, (snap) => {
     if (snap.exists()) {
@@ -394,7 +391,13 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
       callback([]); // document was deleted or doesn't exist
     }
   }, (error) => {
-    console.warn('Erro ao escutar scans em tempo real:', error);
+    console.warn('Erro ao escutar scans em tempo real (fallback local):', error);
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_SCANS_KEY);
+      callback(cached ? JSON.parse(cached) : []);
+    } catch (_) {
+      callback([]);
+    }
   });
 
   return unsubscribe;
