@@ -2,6 +2,9 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   initializeFirestore,
   getFirestore,
+  setLogLevel,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection,
   doc,
   setDoc,
@@ -12,6 +15,11 @@ import {
   serverTimestamp,
   onSnapshot,
 } from 'firebase/firestore';
+
+// Suppress Firestore verbose offline connection retry logs
+try {
+  setLogLevel('silent');
+} catch (_) {}
 
 const firebaseConfig = {
   apiKey: "AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA",
@@ -29,13 +37,34 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 let firestoreDb;
 try {
   firestoreDb = initializeFirestore(app, {
-    experimentalForceLongPolling: true,
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    }),
+    experimentalAutoDetectLongPolling: true,
   });
 } catch (e) {
-  firestoreDb = getFirestore(app);
+  try {
+    firestoreDb = initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: true,
+    });
+  } catch (e2) {
+    firestoreDb = getFirestore(app);
+  }
 }
 
 export const db = firestoreDb;
+
+/**
+ * Helper to prevent Firebase calls from hanging indefinitely on network or offline issues
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number = 2500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('Firebase operation timed out')), ms)
+    ),
+  ]);
+}
 
 const REFUGO_COLLECTION = 'refugo';
 const MAIN_REFUGO_DOC_ID = 'current_refugo_csv';
@@ -166,17 +195,6 @@ export interface ColetorData {
   fileName?: string;
 }
 
-/**
- * Helper to prevent Firebase calls from hanging indefinitely on network issues
- */
-function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('Firebase operation timed out')), ms)
-    ),
-  ]);
-}
 
 /**
  * Save CSV raw text and metadata to Firebase Firestore collection 'coletor'

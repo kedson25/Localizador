@@ -43,6 +43,7 @@ export function ControleRefugo() {
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
   const [baseDate, setBaseDate] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export function ControleRefugo() {
         setRows([]);
         setBaseDate(null);
       }
+      setIsLoading(false);
     });
 
     // Listen to real-time scans
@@ -147,9 +149,9 @@ export function ControleRefugo() {
 
     let processedInput = bipInput.trim();
     
-    // Replace dirt patterns (dÇ4, dÇ⁴) with 4
-    processedInput = processedInput.replace(/d[çc]⁴/gi, '4');
-    processedInput = processedInput.replace(/d[çc]4/gi, '4');
+    // Replace dirt patterns (dÇ4, dÇ⁴, d⁴, d4) with 4
+    processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
+    processedInput = processedInput.replace(/d[çc]?4/gi, '4');
     
     // Extract ID starting with 47 if there is one
     const match47 = processedInput.match(/(47\d+)/);
@@ -164,8 +166,15 @@ export function ControleRefugo() {
     const cleanInputDigits = cleanDigits(cleanInput);
     
     // Check if already scanned
-    if (scannedItems.some(item => item.id === cleanInput || cleanDigits(item.id) === cleanInputDigits && item.status === 'found')) {
-      setLastScanResult({ status: 'error', message: `O pacote já foi bipado anteriormente!` });
+    const alreadyScanned = scannedItems.find(item => item.id === cleanInput || (cleanInputDigits && cleanDigits(item.id) === cleanInputDigits));
+    
+    if (alreadyScanned) {
+      if (alreadyScanned.status === 'found') {
+        setLastScanResult({ status: 'success', message: `O pacote já foi bipado anteriormente!` });
+        playBeep();
+      } else {
+        setLastScanResult({ status: 'error', message: `O pacote já foi bipado anteriormente!` });
+      }
       setBipInput('');
       return;
     }
@@ -219,6 +228,19 @@ export function ControleRefugo() {
     link.click();
     document.body.removeChild(link);
   };
+
+  if (isLoading) {
+    return (
+      <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12 mt-2">
+        <div className="bg-white border border-gray-200 rounded-2xl p-12 flex flex-col items-center justify-center text-center shadow-sm">
+          <div className="w-16 h-16 bg-gray-100 rounded-2xl animate-pulse mb-4"></div>
+          <div className="h-6 w-48 bg-gray-200 rounded animate-pulse mb-4"></div>
+          <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-6"></div>
+          <div className="h-12 w-40 bg-gray-200 rounded-xl animate-pulse"></div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">

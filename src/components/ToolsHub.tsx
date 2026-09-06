@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Search,
   Trash2,
@@ -8,72 +9,117 @@ import {
   ChevronRight,
   Folder,
   ArrowRight,
-  Barcode
+  Barcode,
+  ListTodo
 } from 'lucide-react';
 import { ActiveTab, GroupSummary } from '../types';
+import { User } from '../lib/auth';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface ToolsHubProps {
-  onSelectTab: (tab: ActiveTab) => void;
   totalRows: number;
   groups: GroupSummary[];
   onClear: () => void;
+  currentUser?: User | null;
 }
 
 export const ToolsHub: React.FC<ToolsHubProps> = ({
-  onSelectTab,
   totalRows,
   groups,
   onClear,
+  currentUser,
 }) => {
+  const navigate = useNavigate();
   const [isBacklogOpen, setIsBacklogOpen] = useState(false);
   const [isRefugoOpen, setIsRefugoOpen] = useState(false);
 
-  const backlogTools = [
+  
+  const allBacklogTools = [
     {
-      id: 'lookup' as ActiveTab,
-      name: 'Consultar IDs',
-      tag: 'Busca em Massa',
-      description: 'Cruze uma lista de pacotes com a base CSV para identificar motivos, saídas, ciclos e agrupar ocorrências automaticamente.',
+      id: 'listas',
+      path: '/listas',
+      name: 'Listas de Coleta',
+      description: 'Filtrar remessas prontas, separar por tipo (Envios/Coletas) e gerar relatórios simplificados.',
+      icon: ListTodo,
+      iconColor: 'text-[#FACC15]',
+      badgeBg: 'bg-[#FFF9C4] border-[#FBC02D] text-[#F57F17]',
+      tag: 'NOVO'
+    },
+    {
+      id: 'consulta',
+      path: '/consulta',
+      name: 'Buscar grupos e IDs',
+      description: 'Consulte informações detalhadas sobre pacotes, agrupamentos e o status atualizado de cada ID na base.',
       icon: Search,
-      iconColor: 'text-blue-600',
-      badgeBg: 'bg-blue-50 text-blue-700 border-blue-200',
+      iconColor: 'text-[#3483FA]',
+      badgeBg: 'bg-blue-50 border-blue-200 text-blue-700',
+      tag: 'CONSULTA'
     },
     {
-      id: 'remove' as ActiveTab,
-      name: 'Remover IDs',
-      tag: 'Expurgo & Filtro',
-      description: 'Subtraia pacotes já resolvidos ou divergências da base ativa. Exporte a nova lista filtrada ou copie apenas os IDs restantes.',
+      id: 'remover',
+      path: '/remover',
+      name: 'Remover IDs em lote',
+      description: 'Escaneie pacotes fisicamente e dê baixa imediata no sistema. As quantidades são atualizadas na hora.',
       icon: Trash2,
-      iconColor: 'text-red-600',
-      badgeBg: 'bg-red-50 text-red-700 border-red-200',
+      iconColor: 'text-red-500',
+      badgeBg: 'bg-red-50 border-red-200 text-red-700',
+      tag: 'AÇÃO'
     },
     {
-      id: 'report' as ActiveTab,
-      name: 'Reporte WhatsApp',
-      tag: 'Formatador',
-      description: 'Gere o texto padrão com saudação automática pelo horário, totais de pacotes por motivo e identificação do ciclo para envio rápido.',
+      id: 'reporte',
+      path: '/reporte',
+      name: 'Gerar Reporte WhatsApp',
+      description: 'Gere um resumo formatado com as quantidades e pendências de cada grupo para enviar direto pelo WhatsApp.',
       icon: MessageSquare,
-      iconColor: 'text-emerald-600',
-      badgeBg: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    },
+      iconColor: 'text-emerald-500',
+      badgeBg: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+      tag: 'RELATÓRIO'
+    }
   ];
+
+  const backlogTools = allBacklogTools.filter(tool => 
+    currentUser?.isAdmin || currentUser?.allowedGroups?.includes(tool.id)
+  );
+
+  // Allow uploading if the user has permission to upload
+  const canUpload = currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload');
 
   const refugoTools = [
     {
-      id: 'refugo' as ActiveTab,
-      name: 'Bipar Faltantes',
-      tag: 'Leitura de Código',
-      description: 'Carregue um CSV de IDs faltantes e bipe pacotes fisicamente. Identifique se são rotas válidas e separe os dados.',
+      id: 'refugo',
+      path: '/refugo',
+      name: 'Controle Refugo',
+      tag: 'Auditoria & Leitura',
+      description: 'Carregue a planilha de faltantes. Utilize o leitor de código de barras físico para bipar os pacotes localizados.',
       icon: Barcode,
-      iconColor: 'text-purple-600',
-      badgeBg: 'bg-purple-50 text-purple-700 border-purple-200',
+      iconColor: 'text-[#3483FA]',
+      badgeBg: 'bg-blue-50 text-[#3483FA] border-blue-200',
     }
   ];
 
   return (
-    <div className="max-w-2xl w-full mx-auto flex flex-col justify-center min-h-[calc(100vh-8rem)] font-sans animate-in fade-in duration-200 space-y-6">
-      
-      {/* Grupo: Lista Backlog */}
+    <div className="space-y-4 max-w-4xl mx-auto animate-in fade-in duration-300">
+      <div className="mb-8 w-full flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-black text-gray-900 tracking-tight">Ferramentas de Base</h1>
+          <p className="text-gray-500 text-sm mt-1">Selecione o módulo que deseja utilizar</p>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-gray-800 rounded-md text-sm font-bold">
+            <span>{currentUser?.username || 'Usuário'}</span>
+            <button 
+              onClick={() => { localStorage.removeItem('currentUser'); window.location.reload(); }}
+              className="ml-2 text-[10px] text-red-600 hover:underline uppercase"
+            >
+              Sair
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Grupo: Gestão de Backlog */}
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
         
         {/* Header do Grupo */}
@@ -98,7 +144,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                   Lista Backlog
                 </h2>
                 <span className="text-[10px] font-mono text-gray-600 bg-gray-200 px-2 py-0.5 rounded-full font-medium">
-                  3 ferramentas
+                  {backlogTools.length} ferramentas
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-1">
@@ -106,7 +152,6 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
               </p>
             </div>
           </div>
-
           <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-gray-600 bg-white border border-gray-300 px-2.5 py-1 rounded-md">
             <span className={`w-2 h-2 rounded-full ${totalRows > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
             <span>{totalRows > 0 ? `${totalRows.toLocaleString()} IDs na memória` : 'Aguardando CSV'}</span>
@@ -114,14 +159,22 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
         </div>
 
         {/* Lista de Ferramentas Minimalista */}
-        {isBacklogOpen && (
-          <div className="divide-y divide-gray-100">
+        <AnimatePresence initial={false}>
+          {isBacklogOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.3, ease: 'easeInOut' }}
+              className="overflow-hidden"
+            >
+              <div className="divide-y divide-gray-100">
             {backlogTools.map((tool) => {
               const Icon = tool.icon;
               return (
                 <button
                   key={tool.id}
-                  onClick={() => onSelectTab(tool.id)}
+                  onClick={() => navigate(tool.path)}
                   className="w-full px-5 py-4 hover:bg-[#FFFDE7] flex flex-col sm:flex-row sm:items-center justify-between text-left transition-colors cursor-pointer group gap-4"
                 >
                   <div className="flex items-start sm:items-center gap-4 min-w-0 pr-3">
@@ -142,7 +195,6 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                       </p>
                     </div>
                   </div>
-
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 group-hover:text-[#3483FA] shrink-0 mt-2 sm:mt-0">
                     <span>Acessar {tool.name.split(' ')[0]}</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
@@ -152,18 +204,20 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
             })}
 
             <div className="px-5 py-4 border-t border-gray-100 flex flex-wrap justify-end items-center gap-3">
+              {canUpload && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectTab('upload');
+                  navigate('/upload');
                 }}
                 className="px-4 py-2 text-xs font-bold text-white bg-[#3483FA] hover:bg-blue-600 rounded-md transition-colors flex items-center gap-1.5 shadow-sm"
               >
                 <UploadCloud className="w-4 h-4" />
                 {totalRows > 0 ? 'Atualizar Base CSV' : 'Carregar Base CSV'}
               </button>
+            )}
 
-              {totalRows > 0 && (
+              {canUpload && totalRows > 0 && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -179,7 +233,9 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
               )}
             </div>
           </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Grupo: Controle Refugo */}
@@ -218,14 +274,22 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
         </div>
 
         {/* Lista de Ferramentas Minimalista */}
-        {isRefugoOpen && (
-          <div className="divide-y divide-gray-100">
+        <AnimatePresence initial={false}>
+          {isRefugoOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.3, ease: 'easeInOut' }}
+              className="overflow-hidden"
+            >
+              <div className="divide-y divide-gray-100">
             {refugoTools.map((tool) => {
               const Icon = tool.icon;
               return (
                 <button
                   key={tool.id}
-                  onClick={() => onSelectTab(tool.id)}
+                  onClick={() => navigate(tool.path)}
                   className="w-full px-5 py-4 hover:bg-[#E3F2FD]/50 flex flex-col sm:flex-row sm:items-center justify-between text-left transition-colors cursor-pointer group gap-4"
                 >
                   <div className="flex items-start sm:items-center gap-4 min-w-0 pr-3">
@@ -246,7 +310,6 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                       </p>
                     </div>
                   </div>
-
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 group-hover:text-[#3483FA] shrink-0 mt-2 sm:mt-0">
                     <span>Acessar {tool.name.split(' ')[0]}</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
@@ -255,9 +318,11 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
               );
             })}
           </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-      
+    
     </div>
   );
 };

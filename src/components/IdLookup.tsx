@@ -150,83 +150,84 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Top Search Input Box */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm relative overflow-hidden">
-        <div className="max-w-3xl space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-              Consultar Lista de IDs
-            </label>
-
-            <div className="flex items-center gap-2">
-              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100/90 rounded-md text-xs font-bold transition-colors shadow-2xs" title="Carregar arquivo CSV com os IDs a consultar (Coluna A: A2 em diante)">
-                <Upload className="w-3.5 h-3.5 text-amber-700" />
-                <span>Carregar faltantes</span>
-                <input
-                  type="file"
-                  accept=".csv,.txt,.tsv"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </label>
-
-              {rows.length > 0 && (
-                <span className="text-[11px] font-mono text-gray-500 bg-gray-100 px-2.5 py-1 rounded border border-gray-200">
-                  {rows.length} IDs indexados
-                </span>
-              )}
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
+        {/* Beautiful Header */}
+        <div className="bg-gray-50/80 border-b border-gray-100 px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center shrink-0 shadow-sm border border-blue-200">
+              <Search className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-gray-900 uppercase tracking-widest">Consulta em Massa</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Cole os IDs ou importe um arquivo CSV com os faltantes.</p>
             </div>
           </div>
+          
+          <div className="flex items-center gap-2">
+            <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 text-gray-700 rounded-lg text-xs font-bold transition-all shadow-sm">
+              <Upload className="w-4 h-4 text-blue-600" />
+              <span>Carregar Faltantes (CSV)</span>
+              <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} className="hidden" />
+            </label>
 
-          <p className="text-xs text-gray-600">
-            Cole múltiplos IDs (ex: <code className="bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono font-bold">47691021163, 47691021163</code> ou separados por linha).
-          </p>
+            {rows.length > 0 && (
+              <span className="hidden sm:inline-block text-[11px] font-mono text-gray-500 bg-gray-100 px-2.5 py-1 rounded-md border border-gray-200 font-bold">
+                {rows.length} base
+              </span>
+            )}
+          </div>
+        </div>
 
-          {/* Textarea Box */}
-          <div className="relative group">
+        {/* Clean Textarea Section */}
+        <div className="p-5">
+          <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden focus-within:ring-4 focus-within:ring-blue-500/15 focus-within:border-blue-500 transition-all">
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Cole aqui os IDs para consultar (separados por linha, vírgula, tabulação ou espaço)...&#10;Ex:&#10;47691021163&#10;47707799806"
-              rows={4}
-              className="w-full bg-gray-50/80 border border-gray-300 focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-500/15 rounded-lg p-3 text-gray-900 font-mono text-xs leading-relaxed placeholder:text-gray-400 transition-all shadow-inner resize-y min-h-[100px]"
+              placeholder="Cole os IDs aqui (separados por linha, vírgula, tabulação ou espaço)...&#10;&#10;Ex:&#10;47691021163&#10;47707799806"
+              rows={5}
+              className="w-full bg-transparent border-0 focus:ring-0 outline-none p-5 text-gray-900 font-mono text-sm leading-relaxed placeholder:text-gray-400 resize-y min-h-[120px]"
             />
             
-            {/* Status & Action Floating Bar */}
-            <div className="absolute bottom-3 right-3 flex items-center gap-2 pointer-events-none">
-              {inputText.trim() !== '' && (
-                <span className="pointer-events-auto bg-amber-100/90 text-amber-900 border border-amber-300/80 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold shadow-2xs flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                  {matches.length} {matches.length === 1 ? 'ID detectado' : 'IDs detectados'}
-                </span>
-              )}
+            <div className="bg-gray-50/50 border-t border-gray-100 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {inputText.trim() !== "" ? (
+                  <span className="bg-blue-50 text-blue-800 border border-blue-200 px-2.5 py-1 rounded-md text-[11px] font-mono font-bold flex items-center gap-1.5 shadow-sm">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                    {matches.length} {matches.length === 1 ? "ID detectado" : "IDs detectados"}
+                  </span>
+                ) : (
+                  <span className="text-xs font-mono text-gray-400 font-medium">Nenhum ID detectado</span>
+                )}
+              </div>
 
               {inputText && (
                 <button
-                  onClick={() => setInputText('')}
-                  className="pointer-events-auto text-gray-400 hover:text-red-600 hover:bg-red-50 bg-white border border-gray-200 p-1 rounded-md shadow-2xs transition-colors flex items-center gap-1 text-[11px] font-bold px-2"
+                  onClick={() => setInputText("")}
+                  className="text-gray-500 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5"
                   title="Limpar campo de busca"
                 >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Limpar</span>
+                  <X className="w-4 h-4" />
+                  Limpar
                 </button>
               )}
             </div>
           </div>
-
+          
           {rows.length === 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 text-xs">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                <span>Nenhum CSV carregado. Por favor, carregue o seu arquivo CSV para liberar as consultas.</span>
+            <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-amber-900 text-xs">
+              <div className="flex items-start sm:items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                <p className="leading-relaxed font-medium">Nenhum CSV base carregado. A consulta precisa da base principal para cruzar os dados.</p>
               </div>
               <button
                 onClick={onNavigateToUpload}
-                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-gray-950 font-bold rounded text-xs transition-colors flex items-center gap-1.5 flex-shrink-0 shadow-sm"
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-gray-950 font-bold rounded-lg text-xs transition-colors flex items-center gap-1.5 flex-shrink-0 shadow-sm"
               >
-                <Upload className="w-3.5 h-3.5" />
-                Carregar CSV
+                <Upload className="w-4 h-4" />
+                Carregar Base CSV
               </button>
             </div>
           )}
