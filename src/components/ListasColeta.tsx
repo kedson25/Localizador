@@ -301,17 +301,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setShowVerificarModal(false);
   };
 
-  const handleFinalizarVerificacaoEGerarCsv = async () => {
+  const handleFecharListaEBaixarValidas = async () => {
     if (!listaAtiva) return;
 
     const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
-    const qtdRemovidos = listaAtiva.itens.length - itensMantidos.length;
-
-    const updatedLista = { ...listaAtiva, itens: itensMantidos };
+    const updatedLista: ColetaLista = { ...listaAtiva, status: 'finalizada', itens: itensMantidos };
     await saveLista(updatedLista);
     setShowVerificarModal(false);
 
-    alert(`Lista finalizada!\n\n• ${itensMantidos.length} pacote(s) mantidos.\n• ${qtdRemovidos} pacote(s) removidos.`);
+    alert(`Lista "${listaAtiva.nome}" fechada com sucesso!\n• ${itensMantidos.length} item(ns) válidos salvos.`);
 
     if (itensMantidos.length > 0) {
       const header = ['ID', 'ROTA', 'SAIDA', 'MOTIVO', 'GRUPO'].join(',');
@@ -324,12 +322,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `${updatedLista.nome.replace(/\s+/g, '_')}_Finalizada.csv`);
+      link.setAttribute('download', `${updatedLista.nome.replace(/\s+/g, '_')}_Validas.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     }
+    navigate('/listas');
   };
+
+
 
   // Criar nova lista com dados reais (Data, Ciclo e Tipo de Lista)
   const handleCriarLista = async (e: React.FormEvent) => {
@@ -660,6 +661,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (lista) {
       const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
       await saveLista(updatedLista);
+
+      alert(`Lista "${lista.nome}" finalizada com sucesso! (${lista.itens.length} itens)`);
+
+      if (lista.itens.length > 0) {
+        const header = ['ID', 'ROTA', 'SAIDA', 'MOTIVO', 'GRUPO'].join(',');
+        const rowsCsv = lista.itens.map(item => {
+          const nomeGrupo = lista.grupos?.find(g => g.id === item.grupoId)?.nome || '';
+          return `${item.codigo},${item.rota},${lista.saidaPadrao},${item.motivo},${nomeGrupo}`;
+        });
+        const csvContent = [header, ...rowsCsv].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}_Finalizada.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
     }
   };
 
@@ -1923,20 +1943,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <button
                         type="button"
                         onClick={handleConcluirVerificacao}
-                        className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-                        title="Salvar e voltar para a lista"
+                        className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                        title="Salvar e retornar"
                       >
-                        <CheckCircle2 className="w-4 h-4 text-gray-600" />
                         Concluir
                       </button>
                       <button
                         type="button"
-                        onClick={handleFinalizarVerificacaoEGerarCsv}
-                        className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
-                        title="Salvar, finalizar e gerar CSV"
+                        onClick={handleFecharListaEBaixarValidas}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                        title="Fechar a lista e baixar apenas os itens válidos"
                       >
                         <Download className="w-4 h-4" />
-                        Finalizar Lista
+                        Fechar Lista (Baixar Válidas)
                       </button>
                     </div>
                   </>

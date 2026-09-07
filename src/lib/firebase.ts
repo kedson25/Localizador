@@ -427,13 +427,29 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
   });
 }
 
+function cleanUndefined(obj: any): any {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefined);
+  }
+  const cleaned: Record<string, any> = {};
+  for (const key of Object.keys(obj)) {
+    if (obj[key] !== undefined) {
+      cleaned[key] = cleanUndefined(obj[key]);
+    }
+  }
+  return cleaned;
+}
+
 export async function saveLista(lista: ColetaLista): Promise<boolean> {
   try {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, lista.id);
-    await setDoc(docRef, {
+    const cleanedData = cleanUndefined({
       ...lista,
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    });
+    await setDoc(docRef, cleanedData, { merge: true });
     return true;
   } catch (error) {
     console.error('Erro ao salvar lista de coleta:', error);
