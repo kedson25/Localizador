@@ -140,6 +140,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [loteText, setLoteText] = useState('');
   const [loteMotivo, setLoteMotivo] = useState('Desconteinerizado');
 
+  const [showVerificarLoteModal, setShowVerificarLoteModal] = useState(false);
+  const [verificarLoteText, setVerificarLoteText] = useState('');
+
   // Estado para a gaveta de exclusão
   const [listaParaExcluir, setListaParaExcluir] = useState<ColetaLista | null>(null);
 
@@ -212,7 +215,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (!listaAtiva) return;
     const mapInicial: Record<string, 'valido' | 'verificado' | 'em_rota'> = {};
     listaAtiva.itens.forEach(item => {
-      mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
+      if (!item.validado) {
+        mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
+      }
     });
     setVerificarMap(mapInicial);
     setVerificarModo('10');
@@ -292,43 +297,67 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setVerificarInput('');
   };
 
+  const handleProcessarVerificarLote = async () => {
+    if (!listaAtiva || !verificarLoteText.trim()) return;
+
+    const rawIds = verificarLoteText.split(/[\n\t,;]+/).map(i => i.trim()).filter(Boolean);
+    let processados = 0;
+
+    const itensAtualizados = listaAtiva.itens.map(item => {
+      if (item.validado) return item;
+
+      const itemDigits = cleanDigits(item.codigo);
+      const matched = rawIds.some(rawId => {
+        let pId = rawId;
+        pId = pId.replace(/d[çc]?⁴/gi, '4');
+        pId = pId.replace(/d[çc]?4/gi, '4');
+        pId = pId.replace(/^[^0-9a-zA-Z]+/, '');
+        const match47 = pId.match(/(47\d+)/);
+        if (match47) pId = match47[1];
+        else pId = pId.replace(/m$/i, '');
+        
+        const cleanPId = pId.toUpperCase();
+        const pIdDigits = cleanDigits(cleanPId);
+        
+        return item.codigo === cleanPId || (itemDigits && pIdDigits && itemDigits === pIdDigits);
+      });
+
+      if (matched) {
+        processados++;
+        return { ...item, validado: true };
+      }
+      return item;
+    });
+
+    const updatedLista = { ...listaAtiva, itens: itensAtualizados };
+    await saveLista(updatedLista);
+    
+    setShowVerificarLoteModal(false);
+    setVerificarLoteText('');
+    setShowVerificarModal(false); // Fecha o modal principal
+    
+    alert(`${processados} pacotes encontrados e validados com sucesso!`);
+  };
+
   const handleConcluirVerificacao = async () => {
     if (!listaAtiva) return;
 
     const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
-    const updatedLista = { ...listaAtiva, itens: itensMantidos };
+    
+    const itensAtualizados = itensMantidos.map(i => {
+      // Se estava no mapa de verificação (ou seja, não estava validado antes) e não foi removido, agora está validado.
+      if (verificarMap[i.id] !== undefined) {
+        return { ...i, validado: true };
+      }
+      return i; // Mantém os já validados intactos
+    });
+
+    const updatedLista = { ...listaAtiva, itens: itensAtualizados };
     await saveLista(updatedLista);
     setShowVerificarModal(false);
   };
 
-  const handleFecharListaEBaixarValidas = async () => {
-    if (!listaAtiva) return;
 
-    const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
-    const updatedLista: ColetaLista = { ...listaAtiva, status: 'finalizada', itens: itensMantidos };
-    await saveLista(updatedLista);
-    setShowVerificarModal(false);
-
-    alert(`Lista "${listaAtiva.nome}" fechada com sucesso!\n• ${itensMantidos.length} item(ns) válidos salvos.`);
-
-    if (itensMantidos.length > 0) {
-      const header = ['ID', 'ROTA', 'SAIDA', 'MOTIVO', 'GRUPO'].join(',');
-      const rowsCsv = itensMantidos.map(item => {
-        const nomeGrupo = updatedLista.grupos?.find(g => g.id === item.grupoId)?.nome || '';
-        return `${item.codigo},${item.rota},${updatedLista.saidaPadrao},${item.motivo},${nomeGrupo}`;
-      });
-      const csvContent = [header, ...rowsCsv].join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `${updatedLista.nome.replace(/\s+/g, '_')}_Validas.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
-    navigate('/listas');
-  };
 
 
 
@@ -1737,7 +1766,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   Verificação de IDs do Ciclo
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Marque cada ID como <strong className="text-emerald-700">Válido</strong> (continua na lista) ou <strong className="text-amber-700">Não Validar</strong> (será removido).
+                  Todos os pacotes são <strong className="text-emerald-700">Válidos</strong> por padrão. Marque apenas os que deseja remover (<strong className="text-amber-700">Não Validar</strong>).
                 </p>
               </div>
               <button onClick={() => setShowVerificarModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
@@ -1749,9 +1778,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <div className="overflow-y-auto flex-1 pr-1 space-y-3 pt-2">
               {/* Input de Scanner / Verificação Rápida */}
               <form onSubmit={handleVerificarPorInput} className="bg-gray-50 p-3 rounded-xl border border-gray-200 shadow-xs">
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">
-                  Bipar ID para verificar (Apenas marca o que não foi visto)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
+                    Opcional: Bipar ID para conferência rápida
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowVerificarLoteModal(true)}
+                    className="text-[10px] bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <ListPlus className="w-3 h-3" />
+                    Modo Lote
+                  </button>
+                </div>
                 <div className="relative flex gap-2">
                   <div className="relative flex-1">
                     <Barcode className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
@@ -1774,11 +1813,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </form>
 
               {(() => {
-                const totalItens = listaAtiva.itens.length;
+                const itensNaoValidados = listaAtiva.itens.filter(i => !i.validado);
+                const totalItens = itensNaoValidados.length;
                 if (totalItens === 0) {
                   return (
                     <div className="py-8 text-center text-gray-400 text-xs">
-                      Nenhum item cadastrado nesta lista para verificar.
+                      Nenhum item pendente de verificação nesta lista.
                     </div>
                   );
                 }
@@ -1787,7 +1827,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 const totalPaginas = Math.ceil(totalItens / tamanhoLote);
                 // Garantir que a página atual seja válida caso o tamanho do lote mude
                 const paginaAtualSafe = verificarPagina >= totalPaginas ? Math.max(0, totalPaginas - 1) : verificarPagina;
-                const itensExibidos = listaAtiva.itens.slice(paginaAtualSafe * tamanhoLote, (paginaAtualSafe + 1) * tamanhoLote);
+                const itensExibidos = itensNaoValidados.slice(paginaAtualSafe * tamanhoLote, (paginaAtualSafe + 1) * tamanhoLote);
 
                 return (
                   <>
@@ -1877,16 +1917,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                             {/* BOTOES DE STATUS NO VERIFICAR */}
                             <div className="flex items-center gap-1.5 self-end sm:self-center">
-                              {!isVerificado && !isEmRota && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleVerificarStatus(item.id, 'verificado')}
-                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-xs"
-                                >
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  Verificar
-                                </button>
-                              )}
                               <button
                                 type="button"
                                 onClick={() => handleToggleVerificarStatus(item.id, isEmRota ? 'valido' : 'em_rota')}
@@ -1912,16 +1942,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             {/* Modal Footer: Resumo + Concluir / Finalizar */}
             <div className="mt-4 pt-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-shrink-0">
               {(() => {
-                const totalVerificados = Object.values(verificarMap).filter(s => s === 'verificado').length;
-                const totalValidos = Object.values(verificarMap).filter(s => s === 'valido').length;
+                const totalValidos = Object.values(verificarMap).filter(s => s !== 'em_rota').length;
                 const totalEmRota = Object.values(verificarMap).filter(s => s === 'em_rota').length;
                 return (
                   <>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        {totalVerificados} Verificados
-                      </span>
                       <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 flex items-center gap-1">
                         <CheckSquare className="w-3.5 h-3.5" />
                         {totalValidos} Válidos
@@ -1943,19 +1968,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <button
                         type="button"
                         onClick={handleConcluirVerificacao}
-                        className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-bold shadow-xs cursor-pointer"
-                        title="Salvar e retornar"
+                        className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                        title="Salvar com os itens válidos e retornar para a tela de coleta"
                       >
+                        <CheckCircle2 className="w-4 h-4" />
                         Concluir
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleFecharListaEBaixarValidas}
-                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
-                        title="Fechar a lista e baixar apenas os itens válidos"
-                      >
-                        <Download className="w-4 h-4" />
-                        Fechar Lista (Baixar Válidas)
                       </button>
                     </div>
                   </>
@@ -1963,6 +1980,60 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               })()}
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Modal Verificar em Lote */}
+      {showVerificarLoteModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl border border-gray-100">
+            <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
+              <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
+                <ListPlus className="w-5 h-5 text-[#3483FA]" />
+                Verificação em Lote (Colar IDs Válidos)
+              </h3>
+              <button onClick={() => setShowVerificarLoteModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); handleProcessarVerificarLote(); }}>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2 block">
+                    Cole os códigos verificados (um por linha)
+                  </label>
+                  <textarea
+                    value={verificarLoteText}
+                    onChange={(e) => setVerificarLoteText(e.target.value)}
+                    rows={8}
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl p-3 text-xs font-mono focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-blue-100"
+                    placeholder="Cole aqui a lista de IDs...&#10;123456789&#10;987654321&#10;..."
+                    autoFocus
+                  />
+                  <p className="text-[10px] text-gray-500 mt-2">
+                    Todos os pacotes que derem match com esta lista serão validados. Os restantes continuarão pendentes na lista (não validados).
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-6 pt-4 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setShowVerificarLoteModal(false)}
+                  className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!verificarLoteText.trim()}
+                  className="flex-1 py-2.5 bg-[#3483FA] hover:bg-blue-600 disabled:bg-blue-300 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Validar Lote
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

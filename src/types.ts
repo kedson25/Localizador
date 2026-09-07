@@ -48,6 +48,7 @@ export interface ColetaItem {
   scannedAt: string;
   responsavel?: string;
   grupoId?: string;
+  validado?: boolean;
 }
 
 export interface ColetaGrupo {
