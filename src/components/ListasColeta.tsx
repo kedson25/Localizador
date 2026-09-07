@@ -50,8 +50,7 @@ interface ListasColetaProps {
 const SAIDAS_CICLOS_DISPONIVEIS = [
   'Ciclo 1 - Saída AM',
   'Ciclo 2 - Saída PM',
-  'Ciclo 3 - Saída SD',
-  'Em rota'
+  'Ciclo 3 - Saída SD'
 ];
 
 const MOTIVOS_DISPONIVEIS = [
@@ -123,10 +122,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [showVerificarModal, setShowVerificarModal] = useState(false);
   const [verificarModo, setVerificarModo] = useState<'10' | 'completo'>('10');
   const [verificarPagina, setVerificarPagina] = useState(0);
-  const [verificarMap, setVerificarMap] = useState<Record<string, 'valido' | 'em_rota'>>({});
+  const [tamanhoLote, setTamanhoLote] = useState<number>(10);
+  const [verificarMap, setVerificarMap] = useState<Record<string, 'valido' | 'verificado' | 'em_rota'>>({});
+  const [verificarInput, setVerificarInput] = useState('');
 
   // Modais de Criação e Lote
   const [showModalNovaLista, setShowModalNovaLista] = useState(false);
+  const [showTransferirModal, setShowTransferirModal] = useState(false);
   const [novaData, setNovaData] = useState<string>(() => {
     const today = new Date();
     return today.toISOString().split('T')[0]; // YYYY-MM-DD
@@ -136,6 +138,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const [showModalLote, setShowModalLote] = useState(false);
   const [loteText, setLoteText] = useState('');
+  const [loteMotivo, setLoteMotivo] = useState('Desconteinerizado');
 
   // Estado para a gaveta de exclusão
   const [listaParaExcluir, setListaParaExcluir] = useState<ColetaLista | null>(null);
@@ -207,24 +210,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Abrir Modal de Verificação de IDs do Ciclo
   const handleAbrirVerificar = () => {
     if (!listaAtiva) return;
-    const mapInicial: Record<string, 'valido' | 'em_rota'> = {};
+    const mapInicial: Record<string, 'valido' | 'verificado' | 'em_rota'> = {};
     listaAtiva.itens.forEach(item => {
       mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
     });
     setVerificarMap(mapInicial);
     setVerificarModo('10');
     setVerificarPagina(0);
+    setVerificarInput('');
     setShowVerificarModal(true);
   };
 
-  const handleToggleVerificarStatus = (itemId: string, novoStatus: 'valido' | 'em_rota') => {
+  const handleToggleVerificarStatus = (itemId: string, novoStatus: 'valido' | 'verificado' | 'em_rota') => {
     setVerificarMap(prev => ({
       ...prev,
       [itemId]: novoStatus
     }));
   };
 
-  const handleMarcarVisiveisVerificar = (itensVisiveis: ColetaItem[], status: 'valido' | 'em_rota') => {
+  const handleMarcarVisiveisVerificar = (itensVisiveis: ColetaItem[], status: 'valido' | 'verificado' | 'em_rota') => {
     setVerificarMap(prev => {
       const next = { ...prev };
       itensVisiveis.forEach(item => {
@@ -234,7 +238,70 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
   };
 
+  const handleVerificarPorInput = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verificarInput.trim() || !listaAtiva) return;
+
+    let processedInput = verificarInput.trim();
+    processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
+    processedInput = processedInput.replace(/d[çc]?4/gi, '4');
+    processedInput = processedInput.replace(/^[^0-9a-zA-Z]+/, '');
+    const match47 = processedInput.match(/(47\d+)/);
+    if (match47) {
+      processedInput = match47[1];
+    } else {
+      processedInput = processedInput.replace(/m$/i, '');
+    }
+    const cleanInput = processedInput.toUpperCase();
+    const cleanInputDigits = cleanDigits(cleanInput);
+
+    playShortBeep();
+
+    const matchedItem = listaAtiva.itens.find(i => {
+      if (i.codigo === cleanInput) return true;
+      const iDigits = cleanDigits(i.codigo);
+      return iDigits && cleanInputDigits && iDigits === cleanInputDigits;
+    });
+
+    if (matchedItem) {
+      if (verificarMap[matchedItem.id] === 'verificado') {
+        setLastScanResult({
+          status: 'success',
+          message: `ID ${matchedItem.codigo} já estava verificado!`,
+          code: matchedItem.codigo
+        });
+      } else {
+        setVerificarMap(prev => ({
+          ...prev,
+          [matchedItem.id]: 'verificado'
+        }));
+        setLastScanResult({
+          status: 'success',
+          message: `ID ${matchedItem.codigo} verificado com sucesso!`,
+          code: matchedItem.codigo
+        });
+      }
+    } else {
+      setLastScanResult({
+        status: 'error',
+        message: `ID ${cleanInput} não encontrado nesta lista.`,
+        code: cleanInput
+      });
+    }
+
+    setVerificarInput('');
+  };
+
   const handleConcluirVerificacao = async () => {
+    if (!listaAtiva) return;
+
+    const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
+    const updatedLista = { ...listaAtiva, itens: itensMantidos };
+    await saveLista(updatedLista);
+    setShowVerificarModal(false);
+  };
+
+  const handleFinalizarVerificacaoEGerarCsv = async () => {
     if (!listaAtiva) return;
 
     const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
@@ -244,7 +311,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     await saveLista(updatedLista);
     setShowVerificarModal(false);
 
-    alert(`Verificação concluída!\n\n• ${itensMantidos.length} pacote(s) VÁLIDO(S) mantidos na lista.\n• ${qtdRemovidos} pacote(s) EM ROTA removidos da lista.`);
+    alert(`Lista finalizada!\n\n• ${itensMantidos.length} pacote(s) mantidos.\n• ${qtdRemovidos} pacote(s) removidos.`);
+
+    if (itensMantidos.length > 0) {
+      const header = ['ID', 'ROTA', 'SAIDA', 'MOTIVO', 'GRUPO'].join(',');
+      const rowsCsv = itensMantidos.map(item => {
+        const nomeGrupo = updatedLista.grupos?.find(g => g.id === item.grupoId)?.nome || '';
+        return `${item.codigo},${item.rota},${updatedLista.saidaPadrao},${item.motivo},${nomeGrupo}`;
+      });
+      const csvContent = [header, ...rowsCsv].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${updatedLista.nome.replace(/\s+/g, '_')}_Finalizada.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   // Criar nova lista com dados reais (Data, Ciclo e Tipo de Lista)
@@ -262,9 +346,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     // Gerar nome limpo e direto sem "Lista Comum" ou "Rota Geral"
     let nomeCurto = novaSaida;
-    if (novaSaida === 'Ciclo 2 - Saída PM') nomeCurto = 'Saída PM';
-    else if (novaSaida === 'Ciclo 1 - Saída AM') nomeCurto = 'Saída AM';
-    else if (novaSaida === 'Ciclo 3 - Saída SD') nomeCurto = 'Saída SD';
+    if (novaSaida.includes('PM')) nomeCurto = 'Saída PM';
+    else if (novaSaida.includes('AM')) nomeCurto = 'Saída AM';
+    else if (novaSaida.includes('SD')) nomeCurto = 'Saída SD';
 
     const nomeGerado = `${nomeCurto} - ${dataFormatada}`;
     const rotaPadrao = novoTipo === 'grupos' ? 'Multirotas / Grupos' : 'Geral';
@@ -273,6 +357,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       id: 'lista-' + Date.now(),
       nome: nomeGerado,
       tipo: novoTipo,
+      grupos: novoTipo === 'grupos' ? [] : undefined,
+      grupoAtivoId: '',
       rota: rotaPadrao,
       data: dataFormatada,
       responsavel: operanteNome, // Criador real
@@ -320,7 +406,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return rDigits && cleanInputDigits && rDigits === cleanInputDigits;
     });
 
-    const rotaItemFinal = refugoMatch ? refugoMatch.rota : (selectedRotaItem || listaAtiva.rota || 'Livre');
+    const rotaItemFinal = refugoMatch ? refugoMatch.rota : 'Sem Rota';
 
     // Usar obrigatoriamente a saída do ciclo configurada
     const saidaItemFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
@@ -340,7 +426,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         motivo: selectedMotivo,
         rota: rotaItemFinal,
         scannedAt: new Date().toLocaleString('pt-BR'),
-        responsavel: operanteNome
+        responsavel: operanteNome,
+        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId
       };
       setLastScanResult({
         status: 'success',
@@ -356,7 +443,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         saida: saidaItemFinal, // Mesma saída do ciclo da lista
         motivo: selectedMotivo,
         scannedAt: new Date().toLocaleString('pt-BR'),
-        responsavel: operanteNome
+        responsavel: operanteNome,
+        grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
       };
       novosItens = [novoItem, ...novosItens];
       setLastScanResult({
@@ -469,6 +557,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   // Adicionar lote na lista ativa
+  const handleCriarGrupo = async () => {
+    if (!listaAtiva) return;
+    const numGrupos = listaAtiva.grupos?.length || 0;
+    const novoGrupo = {
+      id: 'grp-' + Date.now(),
+      nome: `Grupo ${numGrupos + 1}`
+    };
+    const updatedLista = {
+      ...listaAtiva,
+      grupos: [...(listaAtiva.grupos || []), novoGrupo],
+      grupoAtivoId: novoGrupo.id
+    };
+    await saveLista(updatedLista);
+  };
+
+  const handleSetGrupoAtivo = async (grupoId: string) => {
+    if (!listaAtiva) return;
+    const updatedLista = { ...listaAtiva, grupoAtivoId: grupoId };
+    await saveLista(updatedLista);
+  };
+
   const handleAdicionarLote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loteText.trim() || !listaAtiva) return;
@@ -477,6 +586,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (codigos.length === 0) return;
 
     const saidaCicloFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
+    const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
 
     const novosItensMap = new Map<string, ColetaItem>();
     listaAtiva.itens.forEach(i => novosItensMap.set(i.codigo, i));
@@ -495,24 +605,36 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       }
 
       const cleanCod = processedCod.toUpperCase();
+      const cleanCodDigits = cleanDigits(cleanCod);
+
+      const refugoMatch = refugoBaseRows.find(r => {
+        if (r.id === cleanCod) return true;
+        const rDigits = cleanDigits(r.id);
+        return rDigits && cleanCodDigits && rDigits === cleanCodDigits;
+      });
+      const rotaItemFinal = refugoMatch ? refugoMatch.rota : 'Sem Rota';
+
       if (novosItensMap.has(cleanCod)) {
         const item = novosItensMap.get(cleanCod)!;
         novosItensMap.set(cleanCod, {
           ...item,
           saida: saidaCicloFinal,
-          motivo: selectedMotivo,
+          motivo: motivoFinal,
+          rota: rotaItemFinal,
           scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome
+          responsavel: operanteNome,
+          grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId
         });
       } else {
         novosItensMap.set(cleanCod, {
           id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 10000),
           codigo: cleanCod,
-          rota: selectedRotaItem || listaAtiva.rota,
+          rota: rotaItemFinal,
           saida: saidaCicloFinal,
-          motivo: selectedMotivo,
+          motivo: motivoFinal,
           scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome
+          responsavel: operanteNome,
+          grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
         });
       }
     });
@@ -581,6 +703,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       if (!dashboardSearchTerm.trim()) return true;
       const term = dashboardSearchTerm.toLowerCase();
       return l.nome.toLowerCase().includes(term) || l.rota.toLowerCase().includes(term) || l.responsavel.toLowerCase().includes(term);
+    }).sort((a, b) => {
+      const getPriority = (s: string) => {
+        const u = (s || '').toUpperCase();
+        if (u.includes('AM')) return 1;
+        if (u.includes('SD')) return 2;
+        if (u.includes('PM')) return 3;
+        return 4;
+      };
+      const pA = getPriority(a.saidaPadrao || a.nome);
+      const pB = getPriority(b.saidaPadrao || b.nome);
+      if (pA !== pB) return pA - pB;
+      return b.id.localeCompare(a.id);
     });
 
     return (
@@ -763,7 +897,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             <Download className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => setListaParaExcluir(lista)}
+                            onClick={() => handleExcluirLista(lista.id)}
                             className="p-1.5 hover:bg-red-50 text-red-600 rounded-lg transition-colors border border-red-200 cursor-pointer"
                             title="Excluir Lista"
                           >
@@ -958,7 +1092,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const filteredItems = listaAtiva.itens.filter(item => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
-    return item.codigo.toLowerCase().includes(term) || item.rota.toLowerCase().includes(term) || item.motivo.toLowerCase().includes(term);
+    const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
+    const nomeGrupo = grupo ? grupo.nome.toLowerCase() : '';
+    return item.codigo.toLowerCase().includes(term) || 
+           item.rota.toLowerCase().includes(term) || 
+           item.motivo.toLowerCase().includes(term) || 
+           nomeGrupo.includes(term);
   });
 
   return (
@@ -968,7 +1107,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       className="w-full space-y-4 pb-12"
     >
       {/* Botão de Voltar para Listas */}
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex items-center gap-3 mb-2 flex-wrap">
         <button
           onClick={() => navigate('/listas')}
           className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm cursor-pointer"
@@ -977,9 +1116,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           Voltar para Listas
         </button>
         <div className="h-4 w-px bg-gray-300 mx-1"></div>
-        <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+        <span className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
           {listaAtiva?.nome || 'Coleta em Andamento'}
         </span>
+        {listaAtiva && (currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) && (
+          <button
+            onClick={() => setShowTransferirModal(true)}
+            className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 rounded text-[10px] font-bold uppercase transition-colors ml-auto shadow-sm cursor-pointer"
+          >
+            <Users className="w-3 h-3" /> Transferir Admin
+          </button>
+        )}
       </div>
 
       {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
@@ -987,13 +1134,89 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         
         {/* COLUNA ESQUERDA (3 COLS) — TABELA DE IDS COMPLETA */}
         <div className="xl:col-span-3 space-y-4">
+          
+          {/* PAINEL DE GRUPOS (Se tipo = grupos) */}
+          {listaAtiva.tipo === 'grupos' && (
+            <div className="bg-white border border-purple-200 rounded-xl p-5 shadow-sm space-y-4 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-purple-50 rounded-bl-full -z-10"></div>
+              
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-purple-100 text-purple-700 rounded-lg">
+                    <Layers className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base text-[#333333]">Grupos de Coleta</h3>
+                    <p className="text-xs text-gray-500 font-medium mt-0.5">Organize os pacotes em blocos</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  {(currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) && (
+                    <button
+                      onClick={handleCriarGrupo}
+                      className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Criar / Próximo Grupo
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Lista de Grupos */}
+              {listaAtiva.grupos && listaAtiva.grupos.length > 0 ? (
+                <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
+                  {listaAtiva.grupos.map((grupo) => {
+                    const isAtivo = listaAtiva.grupoAtivoId === grupo.id;
+                    const qtdPacotes = listaAtiva.itens.filter(i => i.grupoId === grupo.id).length;
+                    
+                    return (
+                      <div 
+                        key={grupo.id}
+                        onClick={() => handleSetGrupoAtivo(grupo.id)}
+                        className={`min-w-[240px] p-4 rounded-xl border-2 transition-all cursor-pointer snap-start flex flex-col gap-3 ${
+                          isAtivo 
+                            ? 'border-purple-600 bg-purple-50/50 shadow-md transform scale-[1.02]' 
+                            : 'border-gray-200 bg-white hover:border-purple-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className={`font-black text-sm ${isAtivo ? 'text-purple-700' : 'text-gray-700'}`}>
+                            {grupo.nome}
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            isAtivo ? 'bg-purple-200 text-purple-800' : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {qtdPacotes} pacotes
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-6 text-center">
+                  <p className="text-gray-500 text-sm font-medium">Nenhum grupo criado. Clique em "Criar Grupo" para começar.</p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
             
             {/* Header da Tabela + Busca + Ações de Seleção Rápida */}
             <div className="flex flex-col gap-3 pb-3 border-b border-gray-100">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <h3 className="font-bold text-base text-[#333333]">Lista Completa de IDs</h3>
+                  <button
+                    onClick={() => setShowModalLote(true)}
+                    className="px-2.5 py-1 bg-[#3483FA]/10 hover:bg-[#3483FA]/20 text-[#3483FA] rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <ListPlus className="w-3.5 h-3.5" />
+                    Colar Lote
+                  </button>
                 </div>
 
                 <div className="relative">
@@ -1002,7 +1225,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Buscar ID, rota ou motivo..."
+                    placeholder="Buscar ID, rota, motivo ou grupo..."
                     className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:border-[#3483FA] w-full sm:w-56"
                   />
                 </div>
@@ -1165,9 +1388,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             className="py-3 px-3 text-left font-bold text-[#333333] cursor-pointer hover:text-[#3483FA] transition-colors border-r border-gray-300"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            <div className="flex items-center gap-2">
-                              <Barcode className="w-3.5 h-3.5 text-gray-400" />
-                              {item.codigo}
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <Barcode className="w-3.5 h-3.5 text-gray-400" />
+                                {item.codigo}
+                              </div>
+                              {item.grupoId && listaAtiva.grupos && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-sm bg-purple-100 text-purple-700 w-fit">
+                                  {listaAtiva.grupos.find(g => g.id === item.grupoId)?.nome || 'Grupo Removido'}
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td 
@@ -1487,7 +1717,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   Verificação de IDs do Ciclo
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Marque cada ID como <strong className="text-emerald-700">Válido</strong> (continua na lista) ou <strong className="text-amber-700">Em Rota</strong> (será removido).
+                  Marque cada ID como <strong className="text-emerald-700">Válido</strong> (continua na lista) ou <strong className="text-amber-700">Não Validar</strong> (será removido).
                 </p>
               </div>
               <button onClick={() => setShowVerificarModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
@@ -1495,64 +1725,34 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </button>
             </div>
 
-            {/* Modal Controls: Modo de Exibição & Seleção em Bloco */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200 mb-4 flex-shrink-0">
-              {/* Selector de Modo: De 10 em 10 vs Completo */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-gray-700">Exibição:</span>
-                <div className="bg-white border border-gray-300 rounded-lg p-0.5 flex items-center text-xs font-bold">
+            {/* Modal Body: Lista de Itens */}
+            <div className="overflow-y-auto flex-1 pr-1 space-y-3 pt-2">
+              {/* Input de Scanner / Verificação Rápida */}
+              <form onSubmit={handleVerificarPorInput} className="bg-gray-50 p-3 rounded-xl border border-gray-200 shadow-xs">
+                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">
+                  Bipar ID para verificar (Apenas marca o que não foi visto)
+                </label>
+                <div className="relative flex gap-2">
+                  <div className="relative flex-1">
+                    <Barcode className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
+                    <input
+                      type="text"
+                      value={verificarInput}
+                      onChange={(e) => setVerificarInput(e.target.value)}
+                      placeholder="Bipe ou digite o ID do pacote..."
+                      className="w-full bg-white border border-gray-300 rounded-xl pl-9 pr-3 py-2 text-xs font-mono font-bold text-[#333333] focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-blue-100"
+                      autoFocus
+                    />
+                  </div>
                   <button
-                    type="button"
-                    onClick={() => { setVerificarModo('10'); setVerificarPagina(0); }}
-                    className={`px-3 py-1 rounded-md transition-all cursor-pointer ${
-                      verificarModo === '10' ? 'bg-[#3483FA] text-white shadow-xs' : 'text-gray-600 hover:text-black'
-                    }`}
+                    type="submit"
+                    className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
                   >
-                    De 10 em 10
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setVerificarModo('completo')}
-                    className={`px-3 py-1 rounded-md transition-all cursor-pointer ${
-                      verificarModo === 'completo' ? 'bg-[#3483FA] text-white shadow-xs' : 'text-gray-600 hover:text-black'
-                    }`}
-                  >
-                    Lista Completa ({listaAtiva.itens.length})
+                    Verificar
                   </button>
                 </div>
-              </div>
+              </form>
 
-              {/* Ações em Bloco na Tela */}
-              <div className="flex items-center gap-2 text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const itensDaTela = verificarModo === '10' 
-                      ? listaAtiva.itens.slice(verificarPagina * 10, (verificarPagina + 1) * 10)
-                      : listaAtiva.itens;
-                    handleMarcarVisiveisVerificar(itensDaTela, 'valido');
-                  }}
-                  className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg font-bold hover:bg-emerald-100 transition-colors cursor-pointer"
-                >
-                  Marcar Tela Válido
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const itensDaTela = verificarModo === '10' 
-                      ? listaAtiva.itens.slice(verificarPagina * 10, (verificarPagina + 1) * 10)
-                      : listaAtiva.itens;
-                    handleMarcarVisiveisVerificar(itensDaTela, 'em_rota');
-                  }}
-                  className="px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-200 rounded-lg font-bold hover:bg-amber-100 transition-colors cursor-pointer"
-                >
-                  Marcar Tela Em Rota
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Body: Lista de Itens */}
-            <div className="overflow-y-auto flex-1 pr-1 space-y-2">
               {(() => {
                 const totalItens = listaAtiva.itens.length;
                 if (totalItens === 0) {
@@ -1563,44 +1763,68 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   );
                 }
 
-                const itensExibidos = verificarModo === '10'
-                  ? listaAtiva.itens.slice(verificarPagina * 10, (verificarPagina + 1) * 10)
-                  : listaAtiva.itens;
-
-                const totalPaginas = Math.ceil(totalItens / 10);
+                // Controle de exibição (paginação de verificação)
+                const totalPaginas = Math.ceil(totalItens / tamanhoLote);
+                // Garantir que a página atual seja válida caso o tamanho do lote mude
+                const paginaAtualSafe = verificarPagina >= totalPaginas ? Math.max(0, totalPaginas - 1) : verificarPagina;
+                const itensExibidos = listaAtiva.itens.slice(paginaAtualSafe * tamanhoLote, (paginaAtualSafe + 1) * tamanhoLote);
 
                 return (
                   <>
-                    {verificarModo === '10' && totalPaginas > 1 && (
-                      <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded-lg border border-blue-100 text-xs text-blue-900 font-bold mb-2">
-                        <span>Página {verificarPagina + 1} de {totalPaginas} ({itensExibidos.length} pacotes)</span>
-                        <div className="flex gap-1">
-                          <button
-                            type="button"
-                            disabled={verificarPagina === 0}
-                            onClick={() => setVerificarPagina(p => p - 1)}
-                            className="px-2 py-0.5 bg-white border border-blue-200 rounded disabled:opacity-40 cursor-pointer"
-                          >
-                            Anterior
-                          </button>
-                          <button
-                            type="button"
-                            disabled={verificarPagina >= totalPaginas - 1}
-                            onClick={() => setVerificarPagina(p => p + 1)}
-                            className="px-2 py-0.5 bg-white border border-blue-200 rounded disabled:opacity-40 cursor-pointer"
-                          >
-                            Próximo
-                          </button>
-                        </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center bg-blue-50/50 p-2 rounded-lg border border-blue-100 text-xs text-blue-900 font-bold mb-2 gap-2">
+                      <div className="flex items-center gap-2">
+                        <span>Página {paginaAtualSafe + 1} de {Math.max(1, totalPaginas)} ({itensExibidos.length} pacotes)</span>
+                        <select
+                          value={tamanhoLote}
+                          onChange={(e) => {
+                            setTamanhoLote(Number(e.target.value));
+                            setVerificarPagina(0);
+                          }}
+                          className="px-2 py-1 bg-white border border-blue-200 rounded text-blue-700 outline-none"
+                        >
+                          <option value={5}>5 por vez</option>
+                          <option value={10}>10 por vez</option>
+                          <option value={20}>20 por vez</option>
+                          <option value={50}>50 por vez</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const text = itensExibidos.map(i => i.codigo).join('\n');
+                            navigator.clipboard.writeText(text);
+                          }}
+                          className="px-3 py-1.5 bg-white border border-[#3483FA] text-[#3483FA] rounded-md hover:bg-blue-50 transition-colors shadow-sm flex items-center gap-2 cursor-pointer font-black"
+                          title="Copiar IDs"
+                        >
+                          <Barcode className="w-4 h-4" /> Copiar {itensExibidos.length}
+                        </button>
                       </div>
-                    )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={paginaAtualSafe === 0}
+                          onClick={() => setVerificarPagina(paginaAtualSafe - 1)}
+                          className="px-3 py-1.5 bg-white border border-blue-200 text-blue-600 rounded-md disabled:opacity-40 cursor-pointer font-bold hover:bg-blue-50 transition-colors"
+                        >
+                          Anterior
+                        </button>
+                        <button
+                          type="button"
+                          disabled={paginaAtualSafe >= totalPaginas - 1}
+                          onClick={() => setVerificarPagina(paginaAtualSafe + 1)}
+                          className="px-3 py-1.5 bg-[#3483FA] text-white rounded-md disabled:opacity-40 cursor-pointer font-black hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1"
+                        >
+                          Próximo <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
 
                     <div className="space-y-2">
                       {itensExibidos.map((item, idx) => {
-                        const globalIndex = verificarModo === '10' ? (verificarPagina * 10) + idx + 1 : idx + 1;
+                        const globalIndex = (paginaAtualSafe * tamanhoLote) + idx + 1;
                         const currentVerificarStatus = verificarMap[item.id] || 'valido';
-                        const isValido = currentVerificarStatus === 'valido';
                         const isEmRota = currentVerificarStatus === 'em_rota';
+                        const isVerificado = currentVerificarStatus === 'verificado';
 
                         return (
                           <div 
@@ -1608,13 +1832,22 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all ${
                               isEmRota 
                                 ? 'bg-amber-50/80 border-amber-300' 
+                                : isVerificado
+                                ? 'bg-emerald-50/80 border-emerald-300'
                                 : 'bg-white border-gray-200 hover:border-gray-300'
                             }`}
                           >
                             <div className="flex items-center gap-3">
                               <span className="font-mono text-xs text-gray-400 font-bold w-6">#{globalIndex}</span>
                               <div>
-                                <p className="font-mono font-bold text-sm text-[#333333]">{item.codigo}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-mono font-bold text-sm text-[#333333]">{item.codigo}</p>
+                                  {isVerificado && (
+                                    <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded font-black text-[10px] uppercase flex items-center gap-1">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Verificado
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-500">
                                   <span>Motivo: <strong className="text-gray-700">{item.motivo}</strong></span>
                                   <span>• {item.scannedAt}</span>
@@ -1624,22 +1857,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                             {/* BOTOES DE STATUS NO VERIFICAR */}
                             <div className="flex items-center gap-1.5 self-end sm:self-center">
+                              {!isVerificado && !isEmRota && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleVerificarStatus(item.id, 'verificado')}
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-xs"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  Verificar
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => handleToggleVerificarStatus(item.id, 'valido')}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
-                                  isValido 
-                                    ? 'bg-emerald-600 text-white shadow-xs' 
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                }`}
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                                Válido (Fica)
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleToggleVerificarStatus(item.id, 'em_rota')}
+                                onClick={() => handleToggleVerificarStatus(item.id, isEmRota ? 'valido' : 'em_rota')}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
                                   isEmRota 
                                     ? 'bg-amber-600 text-white shadow-xs' 
@@ -1647,7 +1877,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                                 }`}
                               >
                                 <AlertCircle className="w-3.5 h-3.5" />
-                                Em Rota (Sai)
+                                {isEmRota ? 'Desfazer' : 'Não Validar'}
                               </button>
                             </div>
                           </div>
@@ -1659,21 +1889,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               })()}
             </div>
 
-            {/* Modal Footer: Resumo + Concluir */}
+            {/* Modal Footer: Resumo + Concluir / Finalizar */}
             <div className="mt-4 pt-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-shrink-0">
               {(() => {
+                const totalVerificados = Object.values(verificarMap).filter(s => s === 'verificado').length;
                 const totalValidos = Object.values(verificarMap).filter(s => s === 'valido').length;
                 const totalEmRota = Object.values(verificarMap).filter(s => s === 'em_rota').length;
                 return (
                   <>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
                         <CheckCircle2 className="w-3.5 h-3.5" />
+                        {totalVerificados} Verificados
+                      </span>
+                      <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 flex items-center gap-1">
+                        <CheckSquare className="w-3.5 h-3.5" />
                         {totalValidos} Válidos
                       </span>
-                      <span className="text-xs font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1.5">
+                      <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1">
                         <AlertCircle className="w-3.5 h-3.5" />
-                        {totalEmRota} Em Rota
+                        {totalEmRota} Não Validados
                       </span>
                     </div>
 
@@ -1681,17 +1916,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <button
                         type="button"
                         onClick={() => setShowVerificarModal(false)}
-                        className="flex-1 sm:flex-none px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
+                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
                       >
                         Cancelar
                       </button>
                       <button
                         type="button"
                         onClick={handleConcluirVerificacao}
-                        className="flex-1 sm:flex-none px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                        className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                        title="Salvar e voltar para a lista"
                       >
-                        <CheckCircle2 className="w-4 h-4" />
+                        <CheckCircle2 className="w-4 h-4 text-gray-600" />
                         Concluir
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFinalizarVerificacaoEGerarCsv}
+                        className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                        title="Salvar, finalizar e gerar CSV"
+                      >
+                        <Download className="w-4 h-4" />
+                        Finalizar Lista
                       </button>
                     </div>
                   </>
@@ -1725,10 +1970,23 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 value={loteText}
                 onChange={(e) => setLoteText(e.target.value)}
                 placeholder="78230012345678&#10;78230098765432"
-                rows={6}
+                rows={5}
                 className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs font-mono focus:outline-none focus:border-[#3483FA]"
                 required
               />
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase tracking-wider font-bold text-gray-500">Motivo para o Lote</label>
+                <select
+                  value={loteMotivo}
+                  onChange={(e) => setLoteMotivo(e.target.value)}
+                  className="w-full bg-white border border-gray-300 text-xs font-bold text-gray-700 rounded-lg p-2 focus:outline-none focus:border-[#3483FA]"
+                >
+                  {MOTIVOS_DISPONIVEIS.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
 
               <div className="flex justify-end gap-2 pt-2">
                 <button
@@ -1746,6 +2004,64 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TRANSFERIR ADMIN */}
+      {showTransferirModal && listaAtiva && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-gray-100 flex flex-col">
+            <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100 flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
+                  <Users className="w-5 h-5 text-amber-500" />
+                  Transferir Admin da Lista
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">Selecione o novo responsável</p>
+              </div>
+              <button onClick={() => setShowTransferirModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase tracking-wider font-bold text-gray-500">Novo Responsável</label>
+                <select 
+                  id="selectTransferAdmin"
+                  className="w-full bg-white border border-gray-300 text-sm text-gray-700 rounded-lg p-2.5 focus:outline-none focus:border-amber-500"
+                >
+                  <option value="">Selecione um usuário...</option>
+                  {usuariosSistemaOnline.filter(u => u.username !== listaAtiva.responsavel).map(u => (
+                    <option key={u.id} value={u.username}>{u.username}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            
+            <div className="mt-6 pt-3 border-t border-gray-100 flex justify-end gap-2">
+              <button
+                onClick={() => setShowTransferirModal(false)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const selectEl = document.getElementById('selectTransferAdmin') as HTMLSelectElement;
+                  const newAdmin = selectEl?.value;
+                  if (newAdmin) {
+                    const updatedLista = { ...listaAtiva, responsavel: newAdmin };
+                    await saveLista(updatedLista);
+                    setShowTransferirModal(false);
+                  }
+                }}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Transferir
+              </button>
+            </div>
           </div>
         </div>
       )}

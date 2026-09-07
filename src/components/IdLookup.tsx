@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
-import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, Upload, Filter } from 'lucide-react';
-import { CsvRow, LookupMatch } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, Upload, Filter, ListPlus } from 'lucide-react';
+import { CsvRow, LookupMatch, ColetaLista, ColetaItem } from '../types';
 import { searchIdsInRows } from '../utils/csvParser';
+import { listenToListas } from '../lib/firebase';
 
 interface IdLookupProps {
   rows: CsvRow[];
@@ -14,10 +15,66 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [copied, setCopied] = useState<boolean>(false);
   const [copiedDetailIdx, setCopiedDetailIdx] = useState<number | null>(null);
   const [expandedRowIdx, setExpandedRowIdx] = useState<number | null>(null);
+  const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [showGruposModal, setShowGruposModal] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = listenToListas((data) => setListas(data));
+    return () => unsubscribe();
+  }, []);
 
   const matches: LookupMatch[] = useMemo(() => {
-    return searchIdsInRows(inputText, rows);
-  }, [inputText, rows]);
+    const baseMatches = searchIdsInRows(inputText, rows);
+    
+    // Enrich with group info from active/existing lists if available
+    return baseMatches.map(match => {
+      // Create a shallow copy to avoid mutating the cached search results directly
+      const enrichedMatch = { ...match };
+      
+      let foundInAnyGroup = false;
+      let foundGroupName = '';
+      
+      for (const lista of listas) {
+        if (lista.tipo === 'grupos' && lista.grupos) {
+          const itemInList = lista.itens.find(i => 
+            i.codigo === enrichedMatch.cleanSearchTerm || 
+            i.codigo === enrichedMatch.searchTerm
+          );
+          
+          if (itemInList && itemInList.grupoId) {
+            const grupo = lista.grupos.find(g => g.id === itemInList.grupoId);
+            if (grupo) {
+              foundInAnyGroup = true;
+              foundGroupName = grupo.nome;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (foundInAnyGroup) {
+        if (!enrichedMatch.found) {
+          enrichedMatch.found = true;
+          enrichedMatch.row = {
+            id: enrichedMatch.cleanSearchTerm,
+            originalId: enrichedMatch.searchTerm,
+            cleanId: enrichedMatch.cleanSearchTerm,
+            group: foundGroupName,
+            rawFields: {},
+            rowIndex: -1
+          };
+        } else if (enrichedMatch.row) {
+          // If already found in CSV, overwrite or update the group
+          enrichedMatch.row = {
+            ...enrichedMatch.row,
+            group: foundGroupName
+          };
+        }
+      }
+      
+      return enrichedMatch;
+    });
+  }, [inputText, rows, listas]);
 
   // Extract unique Saída values from found search matches (or loaded rows if no search)
   const availableSaidas = useMemo(() => {
@@ -166,6 +223,13 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
           </div>
           
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowGruposModal(true)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 bg-purple-50 border border-purple-200 hover:bg-purple-100 hover:border-purple-300 text-purple-700 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer"
+            >
+              <ListPlus className="w-4 h-4 text-purple-600" />
+              <span className="hidden sm:inline">Importar Grupo</span>
+            </button>
             <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 text-gray-700 rounded-lg text-xs font-bold transition-all shadow-sm">
               <Upload className="w-4 h-4 text-blue-600" />
               <span>Carregar Faltantes (CSV)</span>
@@ -474,6 +538,81 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
           </div>
         </div>
       ) : null}
+
+      {/* MODAL DE IMPORTAÇÃO DE GRUPOS */}
+      {showGruposModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100 flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
+                  <ListPlus className="w-5 h-5 text-purple-600" />
+                  Importar Grupo de Lista de Coleta
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">Selecione um grupo para carregar os IDs na consulta.</p>
+              </div>
+              <button onClick={() => setShowGruposModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto pr-1 space-y-4">
+              {listas.filter(l => l.tipo === 'grupos' && l.grupos && l.grupos.length > 0).length === 0 ? (
+                <div className="p-8 text-center bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                  <Layers className="w-8 h-8 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500 text-sm font-medium">Nenhuma Lista com Grupos encontrada.</p>
+                </div>
+              ) : (
+                listas.filter(l => l.tipo === 'grupos' && l.grupos && l.grupos.length > 0).map(lista => (
+                  <div key={lista.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                    <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+                      <span className="font-bold text-sm text-gray-800">{lista.nome}</span>
+                      <span className="text-xs text-gray-500">{lista.data}</span>
+                    </div>
+                    <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {lista.grupos?.map(grupo => {
+                        const idsDoGrupo = lista.itens.filter(i => i.grupoId === grupo.id).map(i => i.codigo);
+                        return (
+                          <button
+                            key={grupo.id}
+                            onClick={() => {
+                              if (idsDoGrupo.length > 0) {
+                                const currentInput = inputText.trim();
+                                const newIds = idsDoGrupo.join('\n');
+                                setInputText(currentInput ? `${currentInput}\n${newIds}` : newIds);
+                              }
+                              setShowGruposModal(false);
+                            }}
+                            className="flex flex-col items-start gap-1 p-3 rounded-lg border border-purple-100 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition-colors text-left group cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="font-bold text-sm text-purple-900 group-hover:text-purple-700">
+                                {grupo.nome}
+                              </span>
+                              <span className="text-xs font-bold px-2 py-0.5 bg-white text-purple-700 rounded-full border border-purple-200 shadow-sm">
+                                {idsDoGrupo.length}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-purple-600 font-medium">Líder: {grupo.lider}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end">
+              <button
+                onClick={() => setShowGruposModal(false)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

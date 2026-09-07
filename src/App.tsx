@@ -152,7 +152,27 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <Routes>
+          <>
+            {isAuthenticated && location.pathname !== '/' && location.pathname !== '/login' && !location.pathname.startsWith('/listas/') && (
+              <div className="flex items-center gap-3 mb-4">
+                <button
+                  onClick={() => navigate('/')}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4 text-[#3483FA]" />
+                  Voltar para o Hub
+                </button>
+                {getPageTitle() && (
+                  <>
+                    <div className="h-4 w-px bg-gray-300 mx-1"></div>
+                    <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                      {getPageTitle()}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+            <Routes>
             {/* Public Routes */}
             <Route path="/refugo" element={<ControleRefugo />} />
             <Route path="/login" element={
@@ -196,6 +216,7 @@ export default function App() {
             {/* Fallback */}
             <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to="/login" replace />} />
           </Routes>
+          </>
         )}
 
       </main>

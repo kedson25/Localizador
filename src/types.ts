@@ -47,12 +47,21 @@ export interface ColetaItem {
   motivo: string;
   scannedAt: string;
   responsavel?: string;
+  grupoId?: string;
+}
+
+export interface ColetaGrupo {
+  id: string;
+  nome: string;
+  lider: string;
 }
 
 export interface ColetaLista {
   id: string;
   nome: string;
   tipo?: 'comum' | 'grupos';
+  grupos?: ColetaGrupo[];
+  grupoAtivoId?: string;
   rota: string;
   data: string;
   responsavel: string;
