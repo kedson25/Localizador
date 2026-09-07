@@ -34,6 +34,27 @@ export default function App() {
   });
   const isAuthenticated = !!currentUser;
 
+  useEffect(() => {
+    if (currentUser) {
+      const tabName = location.pathname.startsWith('/refugo') ? 'Refugo' :
+                      location.pathname.startsWith('/listas') ? 'Coleta (Listas)' :
+                      location.pathname.startsWith('/consulta') ? 'Consulta' :
+                      location.pathname.startsWith('/remover') ? 'Remover' :
+                      location.pathname.startsWith('/reporte') ? 'Reporte' :
+                      location.pathname.startsWith('/admin') ? 'Admin' : 'Hub / Início';
+      
+      try {
+        const activePresences = JSON.parse(localStorage.getItem('app_active_presences') || '{}');
+        activePresences[currentUser.id || currentUser.username] = {
+          username: currentUser.username,
+          tab: tabName,
+          lastActive: Date.now()
+        };
+        localStorage.setItem('app_active_presences', JSON.stringify(activePresences));
+      } catch {}
+    }
+  }, [location.pathname, currentUser]);
+
 
 
 
@@ -174,7 +195,7 @@ export default function App() {
             )}
             <Routes>
             {/* Public Routes */}
-            <Route path="/refugo" element={<ControleRefugo />} />
+            <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
             <Route path="/login" element={
               isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
             } />

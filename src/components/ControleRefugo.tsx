@@ -9,6 +9,7 @@ interface ScannedItem {
   rota: string;
   scannedAt: Date;
   status: 'found' | 'not_found';
+  foundBy?: string;
 }
 
 let audioCtx: AudioContext | null = null;
@@ -36,7 +37,7 @@ const playBeep = () => {
   }
 };
 
-export function ControleRefugo() {
+export function ControleRefugo({ currentUser }: { currentUser?: any }) {
   const [rows, setRows] = useState<RefugoRow[]>([]);
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
   const [bipInput, setBipInput] = useState('');
@@ -188,9 +189,10 @@ export function ControleRefugo() {
     if (foundRow) {
       const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
       const message = isHibrida ? `ROTA VÁLIDA: ${foundRow.rota} (HÍBRIDA)` : `ROTA VÁLIDA: ${foundRow.rota}`;
+      const operatorName = currentUser?.username || localStorage.getItem('operanteNome') || 'Operador';
       
       setLastScanResult({ status: 'success', message });
-      const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found' }, ...scannedItems];
+      const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found', foundBy: operatorName }, ...scannedItems];
       setScannedItems(newScans);
       saveRefugoScans(newScans);
       
@@ -402,9 +404,16 @@ export function ControleRefugo() {
                       <span className={`font-mono font-bold text-sm ${item.status === 'found' ? 'text-emerald-900' : 'text-red-900'}`}>{item.id}</span>
                     </div>
                     {item.status === 'found' ? (
-                      <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
-                        Rota: {item.rota}
-                      </span>
+                      <div className="flex flex-col items-end">
+                        <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
+                          Rota: {item.rota}
+                        </span>
+                        {item.foundBy && (
+                          <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
+                            Encontrado por: <strong className="text-gray-700">{item.foundBy}</strong>
+                          </span>
+                        )}
+                      </div>
                     ) : (
                       <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded text-xs font-bold border border-red-200">
                         SEM ROTA

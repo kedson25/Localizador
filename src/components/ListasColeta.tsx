@@ -642,6 +642,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     await saveLista(updatedLista);
   };
 
+  const handleExcluirGrupo = async (grupoId: string) => {
+    if (!listaAtiva) return;
+    const novosGrupos = (listaAtiva.grupos || []).filter(g => g.id !== grupoId);
+    const novosItens = listaAtiva.itens.map(i => i.grupoId === grupoId ? { ...i, grupoId: undefined } : i);
+    const novoGrupoAtivoId = listaAtiva.grupoAtivoId === grupoId ? (novosGrupos[0]?.id || '') : listaAtiva.grupoAtivoId;
+
+    const updatedLista = {
+      ...listaAtiva,
+      grupos: novosGrupos,
+      grupoAtivoId: novoGrupoAtivoId,
+      itens: novosItens
+    };
+    await saveLista(updatedLista);
+  };
+
   const handleAdicionarLote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loteText.trim() || !listaAtiva) return;
@@ -1268,11 +1283,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <span className={`font-black text-sm ${isAtivo ? 'text-purple-700' : 'text-gray-700'}`}>
                             {grupo.nome}
                           </span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            isAtivo ? 'bg-purple-200 text-purple-800' : 'bg-gray-100 text-gray-500'
-                          }`}>
-                            {qtdPacotes} pacotes
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              isAtivo ? 'bg-purple-200 text-purple-800' : 'bg-gray-100 text-gray-500'
+                            }`}>
+                              {qtdPacotes} pacotes
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm(`Deseja realmente excluir o grupo "${grupo.nome}"? Os pacotes deste grupo ficarão sem grupo.`)) {
+                                  handleExcluirGrupo(grupo.id);
+                                }
+                              }}
+                              className="p-1 hover:bg-red-100 text-red-500 rounded-lg transition-colors cursor-pointer"
+                              title="Excluir grupo"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1749,38 +1779,71 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <Users className="w-5 h-5 text-emerald-600" />
                 <h3 className="font-bold text-sm text-[#333333]">Operadores Ativos</h3>
               </div>
-              <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-3 py-1 rounded-full border border-emerald-200 shadow-sm">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                {usuariosSistemaOnline.length} Online
-              </span>
+              {(() => {
+                const usuariosDaLista = usuariosSistemaOnline.filter(user => {
+                  if (!listaAtiva) return true;
+                  const isResp = user.username === listaAtiva.responsavel;
+                  const hasItens = listaAtiva.itens.some(item => item.responsavel === user.username);
+                  return isResp || hasItens;
+                });
+                const usuariosParaExibir = usuariosDaLista.length > 0 ? usuariosDaLista : usuariosSistemaOnline;
+                return (
+                  <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-3 py-1 rounded-full border border-emerald-200 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    {usuariosParaExibir.length} Online
+                  </span>
+                );
+              })()}
             </div>
 
             <div className="space-y-3">
-              {usuariosSistemaOnline.map((user) => (
-                <div key={user.id} className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100/80 rounded-2xl border border-gray-100 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#3483FA] to-blue-600 text-white font-bold text-sm flex items-center justify-center shadow-md">
-                        {user.username.slice(0, 2).toUpperCase()}
+              {(() => {
+                const usuariosDaLista = usuariosSistemaOnline.filter(user => {
+                  if (!listaAtiva) return true;
+                  const isResp = user.username === listaAtiva.responsavel;
+                  const hasItens = listaAtiva.itens.some(item => item.responsavel === user.username);
+                  return isResp || hasItens;
+                });
+                const usuariosParaExibir = usuariosDaLista.length > 0 ? usuariosDaLista : usuariosSistemaOnline;
+                return usuariosParaExibir.map((user) => {
+                  let userTab = 'Hub / Início';
+                  try {
+                    const activePresences = JSON.parse(localStorage.getItem('app_active_presences') || '{}');
+                    if (activePresences[user.id || user.username]?.tab) {
+                      userTab = activePresences[user.id || user.username].tab;
+                    }
+                  } catch {}
+                  return (
+                    <div key={user.id} className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100/80 rounded-2xl border border-gray-100 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#3483FA] to-blue-600 text-white font-bold text-sm flex items-center justify-center shadow-md">
+                            {user.username.slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-[#333333] flex items-center gap-1.5">
+                            {user.username}
+                            {user.username === operanteNome && (
+                              <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg font-bold">
+                                VOCÊ
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[10px] text-gray-500 font-medium tracking-tight flex items-center gap-1.5 mt-0.5">
+                            <span>{user.isAdmin ? 'Administrador' : 'Operador'}</span>
+                            <span>•</span>
+                            <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                              Aba: {userTab}
+                            </span>
+                          </p>
+                        </div>
                       </div>
-                      <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-[#333333] flex items-center gap-1.5">
-                        {user.username}
-                        {user.username === operanteNome && (
-                          <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg font-bold">
-                            VOCÊ
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-[10px] text-gray-500 font-medium tracking-tight">
-                        {user.isAdmin ? 'Administrador' : 'Operador'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                  );
+                });
+              })()}
             </div>
           </motion.div>
 
