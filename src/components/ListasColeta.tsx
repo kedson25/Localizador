@@ -339,6 +339,40 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     alert(`${processados} pacotes encontrados e validados com sucesso!`);
   };
 
+  const handleCopiarIdsVerificacao = () => {
+    if (!listaAtiva) return;
+    const itensPendentes = listaAtiva.itens.filter(i => !i.validado);
+    if (itensPendentes.length === 0) {
+      alert('Não há IDs pendentes para copiar.');
+      return;
+    }
+    const textoIds = itensPendentes.map(i => i.codigo).join('\n');
+    navigator.clipboard.writeText(textoIds).then(() => {
+      alert(`${itensPendentes.length} IDs pendentes copiados para a área de transferência!`);
+    }).catch(err => {
+      console.error('Erro ao copiar:', err);
+    });
+  };
+
+  const handleCopiarIdsComMotivoESaida = () => {
+    if (!listaAtiva) return;
+    const itensParaCopiar = filteredItems.length > 0 ? filteredItems : listaAtiva.itens;
+    if (itensParaCopiar.length === 0) {
+      alert('Não há itens para copiar.');
+      return;
+    }
+    const texto = itensParaCopiar.map(i => {
+      const grupoNome = listaAtiva.grupos?.find(g => g.id === i.grupoId)?.nome || '';
+      return `${i.codigo} | Saída: ${listaAtiva.saidaPadrao} | Motivo: ${i.motivo || 'N/A'}${grupoNome ? ` | Grupo: ${grupoNome}` : ''}`;
+    }).join('\n');
+
+    navigator.clipboard.writeText(texto).then(() => {
+      alert(`${itensParaCopiar.length} itens copiados (ID, Saída e Motivo)!`);
+    }).catch(err => {
+      console.error('Erro ao copiar:', err);
+    });
+  };
+
   const handleConcluirVerificacao = async () => {
     if (!listaAtiva) return;
 
@@ -794,56 +828,56 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         </div>
 
         {/* Resumo de Métricas Topo */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           <motion.div 
-            whileHover={{ y: -5 }}
-            className="bg-white border border-gray-200 p-6 rounded-2xl flex items-center gap-4 shadow-sm transition-all hover:shadow-md border-b-4 border-b-blue-500"
+            whileHover={{ y: -2 }}
+            className="bg-white border border-gray-200 p-3 rounded-xl flex items-center gap-3 shadow-xs transition-all hover:shadow-sm border-b-2 border-b-blue-500"
           >
-            <div className="p-4 bg-blue-50 text-blue-600 rounded-xl">
-              <Package className="w-7 h-7" />
+            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg">
+              <Package className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-3xl font-bold text-[#333333] tracking-tight">{totalListas}</p>
-              <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Total de Listas</p>
+              <p className="text-xl font-bold text-[#333333] tracking-tight">{totalListas}</p>
+              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total de Listas</p>
             </div>
           </motion.div>
 
           <motion.div 
-            whileHover={{ y: -5 }}
-            className="bg-white border border-gray-200 p-6 rounded-2xl flex items-center gap-4 shadow-sm transition-all hover:shadow-md border-b-4 border-b-amber-500"
+            whileHover={{ y: -2 }}
+            className="bg-white border border-gray-200 p-3 rounded-xl flex items-center gap-3 shadow-xs transition-all hover:shadow-sm border-b-2 border-b-amber-500"
           >
-            <div className="p-4 bg-amber-50 text-amber-600 rounded-xl">
-              <Clock className="w-7 h-7" />
+            <div className="p-2.5 bg-amber-50 text-amber-600 rounded-lg">
+              <Clock className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-3xl font-bold text-[#333333] tracking-tight">{listasAtivas}</p>
-              <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Em Andamento</p>
+              <p className="text-xl font-bold text-[#333333] tracking-tight">{listasAtivas}</p>
+              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Em Andamento</p>
             </div>
           </motion.div>
 
           <motion.div 
-            whileHover={{ y: -5 }}
-            className="bg-white border border-gray-200 p-6 rounded-2xl flex items-center gap-4 shadow-sm transition-all hover:shadow-md border-b-4 border-b-emerald-500"
+            whileHover={{ y: -2 }}
+            className="bg-white border border-gray-200 p-3 rounded-xl flex items-center gap-3 shadow-xs transition-all hover:shadow-sm border-b-2 border-b-emerald-500"
           >
-            <div className="p-4 bg-emerald-50 text-emerald-600 rounded-xl">
-              <CheckCircle2 className="w-7 h-7" />
+            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg">
+              <CheckCircle2 className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-3xl font-bold text-emerald-600 tracking-tight">{totalItensColetados}</p>
-              <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">IDs Coletados</p>
+              <p className="text-xl font-bold text-emerald-600 tracking-tight">{totalItensColetados}</p>
+              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">IDs Coletados</p>
             </div>
           </motion.div>
 
           <motion.div 
-            whileHover={{ y: -5 }}
-            className="hidden xl:flex bg-gradient-to-br from-[#3483FA] to-blue-700 p-6 rounded-2xl items-center gap-4 shadow-md text-white border-b-4 border-b-blue-900"
+            whileHover={{ y: -2 }}
+            className="hidden xl:flex bg-gradient-to-br from-[#3483FA] to-blue-700 p-3 rounded-xl items-center gap-3 shadow-xs text-white border-b-2 border-b-blue-900"
           >
-            <div className="p-4 bg-white/20 text-white rounded-xl backdrop-blur-sm">
-              <Zap className="w-7 h-7" />
+            <div className="p-2.5 bg-white/20 text-white rounded-lg backdrop-blur-sm">
+              <Zap className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-lg font-bold leading-tight">Coleta Rápida</p>
-              <p className="text-[10px] text-white/80 font-medium uppercase tracking-wider">Otimizado para agilidade</p>
+              <p className="text-sm font-bold leading-tight">Coleta Rápida</p>
+              <p className="text-[9px] text-white/80 font-medium uppercase tracking-wider">Otimizado para agilidade</p>
             </div>
           </motion.div>
         </div>
@@ -1266,6 +1300,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     <ListPlus className="w-3.5 h-3.5" />
                     Colar Lote
                   </button>
+                  <button
+                    onClick={handleCopiarIdsComMotivoESaida}
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Copiar IDs com as respectivas saídas e motivos"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copiar com Motivos e Saídas
+                  </button>
                 </div>
 
                 <div className="relative">
@@ -1437,16 +1479,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             className="py-3 px-3 text-left font-bold text-[#333333] cursor-pointer hover:text-[#3483FA] transition-colors border-r border-gray-300"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            <div className="flex flex-col gap-1">
-                              <div className="flex items-center gap-2">
-                                <Barcode className="w-3.5 h-3.5 text-gray-400" />
-                                {item.codigo}
-                              </div>
-                              {item.grupoId && listaAtiva.grupos && (
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-sm bg-purple-100 text-purple-700 w-fit">
-                                  {listaAtiva.grupos.find(g => g.id === item.grupoId)?.nome || 'Grupo Removido'}
-                                </span>
-                              )}
+                            <div className="flex items-center gap-2">
+                              <Barcode className="w-3.5 h-3.5 text-gray-400" />
+                              {item.codigo}
                             </div>
                           </td>
                           <td 
@@ -1782,14 +1817,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
                     Opcional: Bipar ID para conferência rápida
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowVerificarLoteModal(true)}
-                    className="text-[10px] bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                  >
-                    <ListPlus className="w-3 h-3" />
-                    Modo Lote
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleCopiarIdsVerificacao}
+                      className="text-[10px] bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      title="Copiar todos os IDs pendentes para a área de transferência"
+                    >
+                      <Copy className="w-3 h-3" />
+                      Copiar IDs
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowVerificarLoteModal(true)}
+                      className="text-[10px] bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <ListPlus className="w-3 h-3" />
+                      Modo Lote
+                    </button>
+                  </div>
                 </div>
                 <div className="relative flex gap-2">
                   <div className="relative flex-1">
