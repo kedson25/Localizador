@@ -107,23 +107,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#EBEBEB] text-[#333333] flex flex-col font-sans selection:bg-[#3483FA] selection:text-white">
-      {/* Global Theme Header */}
-      {!isHome && location.pathname !== '/login' && (
-        <header className="bg-[#FFE600] px-4 py-3 sticky top-0 z-50 shadow-sm flex items-center justify-between">
-          <Link 
-            to="/"
-            className="flex items-center gap-2 text-sm font-bold text-[#333333] hover:text-black transition-colors bg-white/60 hover:bg-white/80 px-3 py-1.5 rounded-md"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Voltar
-          </Link>
-          
-          <div className="text-xs font-bold text-[#2D3277]/70 uppercase hidden sm:block">
-            {getPageTitle()}
-          </div>
-        </header>
-      )}
-
       {/* Main Content Area */}
       <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : location.pathname === "/listas" ? "px-4 sm:px-6 py-6 space-y-4" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"}`}>
         {/* Floating Notification */}
@@ -198,7 +181,10 @@ export default function App() {
                 )}
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
-                  <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                  <>
+                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                    <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
+                  </>
                 )}
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (

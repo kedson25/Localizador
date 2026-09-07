@@ -30,37 +30,18 @@ import {
   CheckCheck,
   Zap
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { 
   listenToRefugoScans, 
   saveRefugoScans, 
-  listenToRefugo 
+  listenToRefugo,
+  listenToListas,
+  saveLista,
+  deleteLista as deleteListaFirestore
 } from '../lib/firebase';
-import { RefugoRow } from '../types';
+import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
-
-interface ColetaItem {
-  id: string;
-  codigo: string;
-  rota: string;
-  saida: string;
-  motivo: string;
-  scannedAt: string;
-  responsavel?: string;
-}
-
-interface ColetaLista {
-  id: string;
-  nome: string;
-  tipo?: 'comum' | 'grupos';
-  rota: string;
-  data: string;
-  responsavel: string;
-  status: 'em_andamento' | 'finalizada';
-  saidaPadrao: string;
-  motivoPadrao: string;
-  itens: ColetaItem[];
-}
 
 interface ListasColetaProps {
   currentUser?: User | null;
@@ -112,8 +93,10 @@ const playShortBeep = () => {
 };
 
 export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
+  const params = useParams();
+  const navigate = useNavigate();
   const [listas, setListas] = useState<ColetaLista[]>([]);
-  const [activeListaId, setActiveListaId] = useState<string | null>(null);
+  const activeListaId = params.id || null;
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   
   const [bipInput, setBipInput] = useState('');
@@ -155,6 +138,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [showModalLote, setShowModalLote] = useState(false);
   const [loteText, setLoteText] = useState('');
 
+  // Estado para a gaveta de exclusão
+  const [listaParaExcluir, setListaParaExcluir] = useState<ColetaLista | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   const operanteNome = currentUser?.username || 'Usuário Atual';
@@ -174,17 +160,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     fetchSystemUsers();
   }, []);
 
-  // Carregar/Salvar listas
+  // Carregar/Salvar listas (AGORA FIRESTORE)
   useEffect(() => {
-    const saved = localStorage.getItem('coleta_listas_v4');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setListas(parsed);
-      } catch (e) {
-        console.error("Erro ao carregar listas:", e);
-      }
-    }
+    const unsubListas = listenToListas((listasServer) => {
+      setListas(listasServer);
+    });
 
     // Carregar base de refugo se existir
     const unsubRefugo = listenToRefugo((data) => {
@@ -206,13 +186,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       }
     });
 
-    return () => unsubRefugo();
+    return () => {
+      unsubListas();
+      unsubRefugo();
+    };
   }, []);
-
-  const salvarListas = (novasListas: ColetaLista[]) => {
-    setListas(novasListas);
-    localStorage.setItem('coleta_listas_v4', JSON.stringify(novasListas));
-  };
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
 
@@ -257,21 +235,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
   };
 
-  const handleConcluirVerificacao = () => {
+  const handleConcluirVerificacao = async () => {
     if (!listaAtiva) return;
 
     const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
     const qtdRemovidos = listaAtiva.itens.length - itensMantidos.length;
 
-    const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: itensMantidos } : l);
-    salvarListas(novasListas);
+    const updatedLista = { ...listaAtiva, itens: itensMantidos };
+    await saveLista(updatedLista);
     setShowVerificarModal(false);
 
     alert(`Verificação concluída!\n\n• ${itensMantidos.length} pacote(s) VÁLIDO(S) mantidos na lista.\n• ${qtdRemovidos} pacote(s) EM ROTA removidos da lista.`);
   };
 
   // Criar nova lista com dados reais (Data, Ciclo e Tipo de Lista)
-  const handleCriarLista = (e: React.FormEvent) => {
+  const handleCriarLista = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Formatar data para exibição (DD/MM/YYYY)
@@ -305,15 +283,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       itens: []
     };
 
-    const novasListas = [novaLista, ...listas];
-    salvarListas(novasListas);
+    await saveLista(novaLista);
     
-    setActiveListaId(novaLista.id);
+    navigate(`/listas/${novaLista.id}`);
     setShowModalNovaLista(false);
   };
 
   // Bipar ID na tela de coleta
-  const handleBip = (e: React.FormEvent) => {
+  const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bipInput.trim() || !listaAtiva) return;
 
@@ -387,15 +364,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       });
     }
 
-    const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: novosItens } : l);
-    salvarListas(novasListas);
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista);
 
     setBipInput('');
     inputRef.current?.focus();
   };
 
   // Alterar motivo do item selecionado na gaveta
-  const handleMudarMotivoItem = (novoMotivoEscolha: string) => {
+  const handleMudarMotivoItem = async (novoMotivoEscolha: string) => {
     if (!itemParaMudarMotivo || !listaAtiva) return;
 
     const novosItens = listaAtiva.itens.map(item => {
@@ -405,8 +382,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return item;
     });
 
-    const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: novosItens } : l);
-    salvarListas(novasListas);
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista);
 
     setItemParaMudarMotivo(null);
   };
@@ -462,7 +439,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   // Aplicar motivo em massa nos selecionados
-  const handleAplicarMotivoEmMassa = (novoMotivoEscolha: string) => {
+  const handleAplicarMotivoEmMassa = async (novoMotivoEscolha: string) => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
 
     const novosItens = listaAtiva.itens.map(item => {
@@ -472,26 +449,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return item;
     });
 
-    const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: novosItens } : l);
-    salvarListas(novasListas);
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista);
 
     setSelectedItemIds([]);
     setMudarMotivoMassaModal(false);
   };
 
   // Excluir selecionados em massa
-  const handleExcluirSelecionadosEmMassa = () => {
+  const handleExcluirSelecionadosEmMassa = async () => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
     if (window.confirm(`Confirma a exclusão de ${selectedItemIds.length} item(ns) selecionado(s)?`)) {
       const novosItens = listaAtiva.itens.filter(i => !selectedItemIds.includes(i.id));
-      const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: novosItens } : l);
-      salvarListas(novasListas);
+      const updatedLista = { ...listaAtiva, itens: novosItens };
+      await saveLista(updatedLista);
       setSelectedItemIds([]);
     }
   };
 
   // Adicionar lote na lista ativa
-  const handleAdicionarLote = (e: React.FormEvent) => {
+  const handleAdicionarLote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loteText.trim() || !listaAtiva) return;
 
@@ -528,33 +505,34 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
 
     const novosItens = Array.from(novosItensMap.values());
-    const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: novosItens } : l);
-    salvarListas(novasListas);
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista);
 
     setLoteText('');
     setShowModalLote(false);
   };
 
-  const handleExcluirLista = (listaId: string) => {
-    if (window.confirm("Deseja realmente excluir esta lista de coleta?")) {
-      const novasListas = listas.filter(l => l.id !== listaId);
-      salvarListas(novasListas);
-      if (activeListaId === listaId) {
-        setActiveListaId(null);
-      }
+  const handleExcluirLista = async (listaId: string) => {
+    await deleteListaFirestore(listaId);
+    if (activeListaId === listaId) {
+      navigate('/listas');
+    }
+    setListaParaExcluir(null);
+  };
+
+  const handleFinalizarLista = async (listaId: string) => {
+    const lista = listas.find(l => l.id === listaId);
+    if (lista) {
+      const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
+      await saveLista(updatedLista);
     }
   };
 
-  const handleFinalizarLista = (listaId: string) => {
-    const novasListas = listas.map(l => l.id === listaId ? { ...l, status: 'finalizada' as const } : l);
-    salvarListas(novasListas);
-  };
-
-  const handleRemoverItem = (itemId: string) => {
+  const handleRemoverItem = async (itemId: string) => {
     if (!listaAtiva) return;
     const novosItens = listaAtiva.itens.filter(i => i.id !== itemId);
-    const novasListas = listas.map(l => l.id === listaAtiva.id ? { ...l, itens: novosItens } : l);
-    salvarListas(novasListas);
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista);
   };
 
   const handleCopy = (id: string) => {
@@ -758,7 +736,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
-                            onClick={() => setActiveListaId(lista.id)}
+                            onClick={() => navigate(`/listas/${lista.id}`)}
                             className="bg-[#3483FA] hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
                           >
                             <Barcode className="w-4 h-4" />
@@ -772,7 +750,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             <Download className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => handleExcluirLista(lista.id)}
+                            onClick={() => setListaParaExcluir(lista)}
                             className="p-1.5 hover:bg-red-50 text-red-600 rounded-lg transition-colors border border-red-200 cursor-pointer"
                             title="Excluir Lista"
                           >
@@ -976,6 +954,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       animate={{ opacity: 1, scale: 1 }}
       className="w-full space-y-4 pb-12"
     >
+      {/* Botão de Voltar para Listas */}
+      <div className="flex items-center gap-3 mb-2">
+        <button
+          onClick={() => navigate('/listas')}
+          className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm cursor-pointer"
+        >
+          <ArrowLeft className="w-4 h-4 text-[#3483FA]" />
+          Voltar para Listas
+        </button>
+        <div className="h-4 w-px bg-gray-300 mx-1"></div>
+        <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+          {listaAtiva?.nome || 'Coleta em Andamento'}
+        </span>
+      </div>
+
       {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
         
@@ -988,20 +981,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <h3 className="font-bold text-base text-[#333333]">Lista Completa de IDs</h3>
-                  <div className="flex items-center gap-1.5">
-                    <span className="bg-[#3483FA]/10 text-[#3483FA] px-2.5 py-0.5 rounded-full text-xs font-extrabold font-mono">
-                      {totalColetados} Coletados
-                    </span>
-                    {selectedItemIds.length > 0 && (
-                      <button
-                        onClick={() => setSelectedItemIds([])}
-                        className="flex items-center gap-1 px-2 py-0.5 bg-red-50 text-red-600 border border-red-100 rounded-full text-[10px] font-black uppercase hover:bg-red-100 transition-colors animate-in zoom-in cursor-pointer"
-                      >
-                        <X className="w-3 h-3" />
-                        Desmarcar ({selectedItemIds.length})
-                      </button>
-                    )}
-                  </div>
                 </div>
 
                 <div className="relative">
@@ -1125,14 +1104,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <tbody className="divide-y divide-gray-300 font-sans">
                     {filteredItems.map((item, idx) => {
                       const isSelected = selectedItemIds.includes(item.id);
+                      const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
                       return (
+                        <React.Fragment key={`frag-${item.id}-${idx}`}>
                         <tr 
-                          key={`item-${item.id}-${idx}`} 
                           className={`transition-all border-b border-gray-300 group ${
                             isSelected 
                               ? 'bg-blue-50/90 font-bold' 
                               : 'bg-white hover:bg-gray-50'
-                          }`}
+                          } ${isEditingMotivo ? 'bg-blue-50/40' : ''}`}
                         >
                           <td className="py-3 px-3 text-center w-12 border-r border-gray-300">
                             <input
@@ -1202,6 +1182,70 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </div>
                           </td>
                         </tr>
+                        {isEditingMotivo && (
+                          <tr className="bg-blue-50/30 border-b border-gray-300 shadow-inner">
+                            <td colSpan={7} className="p-0">
+                              <div className="px-6 py-4 border-l-4 border-[#3483FA]">
+                                <div className="flex flex-col xl:flex-row gap-6 items-start xl:items-center justify-between">
+                                  <div className="flex-1 space-y-2 w-full max-w-md">
+                                    <label className="text-xs font-black text-[#3483FA] uppercase tracking-widest flex items-center gap-2">
+                                      <Edit2 className="w-4 h-4" /> Editando Motivo: {item.codigo}
+                                    </label>
+                                    <div className="flex gap-2 w-full">
+                                      <input
+                                        type="text"
+                                        placeholder="Escreva o motivo manualmente..."
+                                        value={itemParaMudarMotivo.motivo}
+                                        onChange={(e) => setItemParaMudarMotivo({ ...itemParaMudarMotivo, motivo: e.target.value })}
+                                        className="flex-1 bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-blue-100 transition-all"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleMudarMotivoItem(itemParaMudarMotivo.motivo)}
+                                        className="px-5 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-lg text-sm font-black transition-colors active:scale-95 shadow-sm cursor-pointer"
+                                      >
+                                        Salvar
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setItemParaMudarMotivo(null)}
+                                        className="px-3 py-2 bg-white hover:bg-gray-100 border border-gray-300 text-gray-500 rounded-lg text-sm font-black transition-colors active:scale-95 cursor-pointer"
+                                        title="Cancelar"
+                                      >
+                                        <X className="w-5 h-5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="flex-1 w-full xl:border-l xl:border-gray-200 xl:pl-6">
+                                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest mb-2 block">
+                                      Sugestões Rápidas
+                                    </label>
+                                    <div className="flex flex-wrap gap-2">
+                                      {MOTIVOS_DISPONIVEIS.map((m) => {
+                                        const isSelectedM = itemParaMudarMotivo.motivo === m;
+                                        return (
+                                          <button
+                                            key={m}
+                                            onClick={() => handleMudarMotivoItem(m)}
+                                            className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm hover:shadow active:scale-95 cursor-pointer ${
+                                              isSelectedM 
+                                                ? 'bg-[#3483FA] text-white border-[#3483FA]' 
+                                                : 'bg-white hover:bg-gray-50 text-gray-700 border-gray-300'
+                                            }`}
+                                          >
+                                            {m}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -1340,25 +1384,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </button>
               </div>
             </div>
-
-            {/* Contagem por Motivos Presentes */}
-            <div className="pt-3 border-t border-gray-100 space-y-2">
-              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Quantidades por Motivo</h4>
-              {motivosPresentes.length > 0 ? (
-                <div className="space-y-1.5 text-xs">
-                  {motivosPresentes.map(mKey => (
-                    <div key={mKey} className="flex justify-between items-center bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
-                      <span className="text-gray-700 font-semibold">{mKey}</span>
-                      <span className="font-mono font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded border border-amber-200">
-                        {contagemMotivos[mKey] || 0}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-gray-400 italic">Nenhum motivo registrado ainda.</p>
-              )}
-            </div>
           </motion.div>
 
           {/* Painel 2: Quem Está Registrado no Sistema e Online na Tela */}
@@ -1412,160 +1437,99 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
       </div>
 
-      {/* GAVETA / MODAL DE ALTERAÇÃO DE MOTIVO DO ID */}
-      {itemParaMudarMotivo && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-100">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
-              <div>
-                <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
-                  <Edit2 className="w-5 h-5 text-[#3483FA]" />
-                  Alterar Motivo do Pacote
-                </h3>
-                <p className="text-xs font-mono font-bold text-[#3483FA] mt-0.5">
-                  ID: {itemParaMudarMotivo.codigo}
-                </p>
-              </div>
-              <button onClick={() => setItemParaMudarMotivo(null)} className="text-gray-400 hover:text-black cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* GAVETA DE ALTERAÇÃO DE MOTIVO DO ID - Movido para renderização inline na tabela */}
 
-            <div className="mb-4 space-y-1">
-              <label className="block text-xs font-bold text-gray-700">Digite um Motivo Manual:</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Escreva o motivo manualmente..."
-                  value={itemParaMudarMotivo.motivo}
-                  onChange={(e) => setItemParaMudarMotivo({ ...itemParaMudarMotivo, motivo: e.target.value })}
-                  className="flex-1 bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-[#3483FA]"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleMudarMotivoItem(itemParaMudarMotivo.motivo)}
-                  className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold cursor-pointer"
+      {/* GAVETA DE ALTERAÇÃO DE MOTIVO EM MASSA */}
+      <AnimatePresence>
+        {mudarMotivoMassaModal && selectedItemIds.length > 0 && (
+          <div className="fixed inset-0 z-[60] flex justify-end overflow-hidden">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMudarMotivoMassaModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-sm bg-white shadow-2xl h-full flex flex-col"
+            >
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-blue-50/50">
+                <div className="flex items-center gap-2 text-[#3483FA]">
+                  <Layers className="w-6 h-6" />
+                  <h3 className="text-lg font-black uppercase tracking-tight">Motivo em Massa</h3>
+                </div>
+                <button 
+                  onClick={() => setMudarMotivoMassaModal(false)}
+                  className="p-2 hover:bg-blue-100 rounded-full text-blue-400 transition-colors cursor-pointer"
                 >
-                  Salvar
+                  <X className="w-6 h-6" />
                 </button>
               </div>
-            </div>
 
-            <p className="text-xs text-gray-500 mb-2 font-bold">
-              Ou escolha um dos motivos sugeridos:
-            </p>
+              <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-5 space-y-3">
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-black text-gray-500 tracking-wider">Itens Selecionados:</p>
+                    <p className="text-base font-black text-[#3483FA]">{selectedItemIds.length} ID(s)</p>
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-1 gap-2 max-h-80 overflow-y-auto pr-1">
-              {MOTIVOS_DISPONIVEIS.map((m) => {
-                const isSelected = itemParaMudarMotivo.motivo === m;
-                return (
-                  <button
-                    key={m}
-                    onClick={() => handleMudarMotivoItem(m)}
-                    className={`w-full text-left p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                      isSelected 
-                        ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-sm' 
-                        : 'bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200'
-                    }`}
-                  >
-                    <span>{m}</span>
-                    {isSelected ? <Check className="w-4 h-4 text-white" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                  </button>
-                );
-              })}
-            </div>
+                <div className="space-y-3">
+                  <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">Motivo Manual</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Escreva o motivo manual..."
+                      value={motivoEmMassaEscolha}
+                      onChange={(e) => setMotivoEmMassaEscolha(e.target.value)}
+                      className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-blue-100 transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAplicarMotivoEmMassa(motivoEmMassaEscolha)}
+                      className="px-5 py-3 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-sm font-black cursor-pointer shadow-md shadow-blue-200 transition-all active:scale-[0.98]"
+                    >
+                      Aplicar
+                    </button>
+                  </div>
+                </div>
 
-            <div className="mt-5 pt-3 border-t border-gray-100 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setItemParaMudarMotivo(null)}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
-              >
-                Fechar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DE ALTERAÇÃO DE MOTIVO EM MASSA */}
-      {mudarMotivoMassaModal && selectedItemIds.length > 0 && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-100">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
-              <div>
-                <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-[#3483FA]" />
-                  Setar Motivo em Massa
-                </h3>
-                <p className="text-xs font-mono font-bold text-[#3483FA] mt-0.5">
-                  {selectedItemIds.length} ID(s) Selecionado(s)
-                </p>
+                <div className="space-y-3">
+                  <p className="text-xs font-black text-gray-400 uppercase tracking-widest">
+                    Sugestões Rápidas
+                  </p>
+                  <div className="grid grid-cols-1 gap-2">
+                    {MOTIVOS_DISPONIVEIS.map((m) => {
+                      const isSelected = motivoEmMassaEscolha === m;
+                      return (
+                        <button
+                          key={m}
+                          onClick={() => {
+                            setMotivoEmMassaEscolha(m);
+                            handleAplicarMotivoEmMassa(m);
+                          }}
+                          className={`w-full text-left p-4 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                            isSelected 
+                              ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-sm' 
+                              : 'bg-white hover:bg-gray-50 text-gray-700 border-gray-200'
+                          }`}
+                        >
+                          <span>{m}</span>
+                          {isSelected ? <Check className="w-5 h-5 text-white" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-              <button onClick={() => setMudarMotivoMassaModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="mb-4 space-y-1">
-              <label className="block text-xs font-bold text-gray-700">Motivo Manual para os {selectedItemIds.length} selecionados:</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Escreva o motivo manual em massa..."
-                  value={motivoEmMassaEscolha}
-                  onChange={(e) => setMotivoEmMassaEscolha(e.target.value)}
-                  className="flex-1 bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-[#3483FA]"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleAplicarMotivoEmMassa(motivoEmMassaEscolha)}
-                  className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold cursor-pointer"
-                >
-                  Aplicar
-                </button>
-              </div>
-            </div>
-
-            <p className="text-xs text-gray-500 mb-2 font-bold">
-              Ou selecione uma das sugestões abaixo:
-            </p>
-
-            <div className="grid grid-cols-1 gap-2 max-h-80 overflow-y-auto pr-1">
-              {MOTIVOS_DISPONIVEIS.map((m) => {
-                const isSelected = motivoEmMassaEscolha === m;
-                return (
-                  <button
-                    key={m}
-                    onClick={() => {
-                      setMotivoEmMassaEscolha(m);
-                      handleAplicarMotivoEmMassa(m);
-                    }}
-                    className={`w-full text-left p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                      isSelected 
-                        ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-sm' 
-                        : 'bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200'
-                    }`}
-                  >
-                    <span>{m}</span>
-                    {isSelected ? <Check className="w-4 h-4 text-white" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-5 pt-3 border-t border-gray-100 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setMudarMotivoMassaModal(false)}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
-              >
-                Cancelar
-              </button>
-            </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
 
       {/* MODAL DE VERIFICAÇÃO DE IDS DO CICLO (VERIFICAR) */}
       {showVerificarModal && listaAtiva && (
@@ -1842,6 +1806,92 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </div>
         </div>
       )}
+
+      {/* GAVETA DE CONFIRMAÇÃO DE EXCLUSÃO DE LISTA */}
+      <AnimatePresence>
+        {listaParaExcluir && (
+          <div className="fixed inset-0 z-[60] flex justify-end overflow-hidden">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setListaParaExcluir(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-sm bg-white shadow-2xl h-full flex flex-col"
+            >
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-red-50/50">
+                <div className="flex items-center gap-2 text-red-600">
+                  <AlertCircle className="w-6 h-6" />
+                  <h3 className="text-lg font-black uppercase tracking-tight">Confirmar Exclusão</h3>
+                </div>
+                <button 
+                  onClick={() => setListaParaExcluir(null)}
+                  className="p-2 hover:bg-red-100 rounded-full text-red-400 transition-colors cursor-pointer"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+                <div className="bg-red-50 border border-red-100 rounded-2xl p-5 space-y-3">
+                  <p className="text-sm font-bold text-red-900 leading-relaxed">
+                    Você está prestes a excluir permanentemente esta lista de coleta. Esta ação não pode ser desfeita.
+                  </p>
+                  <div className="pt-3 border-t border-red-200">
+                    <p className="text-[10px] uppercase font-black text-red-500 tracking-wider">Lista Selecionada:</p>
+                    <p className="text-base font-black text-red-700">{listaParaExcluir.nome}</p>
+                    <p className="text-xs font-bold text-red-600/70">{listaParaExcluir.data} • {listaParaExcluir.itens.length} itens</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">O que acontece agora?</h4>
+                  <ul className="space-y-3">
+                    <li className="flex gap-3 items-start">
+                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
+                        <XCircle className="w-3 h-3 text-gray-500" />
+                      </div>
+                      <p className="text-xs font-bold text-gray-600 leading-snug">
+                        Todos os bips registrados nesta lista serão apagados do sistema.
+                      </p>
+                    </li>
+                    <li className="flex gap-3 items-start">
+                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
+                        <Users className="w-3 h-3 text-gray-500" />
+                      </div>
+                      <p className="text-xs font-bold text-gray-600 leading-snug">
+                        Outros operadores deixarão de ver esta lista imediatamente.
+                      </p>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="p-6 bg-gray-50 border-t border-gray-100 space-y-3">
+                <button
+                  onClick={() => handleExcluirLista(listaParaExcluir.id)}
+                  className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer"
+                >
+                  <Trash2 className="w-5 h-5" />
+                  CONFIRMAR EXCLUSÃO
+                </button>
+                <button
+                  onClick={() => setListaParaExcluir(null)}
+                  className="w-full py-4 bg-white border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-2xl font-black text-sm transition-all cursor-pointer"
+                >
+                  CANCELAR
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };

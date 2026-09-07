@@ -11,6 +11,8 @@ import {
   writeBatch,
   serverTimestamp,
   onSnapshot,
+  persistentLocalCache,
+  persistentMultipleTabManager
 } from 'firebase/firestore';
 
 const firebaseConfig = {
@@ -27,7 +29,7 @@ const firebaseConfig = {
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
 });
 
 const REFUGO_COLLECTION = 'refugo';
@@ -39,6 +41,8 @@ const LOCAL_STORAGE_REFUGO_SCANS_KEY = 'refugo_scanned_items';
 const COLETOR_COLLECTION = 'coletor';
 const MAIN_DOC_ID = 'current_csv';
 const LOCAL_STORAGE_KEY = 'coletor_current_csv_data';
+
+const COLETA_LISTAS_COLLECTION = 'coleta_listas';
 
 export interface RefugoData {
   rawText: string;
@@ -401,4 +405,63 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
   });
 
   return unsubscribe;
+}
+
+/**
+ * Persistence for Coleta Listas
+ */
+import { ColetaLista } from '../types';
+
+export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {
+  const colRef = collection(db, COLETA_LISTAS_COLLECTION);
+  
+  return onSnapshot(colRef, (snap) => {
+    const listas: ColetaLista[] = [];
+    snap.forEach((doc) => {
+      listas.push({ ...doc.data(), id: doc.id } as ColetaLista);
+    });
+    // Sort by data or createdAt if needed
+    callback(listas.sort((a, b) => b.data.localeCompare(a.data)));
+  }, (error) => {
+    console.error('Erro ao escutar listas de coleta:', error);
+  });
+}
+
+export async function saveLista(lista: ColetaLista): Promise<boolean> {
+  try {
+    const docRef = doc(db, COLETA_LISTAS_COLLECTION, lista.id);
+    await setDoc(docRef, {
+      ...lista,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    return true;
+  } catch (error) {
+    console.error('Erro ao salvar lista de coleta:', error);
+    return false;
+  }
+}
+
+export async function deleteLista(listaId: string): Promise<boolean> {
+  try {
+    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    await deleteDoc(docRef);
+    return true;
+  } catch (error) {
+    console.error('Erro ao excluir lista de coleta:', error);
+    return false;
+  }
+}
+
+export async function getListaById(listaId: string): Promise<ColetaLista | null> {
+  try {
+    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return { ...snap.data(), id: snap.id } as ColetaLista;
+    }
+    return null;
+  } catch (error) {
+    console.error('Erro ao buscar lista por ID:', error);
+    return null;
+  }
 }

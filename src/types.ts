@@ -39,4 +39,27 @@ export interface RefugoRow {
   rawFields: Record<string, string>;
 }
 
+export interface ColetaItem {
+  id: string;
+  codigo: string;
+  rota: string;
+  saida: string;
+  motivo: string;
+  scannedAt: string;
+  responsavel?: string;
+}
+
+export interface ColetaLista {
+  id: string;
+  nome: string;
+  tipo?: 'comum' | 'grupos';
+  rota: string;
+  data: string;
+  responsavel: string;
+  status: 'em_andamento' | 'finalizada';
+  saidaPadrao: string;
+  motivoPadrao: string;
+  itens: ColetaItem[];
+}
+
 export type ActiveTab = 'tools' | 'lookup' | 'remove' | 'report' | 'upload' | 'refugo';
