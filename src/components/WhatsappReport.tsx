@@ -16,14 +16,22 @@ import {
   Sliders,
   CheckCircle2,
 } from 'lucide-react';
-import { CsvRow } from '../types';
+import { CsvRow, ColetaLista } from '../types';
 import { cleanDigits } from '../utils/csvParser';
+import { listenToListas } from '../lib/firebase';
 
 interface WhatsappReportProps {
   rows: CsvRow[];
 }
 
 export function WhatsappReport({ rows }: WhatsappReportProps) {
+  const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [selectedListaId, setSelectedListaId] = useState<string>('');
+
+  useEffect(() => {
+    return listenToListas(setListas);
+  }, []);
+
   const [inputText, setInputText] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [useAllBase, setUseAllBase] = useState<boolean>(false);
@@ -75,7 +83,31 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
   }, [inputText]);
 
   // Match IDs with the loaded CSV base
+  const selectedLista = useMemo(() => listas.find(l => l.id === selectedListaId), [listas, selectedListaId]);
+
   const { matchedRows, notFoundIds, detectedSaidaList, motivosCount } = useMemo(() => {
+    if (selectedLista) {
+      const motivosMap = new Map<string, number>();
+      const saidasSet = new Set<string>();
+
+      selectedLista.itens.forEach((i) => {
+        const mot = (i.motivo || 'Sem Motivo').trim();
+        motivosMap.set(mot, (motivosMap.get(mot) || 0) + 1);
+
+        const sai = (i.saida || selectedLista.saidaPadrao || '').trim();
+        if (sai) saidasSet.add(sai);
+      });
+
+      return {
+        matchedRows: selectedLista.itens as unknown as CsvRow[], // Just for length counting
+        notFoundIds: [],
+        detectedSaidaList: Array.from(saidasSet),
+        motivosCount: Array.from(motivosMap.entries())
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count),
+      };
+    }
+
     if (useAllBase) {
       const motivosMap = new Map<string, number>();
       const saidasSet = new Set<string>();
@@ -168,7 +200,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count),
     };
-  }, [rows, parsedIds, useAllBase]);
+  }, [rows, parsedIds, useAllBase, selectedLista]);
 
   // Set default cycle based on detected saidas if not manually modified
   useEffect(() => {
@@ -308,72 +340,112 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
               </div>
             </div>
 
-            {/* Mode selection buttons */}
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setUseAllBase(false)}
-                className={`py-1.5 px-2 rounded border font-semibold flex items-center justify-center gap-1.5 transition-colors ${
-                  !useAllBase
-                    ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-2xs'
-                    : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <span>Colar Lista Específica</span>
-                {parsedIds.length > 0 && !useAllBase && (
-                  <span className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
-                    {parsedIds.length}
-                  </span>
-                )}
-              </button>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
+                  Calcular a partir de uma Lista do Sistema
+                </label>
+                <select
+                  value={selectedListaId}
+                  onChange={(e) => {
+                    setSelectedListaId(e.target.value);
+                    if (e.target.value) {
+                      setUseAllBase(false);
+                      setInputText('');
+                    }
+                  }}
+                  className="w-full bg-white border border-gray-300 rounded p-2 text-xs font-bold text-gray-900 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
+                >
+                  <option value="">-- Nenhuma (Usar Colar IDs ou Base CSV) --</option>
+                  {listas.map((lista) => (
+                    <option key={lista.id} value={lista.id}>
+                      {lista.nome} (Criada em: {lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setUseAllBase(true);
-                  setInputText('');
-                }}
-                className={`py-1.5 px-2 rounded border font-semibold flex items-center justify-center gap-1.5 transition-colors ${
-                  useAllBase
-                    ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-2xs'
-                    : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <span>Toda a Base CSV</span>
-                <span className="bg-gray-700 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
-                  {rows.length}
-                </span>
-              </button>
+              {!selectedListaId && (
+                <>
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setUseAllBase(false)}
+                      className={`py-1.5 px-2 rounded border font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                        !useAllBase
+                          ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-2xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span>Colar Lista Específica</span>
+                      {parsedIds.length > 0 && !useAllBase && (
+                        <span className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                          {parsedIds.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseAllBase(true);
+                        setInputText('');
+                      }}
+                      className={`py-1.5 px-2 rounded border font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                        useAllBase
+                          ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-2xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span>Toda a Base CSV</span>
+                      <span className="bg-gray-700 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                        {rows.length}
+                      </span>
+                    </button>
+                  </div>
+
+                  {!useAllBase ? (
+                    <div className="relative">
+                      <textarea
+                        rows={8}
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
+                        placeholder={`Cole aqui os IDs a serem reportados (um por linha ou separados por vírgula)...&#10;Exemplo:&#10;47712645205&#10;47712645206&#10;47712645207`}
+                        className="w-full bg-white border border-gray-300 rounded p-2.5 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 resize-y"
+                      />
+                    </div>
+                  ) : (
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
+                      <p className="font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                        Utilizando todos os {rows.length} registros da base CSV carregada.
+                      </p>
+                      <p className="text-[11px] text-emerald-800">
+                        Os totais e contagens de motivos abaixo refletem a base completa atualizada.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {selectedListaId && selectedLista && (
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                    Utilizando os {selectedLista.itens.length} registros da lista selecionada.
+                  </p>
+                  <p className="text-[11px] text-emerald-800">
+                    Calculando motivos e saídas diretamente dos dados coletados na lista.
+                  </p>
+                </div>
+              )}
             </div>
-
-            {!useAllBase ? (
-              <div className="relative">
-                <textarea
-                  rows={8}
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder={`Cole aqui os IDs a serem reportados (um por linha ou separados por vírgula)...&#10;Exemplo:&#10;47712645205&#10;47712645206&#10;47712645207`}
-                  className="w-full bg-white border border-gray-300 rounded p-2.5 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 resize-y"
-                />
-              </div>
-            ) : (
-              <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
-                <p className="font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                  Utilizando todos os {rows.length} registros da base CSV carregada.
-                </p>
-                <p className="text-[11px] text-emerald-800">
-                  Os totais e contagens de motivos abaixo refletem a base completa atualizada.
-                </p>
-              </div>
-            )}
 
             {/* Quick Match Statistics Cards */}
             <div className="grid grid-cols-3 gap-2 pt-1 text-center font-mono">
               <div className="bg-gray-50 border border-gray-200 rounded p-2">
                 <span className="block text-[10px] text-gray-500 font-sans font-bold uppercase">Informados</span>
                 <span className="text-sm font-black text-gray-900">
-                  {useAllBase ? rows.length : parsedIds.length}
+                  {selectedLista ? selectedLista.itens.length : (useAllBase ? rows.length : parsedIds.length)}
                 </span>
               </div>
 

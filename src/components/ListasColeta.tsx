@@ -487,22 +487,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
   };
 
-  const handleCopiarIdsValidados = () => {
-    if (!listaAtiva) return;
-    const itensValidados = listaAtiva.itens.filter(i => i.validado);
-    if (itensValidados.length === 0) {
-      alert('Nenhum item validado encontrado nesta lista.');
-      return;
-    }
-    const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
-    const texto = itensValidados.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
-    navigator.clipboard.writeText(texto).then(() => {
-      alert(`${itensValidados.length} IDs validados copiados com sucesso!`);
-    }).catch(err => {
-      console.error('Erro ao copiar:', err);
-    });
-  };
-
   const handleBaixarListaSoIds = () => {
     if (!listaAtiva) return;
     exportarApenasIdsCSV(listaAtiva, listaAtiva.itens, 'IDs');
@@ -1713,19 +1697,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           {listaAtiva?.nome || 'Coleta em Andamento'}
         </span>
         {listaAtiva?.status === 'finalizada' ? (
-          <div className="flex items-center gap-2">
-            <span className="bg-emerald-100 text-emerald-800 text-[11px] font-black px-2.5 py-1 rounded-lg border border-emerald-300 uppercase">
-              Finalizada
-            </span>
-            <button
-              onClick={() => handleReabrirLista(listaAtiva.id)}
-              className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold shadow-sm transition-colors cursor-pointer"
-              title="Reabrir Lista de Coleta"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reabrir Lista
-            </button>
-          </div>
+          <span className="bg-emerald-100 text-emerald-800 text-[11px] font-black px-2.5 py-1 rounded-lg border border-emerald-300 uppercase">
+            Finalizada
+          </span>
         ) : (
           <span className="bg-blue-50 text-[#3483FA] text-[11px] font-black px-2.5 py-1 rounded-lg border border-blue-200 uppercase">
             Em Andamento
@@ -1750,7 +1724,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           {/* PAINEL DE GRUPOS (Se tipo = grupos) */}
           {listaAtiva.tipo === 'grupos' && (
             <div className="bg-white border border-purple-200 rounded-xl p-5 shadow-sm space-y-4 relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-purple-50 rounded-bl-full -z-10"></div>
+              <div className="absolute top-0 right-0 h-32 bg-purple-50 rounded-bl-full -z-10"></div>
               
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -1970,15 +1944,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       </button>
 
                       {/* COPIAR LISTA SÓ IDS VALIDADOS */}
-                      <button
-                        onClick={handleCopiarIdsValidados}
-                        className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-                        title="Copiar para a área de transferência apenas os IDs validados (um por linha)"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        Copiar IDs Validados
-                      </button>
-
                       {/* BAIXAR LISTA (SÓ IDS) */}
                       <button
                         onClick={handleBaixarListaSoIds}
@@ -2123,10 +2088,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
             {filteredItems.length > 0 ? (
               <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
-                <table className="w-full text-xs text-gray-700 border-collapse">
+                <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse">
                   <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                     <tr>
-                      <th className="py-2 px-2 text-center w-12 bg-gray-100 border-b border-r border-gray-200">
+                      <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
                         <input
                           type="checkbox"
                           checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))}
@@ -2135,18 +2100,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           title="Selecionar/Desmarcar Todos os visíveis"
                         />
                       </th>
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-12 bg-gray-100">#</th>
-                      <th className="py-2 px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">#</th>
+                      <th className="py-1 px-1 sm:px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
                       {listaAtiva.tipo === 'grupos' && (
-                        <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-28 bg-gray-100 text-gray-700">Grupo</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100 text-gray-700">Grupo</th>
                       )}
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-28 bg-gray-100">Status</th>
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-36 bg-gray-100">Bipado por</th>
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-24 bg-gray-100">Rota</th>
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-20 bg-gray-100">Saída</th>
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-48 bg-gray-100">Motivo</th>
-                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-40 bg-gray-100">Data / Hora</th>
-                      <th className="py-2 px-2 text-center border-b border-gray-200 w-24 bg-gray-100">Ações</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Status</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Bipado por</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Rota</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Saída</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Motivo</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Data / Hora</th>
+                      <th className="py-1 px-1 sm:px-2 text-center border-b border-gray-200 bg-gray-100">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 font-sans">
@@ -2164,7 +2129,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                               : 'bg-white hover:bg-gray-50'
                           } ${isEditingMotivo ? 'bg-blue-50/40' : ''}`}
                         >
-                          <td className="py-1 px-2 text-center w-12 border-r border-gray-200">
+                          <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
                             <input
                               type="checkbox"
                               checked={isSelected}
@@ -2172,10 +2137,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                               className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                             />
                           </td>
-                          <td className="py-1 px-2 text-center text-gray-500 font-bold w-12 border-r border-gray-200">{filteredItems.length - idx}</td>
+                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
                             <div className="flex items-center gap-1.5 font-mono text-xs">
@@ -2188,7 +2153,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {listaAtiva.tipo === 'grupos' && (
                             <td 
                               onClick={() => setItemParaMudarMotivo(item)}
-                              className="py-1 px-2 text-center border-r border-gray-200 w-28 cursor-pointer"
+                              className="py-1 px-1 sm:px-2 text-center border-r border-gray-200 cursor-pointer"
                             >
                               {(() => {
                                 const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
@@ -2204,7 +2169,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           )}
 
                           {/* COLUNA DE STATUS DE VALIDAÇÃO - TEM COR */}
-                          <td className="py-1 px-2 text-center border-r border-gray-200 w-28">
+                          <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
                             <button
                               type="button"
                               onClick={() => handleToggleItemValidado(item.id)}
@@ -2231,7 +2196,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA BIPADO POR - NEUTRA SEM COR */}
                           <td 
-                            className="py-1 px-2 text-center border-r border-gray-200 w-36"
+                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
                           >
                             <span 
                               className="text-gray-700 font-medium text-xs truncate max-w-[120px] inline-flex items-center justify-center gap-1"
@@ -2245,7 +2210,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {/* COLUNA ROTA - BASEADA NO ARQUIVO DE REFUGO ATUAL, SÓ TEM COR SE TIVER ROTA */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-2 text-center cursor-pointer w-24 border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-center cursor-pointer border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
                             {hasRota ? (
@@ -2262,7 +2227,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {/* COLUNA SAÍDA - NEUTRA SEM COR */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-2 text-center cursor-pointer w-20 border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-center cursor-pointer border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
                             <span className="text-gray-600 font-semibold text-xs uppercase">
@@ -2273,7 +2238,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {/* COLUNA MOTIVO - TEM COR */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-2 text-center cursor-pointer w-48 border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-center cursor-pointer border-r border-gray-200"
                             title="Clique para abrir a gaveta e alterar o motivo"
                           >
                             <div className={`${getMotivoStyle(item.motivo)} border px-2 py-0.5 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs group-hover:shadow mx-auto uppercase tracking-wide rounded`}>
@@ -2283,10 +2248,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           </td>
 
                           {/* COLUNA DATA / HORA - NEUTRA */}
-                          <td className="py-1 px-2 text-center text-gray-500 text-[11px] w-40 border-r border-gray-200">
+                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 text-[11px] border-r border-gray-200">
                             {item.scannedAt}
                           </td>
-                          <td className="py-1 px-2 text-center w-24">
+                          <td className="py-1 px-1 sm:px-2 text-center">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={() => handleCopy(item.codigo)}
@@ -2470,7 +2435,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <PieChart className="w-5 h-5 text-[#3483FA]" />
-                <h3 className="font-bold text-sm text-[#333333]">Métricas de Coleta</h3>
+                <h3 className="font-bold text-sm text-[#333333]">
+                  {modoIndividual ? `Métricas - Modo Individual (${operanteNome})` : 'Métricas de Coleta'}
+                </h3>
               </div>
             </div>
 
@@ -2478,12 +2445,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 p-5 rounded-2xl text-center space-y-3 shadow-inner">
               <div>
                 <p className="text-4xl font-black text-[#3483FA] tracking-tighter">{totalColetados}</p>
-                <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-1">IDs Coletados</p>
+                <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-1">
+                  {modoIndividual ? 'IDs Bipados na Sessão Individual' : 'IDs Coletados'}
+                </p>
               </div>
 
               {/* Botões de Ação Direta nas Métricas */}
-              <div className="grid grid-cols-2 gap-3 pt-4 border-t border-blue-200/50">
-                {listaAtiva.status === 'em_andamento' && (
+              <div className={`grid ${listaAtiva.status === 'em_andamento' && !modoIndividual ? 'grid-cols-2' : 'grid-cols-1 max-w-xs mx-auto'} gap-3 pt-4 border-t border-blue-200/50`}>
+                {listaAtiva.status === 'em_andamento' && !modoIndividual && (
                   <button
                     type="button"
                     onClick={() => setListaParaFinalizar(listaAtiva)}
@@ -2499,7 +2468,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   className="w-full py-2.5 bg-[#3483FA] hover:bg-blue-600 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                 >
                   <CheckSquare className="w-4 h-4" />
-                  Verificar
+                  {modoIndividual ? 'Verificar Lista Individual' : 'Verificar'}
                 </button>
               </div>
             </div>
@@ -2623,15 +2592,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     Opcional: Bipar ID para conferência rápida
                   </label>
                   <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleCopiarIdsVerificacao}
-                      className="text-[10px] bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Copiar todos os IDs pendentes para a área de transferência"
-                    >
-                      <Copy className="w-3 h-3" />
-                      Copiar IDs
-                    </button>
                     <button
                       type="button"
                       onClick={() => setShowVerificarLoteModal(true)}
