@@ -171,7 +171,7 @@ export function parseCsvText(rawText: string): { rows: CsvRow[]; groups: GroupSu
 }
 
 export function searchIdsInRows(inputQuery: string, rows: CsvRow[]): LookupMatch[] {
-  if (!inputQuery || !inputQuery.trim() || rows.length === 0) {
+  if (!inputQuery || !inputQuery.trim()) {
     return [];
   }
 
@@ -191,13 +191,13 @@ export function searchIdsInRows(inputQuery: string, rows: CsvRow[]): LookupMatch
     const cleanTerm = cleanDigits(term);
 
     // Exact match or clean digit match
-    const matchedRow = rows.find((r) => {
+    const matchedRow = rows && rows.length > 0 ? rows.find((r) => {
       if (r.id === term || r.originalId === term) return true;
       if (cleanTerm.length > 0 && r.cleanId === cleanTerm) return true;
       if (r.id.includes(term)) return true;
       if (r.concat && (r.concat === term || cleanDigits(r.concat) === cleanTerm)) return true;
       return false;
-    });
+    }) : undefined;
 
     if (matchedRow) {
       results.push({

@@ -881,7 +881,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const filteredDashboardListas = listas.filter(l => {
       if (!dashboardSearchTerm.trim()) return true;
       const term = dashboardSearchTerm.toLowerCase();
-      return l.nome.toLowerCase().includes(term) || l.rota.toLowerCase().includes(term) || l.responsavel.toLowerCase().includes(term);
+      return (
+        l.nome.toLowerCase().includes(term) || 
+        l.rota.toLowerCase().includes(term) || 
+        l.responsavel.toLowerCase().includes(term) ||
+        (l.saidaPadrao && l.saidaPadrao.toLowerCase().includes(term)) ||
+        (l.motivoPadrao && l.motivoPadrao.toLowerCase().includes(term)) ||
+        l.itens.some(i => 
+          i.codigo.toLowerCase().includes(term) || 
+          (i.motivo && i.motivo.toLowerCase().includes(term)) || 
+          (i.saida && i.saida.toLowerCase().includes(term))
+        )
+      );
     }).sort((a, b) => {
       const getPriority = (s: string) => {
         const u = (s || '').toUpperCase();
@@ -1278,6 +1289,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     return item.codigo.toLowerCase().includes(term) || 
            item.rota.toLowerCase().includes(term) || 
            item.motivo.toLowerCase().includes(term) || 
+           (item.saida && item.saida.toLowerCase().includes(term)) ||
+           (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
            nomeGrupo.includes(term);
   });
 

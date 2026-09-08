@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, Upload, Filter, ListPlus } from 'lucide-react';
 import { CsvRow, LookupMatch, ColetaLista, ColetaItem } from '../types';
-import { searchIdsInRows } from '../utils/csvParser';
+import { searchIdsInRows, cleanDigits } from '../utils/csvParser';
 import { listenToListas } from '../lib/firebase';
 
 interface IdLookupProps {
@@ -24,56 +24,135 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   }, []);
 
   const matches: LookupMatch[] = useMemo(() => {
-    const baseMatches = searchIdsInRows(inputText, rows);
-    
-    // Enrich with group info from active/existing lists if available
-    return baseMatches.map(match => {
-      // Create a shallow copy to avoid mutating the cached search results directly
-      const enrichedMatch = { ...match };
-      
-      let foundInAnyGroup = false;
-      let foundGroupName = '';
-      
+    if (!inputText || !inputText.trim()) return [];
+
+    const rawTerms = inputText
+      .split(/[\n\r,;\t\s]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+
+    const processedTerms = new Set<string>();
+    const results: LookupMatch[] = [];
+
+    for (const term of rawTerms) {
+      if (processedTerms.has(term)) continue;
+      processedTerms.add(term);
+
+      const cleanTerm = cleanDigits(term);
+
+      // 1. Procurar nas linhas da base carregada via CSV (se houver)
+      const matchedRow = rows && rows.length > 0 ? rows.find((r) => {
+        if (r.id === term || r.originalId === term) return true;
+        if (cleanTerm.length > 0 && r.cleanId === cleanTerm) return true;
+        if (r.id.includes(term)) return true;
+        if (r.concat && (r.concat === term || cleanDigits(r.concat) === cleanTerm)) return true;
+        return false;
+      }) : undefined;
+
+      // 2. Procurar em todas as listas de coleta (listas do Firestore)
+      let foundInLista: { item: ColetaItem; lista: ColetaLista; grupoNome?: string } | null = null;
+
       for (const lista of listas) {
-        if (lista.tipo === 'grupos' && lista.grupos) {
-          const itemInList = lista.itens.find(i => 
-            i.codigo === enrichedMatch.cleanSearchTerm || 
-            i.codigo === enrichedMatch.searchTerm
+        if (!lista.itens || lista.itens.length === 0) continue;
+
+        const item = lista.itens.find((i) => {
+          if (!i.codigo) return false;
+          const cleanCod = cleanDigits(i.codigo);
+          return (
+            i.codigo === term ||
+            (cleanTerm.length > 0 && cleanCod === cleanTerm) ||
+            i.codigo === cleanTerm ||
+            i.codigo.includes(term)
           );
-          
-          if (itemInList && itemInList.grupoId) {
-            const grupo = lista.grupos.find(g => g.id === itemInList.grupoId);
-            if (grupo) {
-              foundInAnyGroup = true;
-              foundGroupName = grupo.nome;
-              break;
-            }
+        });
+
+        if (item) {
+          let grupoNome = '';
+          if (item.grupoId && lista.grupos) {
+            const g = lista.grupos.find((grp) => grp.id === item.grupoId);
+            if (g) grupoNome = g.nome;
           }
+          foundInLista = { item, lista, grupoNome };
+          // Se o item já tem motivo e saída preenchidos, priorizar este
+          if (item.motivo && item.saida) break;
         }
       }
-      
-      if (foundInAnyGroup) {
-        if (!enrichedMatch.found) {
-          enrichedMatch.found = true;
-          enrichedMatch.row = {
-            id: enrichedMatch.cleanSearchTerm,
-            originalId: enrichedMatch.searchTerm,
-            cleanId: enrichedMatch.cleanSearchTerm,
-            group: foundGroupName,
-            rawFields: {},
-            rowIndex: -1
-          };
-        } else if (enrichedMatch.row) {
-          // If already found in CSV, overwrite or update the group
-          enrichedMatch.row = {
-            ...enrichedMatch.row,
-            group: foundGroupName
-          };
-        }
+
+      // Extrair dados da lista de coleta encontrada
+      const motivoLista = foundInLista?.item.motivo || foundInLista?.lista.motivoPadrao || '';
+      const saidaLista = foundInLista?.item.saida || foundInLista?.lista.saidaPadrao || '';
+      const grupoLista = foundInLista?.grupoNome || '';
+      const nomeLista = foundInLista?.lista.nome || '';
+      const bipadoPor = foundInLista?.item.responsavel || foundInLista?.lista.responsavel || '';
+      const horarioBip = foundInLista?.item.scannedAt || '';
+      const rotaLista = foundInLista?.item.rota || foundInLista?.lista.rota || '';
+
+      if (matchedRow) {
+        // Encontrado no CSV: priorizar motivo e saída da lista se houver
+        const enrichedRow: CsvRow = {
+          ...matchedRow,
+          motivo: motivoLista || matchedRow.motivo || '',
+          saida: saidaLista || matchedRow.saida || '',
+          group: grupoLista || matchedRow.group,
+          rawFields: {
+            ...matchedRow.rawFields,
+            ...(nomeLista ? { 'Lista de Coleta': nomeLista } : {}),
+            ...(motivoLista ? { 'Motivo da Lista': motivoLista } : {}),
+            ...(saidaLista ? { 'Saída da Lista': saidaLista } : {}),
+            ...(bipadoPor ? { 'Bipado por': bipadoPor } : {}),
+            ...(horarioBip ? { 'Horário do Bip': horarioBip } : {}),
+            ...(rotaLista ? { 'Rota': rotaLista } : {})
+          }
+        };
+
+        results.push({
+          searchTerm: term,
+          cleanSearchTerm: cleanTerm,
+          found: true,
+          row: enrichedRow,
+          matchedGroup: enrichedRow.group
+        });
+      } else if (foundInLista) {
+        // Não está no CSV base, mas foi bipado/está em uma lista de coleta
+        const listaRow: CsvRow = {
+          id: cleanTerm || term,
+          originalId: term,
+          cleanId: cleanTerm,
+          group: grupoLista || (foundInLista.lista.tipo === 'grupos' ? 'Multirotas' : foundInLista.lista.nome),
+          saida: saidaLista,
+          motivo: motivoLista,
+          concat: rotaLista,
+          rawFields: {
+            'Origem': 'Lista de Coleta',
+            'Lista de Coleta': nomeLista,
+            'Rota': rotaLista,
+            'Saída': saidaLista,
+            'Motivo': motivoLista,
+            'Bipado por': bipadoPor,
+            'Data / Hora': horarioBip,
+            'Tipo de Lista': foundInLista.lista.tipo === 'grupos' ? 'Com Grupos' : 'Lista Comum'
+          },
+          rowIndex: -1
+        };
+
+        results.push({
+          searchTerm: term,
+          cleanSearchTerm: cleanTerm,
+          found: true,
+          row: listaRow,
+          matchedGroup: listaRow.group
+        });
+      } else {
+        // Não encontrado nem no CSV nem em listas
+        results.push({
+          searchTerm: term,
+          cleanSearchTerm: cleanTerm,
+          found: false
+        });
       }
-      
-      return enrichedMatch;
-    });
+    }
+
+    return results;
   }, [inputText, rows, listas]);
 
   // Extract unique Saída values from found search matches (or loaded rows if no search)
@@ -430,7 +509,14 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                         <td className="py-2 px-3 text-gray-400 text-[10px]">{idx + 1}</td>
 
                         <td className="py-2 px-3 font-bold text-gray-900 whitespace-nowrap">
-                          {match.searchTerm}
+                          <div className="flex flex-col">
+                            <span className="font-mono text-xs font-bold text-gray-900">{match.searchTerm}</span>
+                            {match.found && match.row?.rawFields?.['Lista de Coleta'] && (
+                              <span className="text-[10px] text-[#3483FA] font-medium font-sans truncate max-w-[170px]" title={`Lista: ${match.row.rawFields['Lista de Coleta']}`}>
+                                📋 {match.row.rawFields['Lista de Coleta']}
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         <td className="py-2 px-3 whitespace-nowrap">
@@ -454,12 +540,24 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                           )}
                         </td>
 
-                        <td className="py-2 px-3 whitespace-nowrap text-gray-700">
-                          {match.found && match.row?.saida ? match.row.saida : '—'}
+                        <td className="py-2 px-3 whitespace-nowrap">
+                          {match.found && match.row?.saida ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                              {match.row.saida}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 font-mono">—</span>
+                          )}
                         </td>
 
-                        <td className="py-2 px-3 whitespace-nowrap text-gray-700">
-                          {match.found && match.row?.motivo ? match.row.motivo : '—'}
+                        <td className="py-2 px-3 whitespace-nowrap">
+                          {match.found && match.row?.motivo ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-900 border border-amber-200">
+                              {match.row.motivo}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 font-mono">—</span>
+                          )}
                         </td>
 
                         <td className="py-2 px-3 whitespace-nowrap font-bold text-amber-900">
@@ -497,34 +595,41 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                       {isExpanded && match.found && match.row && (
                         <tr className="bg-amber-50/20 border-b border-gray-200">
                           <td colSpan={7} className="p-3">
-                            <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider mb-1.5">
-                              Layout Completo para o ID: <span className="text-gray-900">{match.searchTerm}</span>
+                            <div className="text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-2 flex items-center justify-between flex-wrap gap-2">
+                              <div>
+                                Detalhes do ID: <span className="text-gray-900 font-mono font-bold text-xs">{match.searchTerm}</span>
+                              </div>
+                              {match.row.rawFields?.['Lista de Coleta'] && (
+                                <span className="bg-blue-100 text-[#3483FA] text-[10px] font-bold px-2 py-0.5 rounded border border-blue-200">
+                                  Origem: {match.row.rawFields['Lista de Coleta']}
+                                </span>
+                              )}
                             </div>
 
                             <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 text-[11px]">
-                              <div className="bg-white border border-gray-200 rounded p-1.5">
+                              <div className="bg-white border border-gray-200 rounded p-1.5 shadow-2xs">
+                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Saída</span>
+                                <span className="truncate block font-mono font-bold text-blue-700">{match.row.saida || '—'}</span>
+                              </div>
+                              <div className="bg-white border border-gray-200 rounded p-1.5 shadow-2xs">
+                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Motivo</span>
+                                <span className="truncate block font-mono font-bold text-amber-800">{match.row.motivo || '—'}</span>
+                              </div>
+                              <div className="bg-white border border-gray-200 rounded p-1.5 shadow-2xs">
+                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Rota</span>
+                                <span className="truncate block font-mono text-gray-800">{match.row.rawFields?.['Rota'] || match.row.concat || '—'}</span>
+                              </div>
+                              <div className="bg-white border border-gray-200 rounded p-1.5 shadow-2xs">
+                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Bipado por</span>
+                                <span className="truncate block font-mono text-gray-800">{match.row.rawFields?.['Bipado por'] || '—'}</span>
+                              </div>
+                              <div className="bg-white border border-gray-200 rounded p-1.5 shadow-2xs">
+                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Data / Horário</span>
+                                <span className="truncate block font-mono text-gray-800">{match.row.rawFields?.['Data / Hora'] || match.row.rawFields?.['Horário do Bip'] || '—'}</span>
+                              </div>
+                              <div className="bg-white border border-gray-200 rounded p-1.5 shadow-2xs">
                                 <span className="block text-[9px] font-bold text-gray-400 uppercase">Reversão</span>
                                 <span className="truncate block font-mono text-gray-800">{match.row.reversao || '—'}</span>
-                              </div>
-                              <div className="bg-white border border-gray-200 rounded p-1.5">
-                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Substatus GP</span>
-                                <span className="truncate block font-mono text-gray-800">{match.row.substatusGp || '—'}</span>
-                              </div>
-                              <div className="bg-white border border-gray-200 rounded p-1.5">
-                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Cluster</span>
-                                <span className="truncate block font-mono text-gray-800">{match.row.cluster || '—'}</span>
-                              </div>
-                              <div className="bg-white border border-gray-200 rounded p-1.5">
-                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Tipo Endereço</span>
-                                <span className="truncate block font-mono text-gray-800">{match.row.tipoEndereco || '—'}</span>
-                              </div>
-                              <div className="bg-white border border-gray-200 rounded p-1.5">
-                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Promessa</span>
-                                <span className="truncate block font-mono text-gray-800">{match.row.promessa || '—'}</span>
-                              </div>
-                              <div className="bg-white border border-gray-200 rounded p-1.5">
-                                <span className="block text-[9px] font-bold text-gray-400 uppercase">Dias Delay</span>
-                                <span className="truncate block font-mono text-gray-800">{match.row.diasDelay || '—'}</span>
                               </div>
                             </div>
                           </td>
