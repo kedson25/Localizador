@@ -100,23 +100,22 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto animate-in fade-in duration-300">
-      <div className="mb-8 w-full flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-black text-gray-900 tracking-tight">Ferramentas de Base</h1>
-          <p className="text-gray-500 text-sm mt-1">Selecione o módulo que deseja utilizar</p>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-gray-800 rounded-md text-sm font-bold">
+      <div className="mb-8 w-full relative flex flex-col items-center text-center">
+        <div className="w-full flex justify-end mb-2 sm:mb-0 sm:absolute sm:right-0 sm:top-1">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-gray-800 rounded-md text-sm font-bold shadow-xs">
             <span>{currentUser?.username || 'Usuário'}</span>
             <button 
               onClick={() => { localStorage.removeItem('currentUser'); window.location.reload(); }}
-              className="ml-2 text-[10px] text-red-600 hover:underline uppercase"
+              className="ml-2 text-[10px] text-red-600 hover:underline uppercase cursor-pointer"
             >
               Sair
             </button>
           </div>
+        </div>
+
+        <div className="text-center pt-1">
+          <h1 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">Ferramentas de Base</h1>
+          <p className="text-gray-500 text-sm mt-1.5">Selecione o módulo que deseja utilizar</p>
         </div>
       </div>
 
