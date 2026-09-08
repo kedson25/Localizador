@@ -124,6 +124,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [showVerificarModal, setShowVerificarModal] = useState(false);
   const [verificarModo, setVerificarModo] = useState<'10' | 'completo'>('10');
   const [verificarPagina, setVerificarPagina] = useState(0);
+  const [copiedPage, setCopiedPage] = useState<number | null>(null);
   const [tamanhoLote, setTamanhoLote] = useState<number>(10);
   const [verificarMap, setVerificarMap] = useState<Record<string, 'valido' | 'verificado' | 'em_rota'>>({});
   const [verificarInput, setVerificarInput] = useState('');
@@ -252,6 +253,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setVerificarMap(mapInicial);
     setVerificarModo('10');
     setVerificarPagina(0);
+    setCopiedPage(null);
     setVerificarInput('');
     setShowVerificarModal(true);
   };
@@ -2064,6 +2066,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           onChange={(e) => {
                             setTamanhoLote(Number(e.target.value));
                             setVerificarPagina(0);
+                            setCopiedPage(null);
                           }}
                           className="px-2 py-1 bg-white border border-blue-200 rounded text-blue-700 outline-none"
                         >
@@ -2076,19 +2079,34 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           type="button"
                           onClick={() => {
                             const text = itensExibidos.map(i => i.codigo).join('\n');
-                            navigator.clipboard.writeText(text);
+                            navigator.clipboard.writeText(text).then(() => setCopiedPage(paginaAtualSafe));
                           }}
-                          className="px-3 py-1.5 bg-white border border-[#3483FA] text-[#3483FA] rounded-md hover:bg-blue-50 transition-colors shadow-sm flex items-center gap-2 cursor-pointer font-black"
+                          className={`px-3 py-1.5 border rounded-md shadow-sm flex items-center gap-2 cursor-pointer font-black transition-colors ${
+                            copiedPage === paginaAtualSafe 
+                              ? 'bg-emerald-50 text-emerald-600 border-emerald-300 hover:bg-emerald-100'
+                              : 'bg-white border-[#3483FA] text-[#3483FA] hover:bg-blue-50'
+                          }`}
                           title="Copiar IDs"
                         >
-                          <Barcode className="w-4 h-4" /> Copiar {itensExibidos.length}
+                          {copiedPage === paginaAtualSafe ? (
+                            <>
+                              <CheckCircle2 className="w-4 h-4" /> Copiado
+                            </>
+                          ) : (
+                            <>
+                              <Barcode className="w-4 h-4" /> Copiar {itensExibidos.length}
+                            </>
+                          )}
                         </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
                           disabled={paginaAtualSafe === 0}
-                          onClick={() => setVerificarPagina(paginaAtualSafe - 1)}
+                          onClick={() => {
+                            setVerificarPagina(paginaAtualSafe - 1);
+                            setCopiedPage(null);
+                          }}
                           className="px-3 py-1.5 bg-white border border-blue-200 text-blue-600 rounded-md disabled:opacity-40 cursor-pointer font-bold hover:bg-blue-50 transition-colors"
                         >
                           Anterior
@@ -2096,7 +2114,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         <button
                           type="button"
                           disabled={paginaAtualSafe >= totalPaginas - 1}
-                          onClick={() => setVerificarPagina(paginaAtualSafe + 1)}
+                          onClick={() => {
+                            setVerificarPagina(paginaAtualSafe + 1);
+                            setCopiedPage(null);
+                          }}
                           className="px-3 py-1.5 bg-[#3483FA] text-white rounded-md disabled:opacity-40 cursor-pointer font-black hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1"
                         >
                           Próximo <ChevronRight className="w-4 h-4" />
