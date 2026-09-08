@@ -70,6 +70,9 @@ export interface ColetaLista {
   saidaPadrao: string;
   motivoPadrao: string;
   itens: ColetaItem[];
+  porcentagemAcerto?: number;
+  fechamentoGaiola?: string;
+  itensFaltaram?: number;
 }
 
 export type ActiveTab = 'tools' | 'lookup' | 'remove' | 'report' | 'upload' | 'refugo';

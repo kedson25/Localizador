@@ -18,6 +18,7 @@ import {
   ListPlus,
   X,
   Users,
+  User as UserIcon,
   PieChart,
   Clock,
   Layers,
@@ -28,7 +29,8 @@ import {
   Square,
   Filter,
   CheckCheck,
-  Zap
+  Zap,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -140,11 +142,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [loteText, setLoteText] = useState('');
   const [loteMotivo, setLoteMotivo] = useState('Desconteinerizado');
 
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+  const [importStatusText, setImportStatusText] = useState('Carregando IDs na lista...');
+
   const [showVerificarLoteModal, setShowVerificarLoteModal] = useState(false);
   const [verificarLoteText, setVerificarLoteText] = useState('');
 
   // Estado para a gaveta de exclusão
   const [listaParaExcluir, setListaParaExcluir] = useState<ColetaLista | null>(null);
+  const [listaParaFinalizar, setListaParaFinalizar] = useState<ColetaLista | null>(null);
+
+  // Estados de Carregamento com Círculo Giratório (Spinner)
+  const [isLoadingLista, setIsLoadingLista] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('Carregando lista...');
+  const [openingListaId, setOpeningListaId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -207,6 +219,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setSelectedMotivo(listaAtiva.motivoPadrao || '');
     }
   }, [activeListaId]);
+
+  // Quando a lista ativa for carregada, encerra o indicador de carregamento
+  useEffect(() => {
+    if (listaAtiva && isLoadingLista) {
+      const t = setTimeout(() => {
+        setIsLoadingLista(false);
+        setOpeningListaId(null);
+      }, 250);
+      return () => clearTimeout(t);
+    }
+  }, [listaAtiva, isLoadingLista]);
+
+  const handleAbrirLista = (id: string) => {
+    setOpeningListaId(id);
+    setLoadingMessage('Carregando lista de coleta...');
+    setIsLoadingLista(true);
+    navigate(`/listas/${id}`);
+  };
 
   const cleanDigits = (str: string) => str.replace(/\D/g, '');
 
@@ -398,44 +428,51 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Criar nova lista com dados reais (Data, Ciclo e Tipo de Lista)
   const handleCriarLista = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoadingLista(true);
+    setLoadingMessage('Criando lista de coleta...');
 
-    // Formatar data para exibição (DD/MM/YYYY)
-    let dataFormatada = new Date().toLocaleDateString('pt-BR');
-    if (novaData) {
-      const parts = novaData.split('-');
-      if (parts.length === 3) {
-        dataFormatada = `${parts[2]}/${parts[1]}/${parts[0]}`;
+    try {
+      // Formatar data para exibição (DD/MM/YYYY)
+      let dataFormatada = new Date().toLocaleDateString('pt-BR');
+      if (novaData) {
+        const parts = novaData.split('-');
+        if (parts.length === 3) {
+          dataFormatada = `${parts[2]}/${parts[1]}/${parts[0]}`;
+        }
       }
+
+      // Gerar nome limpo e direto sem "Lista Comum" ou "Rota Geral"
+      let nomeCurto = novaSaida;
+      if (novaSaida.includes('PM')) nomeCurto = 'Saída PM';
+      else if (novaSaida.includes('AM')) nomeCurto = 'Saída AM';
+      else if (novaSaida.includes('SD')) nomeCurto = 'Saída SD';
+
+      const nomeGerado = `${nomeCurto} - ${dataFormatada}`;
+      const rotaPadrao = novoTipo === 'grupos' ? 'Multirotas / Grupos' : 'Geral';
+
+      const novaLista: ColetaLista = {
+        id: 'lista-' + Date.now(),
+        nome: nomeGerado,
+        tipo: novoTipo,
+        grupos: novoTipo === 'grupos' ? [] : undefined,
+        grupoAtivoId: '',
+        rota: rotaPadrao,
+        data: dataFormatada,
+        responsavel: operanteNome, // Criador real
+        status: 'em_andamento',
+        saidaPadrao: novaSaida, // Ciclo/Saída da lista
+        motivoPadrao: '',
+        itens: []
+      };
+
+      await saveLista(novaLista);
+      setOpeningListaId(novaLista.id);
+      setShowModalNovaLista(false);
+      navigate(`/listas/${novaLista.id}`);
+    } catch (err) {
+      console.error('Erro ao criar lista:', err);
+      setIsLoadingLista(false);
     }
-
-    // Gerar nome limpo e direto sem "Lista Comum" ou "Rota Geral"
-    let nomeCurto = novaSaida;
-    if (novaSaida.includes('PM')) nomeCurto = 'Saída PM';
-    else if (novaSaida.includes('AM')) nomeCurto = 'Saída AM';
-    else if (novaSaida.includes('SD')) nomeCurto = 'Saída SD';
-
-    const nomeGerado = `${nomeCurto} - ${dataFormatada}`;
-    const rotaPadrao = novoTipo === 'grupos' ? 'Multirotas / Grupos' : 'Geral';
-
-    const novaLista: ColetaLista = {
-      id: 'lista-' + Date.now(),
-      nome: nomeGerado,
-      tipo: novoTipo,
-      grupos: novoTipo === 'grupos' ? [] : undefined,
-      grupoAtivoId: '',
-      rota: rotaPadrao,
-      data: dataFormatada,
-      responsavel: operanteNome, // Criador real
-      status: 'em_andamento',
-      saidaPadrao: novaSaida, // Ciclo/Saída da lista
-      motivoPadrao: '',
-      itens: []
-    };
-
-    await saveLista(novaLista);
-    
-    navigate(`/listas/${novaLista.id}`);
-    setShowModalNovaLista(false);
   };
 
   // Bipar ID na tela de coleta
@@ -664,64 +701,84 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const codigos = loteText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
     if (codigos.length === 0) return;
 
+    setIsImporting(true);
+    setImportProgress(0);
+    setImportStatusText('Iniciando processamento do lote...');
+
     const saidaCicloFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
     const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
 
     const novosItensMap = new Map<string, ColetaItem>();
     listaAtiva.itens.forEach(i => novosItensMap.set(i.codigo, i));
 
-    codigos.forEach(cod => {
-      let processedCod = cod;
-      processedCod = processedCod.replace(/d[çc]?⁴/gi, '4');
-      processedCod = processedCod.replace(/d[çc]?4/gi, '4');
-      processedCod = processedCod.replace(/^[^0-9a-zA-Z]+/, '');
-      
-      const match47 = processedCod.match(/(47\d+)/);
-      if (match47) {
-        processedCod = match47[1];
-      } else {
-        processedCod = processedCod.replace(/m$/i, '');
-      }
+    const CHUNK_SIZE = 500;
+    const total = codigos.length;
 
-      const cleanCod = processedCod.toUpperCase();
-      const cleanCodDigits = cleanDigits(cleanCod);
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+      const chunk = codigos.slice(i, i + CHUNK_SIZE);
 
-      const refugoMatch = refugoBaseRows.find(r => {
-        if (r.id === cleanCod) return true;
-        const rDigits = cleanDigits(r.id);
-        return rDigits && cleanCodDigits && rDigits === cleanCodDigits;
+      chunk.forEach(cod => {
+        let processedCod = cod;
+        processedCod = processedCod.replace(/d[çc]?⁴/gi, '4');
+        processedCod = processedCod.replace(/d[çc]?4/gi, '4');
+        processedCod = processedCod.replace(/^[^0-9a-zA-Z]+/, '');
+        
+        const match47 = processedCod.match(/(47\d+)/);
+        if (match47) {
+          processedCod = match47[1];
+        } else {
+          processedCod = processedCod.replace(/m$/i, '');
+        }
+
+        const cleanCod = processedCod.toUpperCase();
+        const cleanCodDigits = cleanDigits(cleanCod);
+
+        const refugoMatch = refugoBaseRows.find(r => {
+          if (r.id === cleanCod) return true;
+          const rDigits = cleanDigits(r.id);
+          return rDigits && cleanCodDigits && rDigits === cleanCodDigits;
+        });
+        const rotaItemFinal = refugoMatch ? refugoMatch.rota : 'Sem Rota';
+
+        if (novosItensMap.has(cleanCod)) {
+          const item = novosItensMap.get(cleanCod)!;
+          novosItensMap.set(cleanCod, {
+            ...item,
+            saida: saidaCicloFinal,
+            motivo: motivoFinal,
+            rota: rotaItemFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
+            responsavel: operanteNome,
+            grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId
+          });
+        } else {
+          novosItensMap.set(cleanCod, {
+            id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000000),
+            codigo: cleanCod,
+            rota: rotaItemFinal,
+            saida: saidaCicloFinal,
+            motivo: motivoFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
+            responsavel: operanteNome,
+            grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
+          });
+        }
       });
-      const rotaItemFinal = refugoMatch ? refugoMatch.rota : 'Sem Rota';
 
-      if (novosItensMap.has(cleanCod)) {
-        const item = novosItensMap.get(cleanCod)!;
-        novosItensMap.set(cleanCod, {
-          ...item,
-          saida: saidaCicloFinal,
-          motivo: motivoFinal,
-          rota: rotaItemFinal,
-          scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome,
-          grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId
-        });
-      } else {
-        novosItensMap.set(cleanCod, {
-          id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 10000),
-          codigo: cleanCod,
-          rota: rotaItemFinal,
-          saida: saidaCicloFinal,
-          motivo: motivoFinal,
-          scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome,
-          grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
-        });
-      }
-    });
+      const percent = Math.min(100, Math.round(((i + chunk.length) / total) * 100));
+      setImportProgress(percent);
+      setImportStatusText(`Carregando IDs na lista... ${percent}% (${i + chunk.length} de ${total})`);
+      
+      // Permitir renderização fluida da UI sem travamentos
+      await new Promise(r => setTimeout(r, 10));
+    }
 
+    setImportStatusText('Salvando lista completa sem perdas na nuvem...');
     const novosItens = Array.from(novosItensMap.values());
     const updatedLista = { ...listaAtiva, itens: novosItens };
     await saveLista(updatedLista);
 
+    setIsImporting(false);
     setLoteText('');
     setShowModalLote(false);
   };
@@ -740,24 +797,34 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
       await saveLista(updatedLista);
 
-      alert(`Lista "${lista.nome}" finalizada com sucesso! (${lista.itens.length} itens)`);
-
       if (lista.itens.length > 0) {
+        const cleanId = (code: string) => {
+          if (!code) return '';
+          return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, ' ');
+        };
+
         const header = ['ID', 'ROTA', 'SAIDA', 'MOTIVO', 'GRUPO'].join(',');
         const rowsCsv = lista.itens.map(item => {
           const nomeGrupo = lista.grupos?.find(g => g.id === item.grupoId)?.nome || '';
-          return `${item.codigo},${item.rota},${lista.saidaPadrao},${item.motivo},${nomeGrupo}`;
+          const cleanedCode = cleanId(item.codigo);
+          const cleanedRota = cleanId(item.rota || '');
+          const cleanedSaida = cleanId(lista.saidaPadrao || item.saida || '');
+          const cleanedMotivo = cleanId(item.motivo || '');
+          const cleanedGrupo = cleanId(nomeGrupo);
+          return `"${cleanedCode}","${cleanedRota}","${cleanedSaida}","${cleanedMotivo}","${cleanedGrupo}"`;
         });
         const csvContent = [header, ...rowsCsv].join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}_Finalizada.csv`);
+        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}_Finalizada_Limpa.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
       }
+
+      setListaParaFinalizar(null);
     }
   };
 
@@ -792,6 +859,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // -------------------------------------------------------------
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
+  if (activeListaId && !listaAtiva) {
+    return (
+      <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
+        <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
+          <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+        </div>
+        <div className="text-center">
+          <h3 className="text-base font-bold text-[#333333]">Carregando lista de coleta...</h3>
+          <p className="text-xs text-gray-500 mt-1">Sincronizando dados em tempo real</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!listaAtiva) {
     const totalListas = listas.length;
     const listasAtivas = listas.filter(l => l.status === 'em_andamento').length;
@@ -842,67 +923,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </button>
         </div>
 
-        {/* Resumo de Métricas Topo */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          <motion.div 
-            whileHover={{ y: -2 }}
-            className="bg-white border border-gray-200 p-3 rounded-xl flex items-center gap-3 shadow-xs transition-all hover:shadow-sm border-b-2 border-b-blue-500"
-          >
-            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg">
-              <Package className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-[#333333] tracking-tight">{totalListas}</p>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total de Listas</p>
-            </div>
-          </motion.div>
 
-          <motion.div 
-            whileHover={{ y: -2 }}
-            className="bg-white border border-gray-200 p-3 rounded-xl flex items-center gap-3 shadow-xs transition-all hover:shadow-sm border-b-2 border-b-amber-500"
-          >
-            <div className="p-2.5 bg-amber-50 text-amber-600 rounded-lg">
-              <Clock className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-[#333333] tracking-tight">{listasAtivas}</p>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Em Andamento</p>
-            </div>
-          </motion.div>
-
-          <motion.div 
-            whileHover={{ y: -2 }}
-            className="bg-white border border-gray-200 p-3 rounded-xl flex items-center gap-3 shadow-xs transition-all hover:shadow-sm border-b-2 border-b-emerald-500"
-          >
-            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg">
-              <CheckCircle2 className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-emerald-600 tracking-tight">{totalItensColetados}</p>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">IDs Coletados</p>
-            </div>
-          </motion.div>
-
-          <motion.div 
-            whileHover={{ y: -2 }}
-            className="hidden xl:flex bg-gradient-to-br from-[#3483FA] to-blue-700 p-3 rounded-xl items-center gap-3 shadow-xs text-white border-b-2 border-b-blue-900"
-          >
-            <div className="p-2.5 bg-white/20 text-white rounded-lg backdrop-blur-sm">
-              <Zap className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-bold leading-tight">Coleta Rápida</p>
-              <p className="text-[9px] text-white/80 font-medium uppercase tracking-wider">Otimizado para agilidade</p>
-            </div>
-          </motion.div>
-        </div>
 
         {/* TABELA DE LISTAS (EXIBIÇÃO EM LISTA E NÃO EM BLOCOS) */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <Layers className="w-5 h-5 text-[#3483FA]" />
-              <h3 className="text-base font-bold text-[#333333]">Suas Listas de Coleta</h3>
+              <h3 className="text-base font-bold text-[#333333]">Lista</h3>
               <span className="bg-gray-100 text-gray-700 font-mono text-xs font-bold px-2.5 py-0.5 rounded-full">
                 {listas.length}
               </span>
@@ -927,7 +955,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <tr>
                     <th className="py-3 px-4">#</th>
                     <th className="py-3 px-4">Nome da Lista</th>
-                    <th className="py-3 px-4">Rota</th>
+                    <th className="py-3 px-4">Tipo</th>
                     <th className="py-3 px-4">Saída / Ciclo</th>
                     <th className="py-3 px-4">Data</th>
                     <th className="py-3 px-4">Criado Por</th>
@@ -940,22 +968,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   {filteredDashboardListas.map((lista, idx) => (
                     <tr key={lista.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-3.5 px-4 font-mono font-bold text-gray-400">{filteredDashboardListas.length - idx}</td>
-                      <td className="py-3.5 px-4 font-bold text-[#333333] text-sm">
-                        <div className="flex flex-col gap-1">
+                      <td 
+                        onClick={() => handleAbrirLista(lista.id)}
+                        className="py-3.5 px-4 font-bold text-[#333333] text-sm cursor-pointer hover:text-[#3483FA] transition-colors"
+                        title="Clique para abrir a coleta desta lista"
+                      >
+                        <div className="flex items-center gap-2">
                           <span>{lista.nome}</span>
-                          <span className={`w-fit text-[10px] px-2 py-0.5 rounded-full font-bold border ${
-                            lista.tipo === 'grupos'
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-blue-50 text-blue-700 border-blue-200'
-                          }`}>
-                            {lista.tipo === 'grupos' ? 'Lista com Grupos' : 'Lista Comum'}
-                          </span>
+                          {isLoadingLista && openingListaId === lista.id && (
+                            <Loader2 className="w-3.5 h-3.5 text-[#3483FA] animate-spin flex-shrink-0" />
+                          )}
                         </div>
                       </td>
                       <td className="py-3.5 px-4">
-                        <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-mono font-bold text-xs flex items-center gap-1 w-fit">
-                          <MapPin className="w-3 h-3" />
-                          {lista.rota}
+                        <span className={`px-2 py-0.5 rounded font-bold text-xs inline-flex items-center border ${
+                          lista.tipo === 'grupos'
+                            ? 'bg-purple-50 text-purple-700 border-purple-200'
+                            : 'bg-blue-50 text-blue-700 border-blue-200'
+                        }`}>
+                          {lista.tipo === 'grupos' ? 'Grupo' : 'Comum'}
                         </span>
                       </td>
                       <td className="py-3.5 px-4">
@@ -964,8 +995,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         </span>
                       </td>
                       <td className="py-3.5 px-4 text-gray-600 font-medium">{lista.data}</td>
-                      <td className="py-3.5 px-4 text-gray-700 font-bold flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <td className="py-3.5 px-4 text-gray-700 font-bold">
                         {lista.responsavel}
                       </td>
                       <td className="py-3.5 px-4 font-mono font-bold text-[#3483FA] text-sm">
@@ -981,11 +1011,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
-                            onClick={() => navigate(`/listas/${lista.id}`)}
-                            className="bg-[#3483FA] hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                            onClick={() => handleAbrirLista(lista.id)}
+                            disabled={isLoadingLista && openingListaId === lista.id}
+                            className="bg-[#3483FA] hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer disabled:opacity-75"
                           >
-                            <Barcode className="w-4 h-4" />
-                            Abrir Coleta
+                            {isLoadingLista && openingListaId === lista.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Abrindo...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Barcode className="w-4 h-4" />
+                                <span>Abrir Coleta</span>
+                              </>
+                            )}
                           </button>
                           <button
                             onClick={() => exportListaCSV(lista)}
@@ -1121,12 +1161,35 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 sm:flex-none px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm"
+                    disabled={isLoadingLista}
+                    className="flex-1 sm:flex-none px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-75 cursor-pointer"
                   >
-                    Criar Lista
+                    {isLoadingLista ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Criando Lista...</span>
+                      </>
+                    ) : (
+                      <span>Criar Lista</span>
+                    )}
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Overlay com Círculo Giratório ao abrir ou criar lista */}
+        {isLoadingLista && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-[9999] animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 flex flex-col items-center gap-4 max-w-xs w-full text-center">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-[#333333]">{loadingMessage}</h4>
+                <p className="text-xs text-gray-500 mt-1">Aguarde um instante...</p>
+              </div>
             </div>
           </div>
         )}
@@ -1181,6 +1244,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     acc[m] = listaAtiva.itens.filter(i => i.motivo === m).length;
     return acc;
   }, {} as Record<string, number>);
+
+  // Contagem de bips por operador na lista ativa (reflete em tempo real para todos)
+  const contagemBips: Record<string, number> = {};
+  listaAtiva.itens.forEach(item => {
+    const op = item.responsavel || listaAtiva.responsavel || 'Operador';
+    contagemBips[op] = (contagemBips[op] || 0) + 1;
+  });
+  if (operanteNome && contagemBips[operanteNome] === undefined) {
+    contagemBips[operanteNome] = 0;
+  }
+  if (listaAtiva.responsavel && contagemBips[listaAtiva.responsavel] === undefined) {
+    contagemBips[listaAtiva.responsavel] = 0;
+  }
+  const bipsPorOperador = Object.entries(contagemBips)
+    .map(([nome, total]) => ({
+      nome,
+      total,
+      isVoce: nome === operanteNome
+    }))
+    .sort((a, b) => b.total - a.total);
 
   // Lista de Usuários do Sistema para "Quem está na tela de lista online"
   const usuariosSistemaOnline = registeredUsers.length > 0 ? registeredUsers : [
@@ -1264,7 +1347,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
               {/* Lista de Grupos */}
               {listaAtiva.grupos && listaAtiva.grupos.length > 0 ? (
-                <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
+                <div className="flex flex-col sm:flex-row gap-3 overflow-x-auto pb-2 snap-x w-full">
                   {listaAtiva.grupos.map((grupo) => {
                     const isAtivo = listaAtiva.grupoAtivoId === grupo.id;
                     const qtdPacotes = listaAtiva.itens.filter(i => i.grupoId === grupo.id).length;
@@ -1273,9 +1356,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <div 
                         key={grupo.id}
                         onClick={() => handleSetGrupoAtivo(grupo.id)}
-                        className={`min-w-[240px] p-4 rounded-xl border-2 transition-all cursor-pointer snap-start flex flex-col gap-3 ${
+                        className={`w-full sm:w-[240px] sm:min-w-[240px] p-4 border-2 transition-all cursor-pointer snap-start flex flex-col gap-3 ${
                           isAtivo 
-                            ? 'border-purple-600 bg-purple-50/50 shadow-md transform scale-[1.02]' 
+                            ? 'border-purple-600 bg-purple-50/50 shadow-md' 
                             : 'border-gray-200 bg-white hover:border-purple-300'
                         }`}
                       >
@@ -1322,7 +1405,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <div className="flex flex-col gap-3 pb-3 border-b border-gray-100">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <h3 className="font-bold text-base text-[#333333]">Lista Completa de IDs</h3>
+                  <h3 className="font-bold text-base text-[#333333]">Lista</h3>
                   <button
                     onClick={() => setShowModalLote(true)}
                     className="px-2.5 py-1 bg-[#3483FA]/10 hover:bg-[#3483FA]/20 text-[#3483FA] rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -1333,10 +1416,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <button
                     onClick={handleCopiarIdsComMotivoESaida}
                     className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title="Copiar IDs com as respectivas saídas e motivos"
+                    title="Copiar lista com IDs, saídas e motivos"
                   >
                     <Copy className="w-3.5 h-3.5" />
-                    Copiar com Motivos e Saídas
+                    Copiar Lista
                   </button>
                 </div>
 
@@ -1460,102 +1543,122 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             )}
 
             {filteredItems.length > 0 ? (
-              <div className="overflow-x-auto border border-gray-300 rounded-2xl shadow-md max-h-[70vh]">
+              <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
                 <table className="w-full text-xs text-gray-700 border-collapse">
                   <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                     <tr>
-                      <th className="py-4 px-3 text-center w-12 bg-gray-100 border-b border-r border-gray-300">
+                      <th className="py-2 px-2 text-center w-12 bg-gray-100 border-b border-r border-gray-200">
                         <input
                           type="checkbox"
                           checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))}
                           onChange={() => handleToggleSelectAll(filteredItems)}
-                          className="w-4 h-4 rounded text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
+                          className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                           title="Selecionar/Desmarcar Todos os visíveis"
                         />
                       </th>
-                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-12 bg-gray-100">#</th>
-                      <th className="py-4 px-3 text-left border-b border-r border-gray-300 bg-gray-100">ID / Código</th>
-                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-24 bg-gray-100">Rota</th>
-                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-20 bg-gray-100">Saída</th>
-                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-48 bg-gray-100">Motivo</th>
-                      <th className="py-4 px-3 text-center border-b border-r border-gray-300 w-40 bg-gray-100">Data / Hora</th>
-                      <th className="py-4 px-3 text-center border-b border-gray-300 w-24 bg-gray-100">Ações</th>
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-12 bg-gray-100">#</th>
+                      <th className="py-2 px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-36 bg-gray-100">Bipado por</th>
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-24 bg-gray-100">Rota</th>
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-20 bg-gray-100">Saída</th>
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-48 bg-gray-100">Motivo</th>
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-40 bg-gray-100">Data / Hora</th>
+                      <th className="py-2 px-2 text-center border-b border-gray-200 w-24 bg-gray-100">Ações</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-300 font-sans">
+                  <tbody className="divide-y divide-gray-200 font-sans">
                     {filteredItems.map((item, idx) => {
                       const isSelected = selectedItemIds.includes(item.id);
                       const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
                       return (
                         <React.Fragment key={`frag-${item.id}-${idx}`}>
                         <tr 
-                          className={`transition-all border-b border-gray-300 group ${
+                          className={`transition-all border-b border-gray-200 group ${
                             isSelected 
                               ? 'bg-blue-50/90 font-bold' 
                               : 'bg-white hover:bg-gray-50'
                           } ${isEditingMotivo ? 'bg-blue-50/40' : ''}`}
                         >
-                          <td className="py-3 px-3 text-center w-12 border-r border-gray-300">
+                          <td className="py-1 px-2 text-center w-12 border-r border-gray-200">
                             <input
                               type="checkbox"
                               checked={isSelected}
                               onChange={() => handleToggleSelectItem(item.id)}
-                              className="w-4 h-4 rounded text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
+                              className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                             />
                           </td>
-                          <td className="py-3 px-3 text-center text-gray-500 font-bold w-12 border-r border-gray-300">{filteredItems.length - idx}</td>
+                          <td className="py-1 px-2 text-center text-gray-500 font-bold w-12 border-r border-gray-200">{filteredItems.length - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-3 px-3 text-left font-bold text-[#333333] cursor-pointer hover:text-[#3483FA] transition-colors border-r border-gray-300"
+                            className="py-1 px-2 text-left font-bold text-[#333333] cursor-pointer hover:text-[#3483FA] transition-colors border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            <div className="flex items-center gap-2">
-                              <Barcode className="w-3.5 h-3.5 text-gray-400" />
-                              {item.codigo}
+                            <div className="flex items-center gap-1.5 font-mono text-xs">
+                              <Barcode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                              <span>{item.codigo}</span>
                             </div>
                           </td>
                           <td 
-                            onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-3 px-3 text-center font-bold text-[#3483FA] cursor-pointer w-24 border-r border-gray-300"
-                            title="Clique para alterar o motivo deste ID"
+                            className="py-1 px-2 text-center border-r border-gray-200 w-36"
                           >
-                            {item.rota}
+                            <span 
+                              className={`inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold tracking-tight border ${
+                                (item.responsavel || listaAtiva.responsavel) === operanteNome
+                                  ? 'bg-blue-50 text-[#3483FA] border-blue-200 font-extrabold'
+                                  : 'bg-gray-100 text-gray-700 border-gray-200'
+                              }`}
+                              title={`Bipado por: ${item.responsavel || listaAtiva.responsavel || 'Operador'}`}
+                            >
+                              <UserIcon className="w-2.5 h-2.5 opacity-60 flex-shrink-0" />
+                              <span className="truncate max-w-[110px]">{item.responsavel || listaAtiva.responsavel || 'Operador'}</span>
+                            </span>
                           </td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-3 px-3 text-center cursor-pointer w-20 border-r border-gray-300"
+                            className={`py-1 px-2 text-center font-bold cursor-pointer w-24 border-r border-gray-200 ${
+                              !item.rota || item.rota.trim() === '' || item.rota.toLowerCase() === 'sem rota' || item.rota === '-'
+                                ? 'text-red-600 bg-red-50/50'
+                                : 'text-[#3483FA]'
+                            }`}
                             title="Clique para alterar o motivo deste ID"
                           >
-                            <span className="bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded font-black text-[10px] uppercase tracking-tighter">
+                            {item.rota && item.rota.trim() !== '' ? item.rota : 'Sem Rota'}
+                          </td>
+                          <td 
+                            onClick={() => setItemParaMudarMotivo(item)}
+                            className="py-1 px-2 text-center cursor-pointer w-20 border-r border-gray-200"
+                            title="Clique para alterar o motivo deste ID"
+                          >
+                            <span className="bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 font-black text-[10px] uppercase tracking-tighter">
                               {getShortSaida(item.saida)}
                             </span>
                           </td>
                           {/* ÁREA CLICÁVEL DO MOTIVO - ABRE GAVETA DE ALTERAÇÃO INDIVIDUAL */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-3 px-3 text-center cursor-pointer w-48 border-r border-gray-300"
+                            className="py-1 px-2 text-center cursor-pointer w-48 border-r border-gray-200"
                             title="Clique para abrir a gaveta e alterar o motivo"
                           >
-                            <div className={`${getMotivoStyle(item.motivo)} border px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-2 shadow-sm group-hover:shadow-md mx-auto uppercase tracking-wide`}>
+                            <div className={`${getMotivoStyle(item.motivo)} border px-2 py-0.5 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs group-hover:shadow mx-auto uppercase tracking-wide`}>
                               <span>{item.motivo || 'Pendente'}</span>
                               <Edit2 className="w-3 h-3 opacity-50 group-hover:opacity-100" />
                             </div>
                           </td>
-                          <td className="py-3 px-3 text-center text-gray-500 text-[11px] w-40 border-r border-gray-300">
+                          <td className="py-1 px-2 text-center text-gray-500 text-[11px] w-40 border-r border-gray-200">
                             {item.scannedAt}
                           </td>
-                          <td className="py-3 px-3 text-center w-24">
+                          <td className="py-1 px-2 text-center w-24">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={() => handleCopy(item.codigo)}
-                                className="p-1 hover:bg-gray-200 text-gray-500 hover:text-black rounded transition-colors cursor-pointer"
+                                className="p-1 hover:bg-gray-200 text-gray-500 hover:text-black transition-colors cursor-pointer"
                                 title="Copiar ID"
                               >
                                 {copiedId === item.codigo ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                               </button>
                               <button
                                 onClick={() => handleRemoverItem(item.id)}
-                                className="p-1 hover:bg-red-100 text-red-600 rounded transition-colors cursor-pointer"
+                                className="p-1 hover:bg-red-100 text-red-600 transition-colors cursor-pointer"
                                 title="Remover Item"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1565,7 +1668,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         </tr>
                         {isEditingMotivo && (
                           <tr className="bg-blue-50/30 border-b border-gray-300 shadow-inner">
-                            <td colSpan={7} className="p-0">
+                            <td colSpan={9} className="p-0">
                               <div className="px-6 py-4 border-l-4 border-[#3483FA]">
                                 <div className="flex flex-col xl:flex-row gap-6 items-start xl:items-center justify-between">
                                   <div className="flex-1 space-y-2 w-full max-w-md">
@@ -1730,10 +1833,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <PieChart className="w-5 h-5 text-[#3483FA]" />
                 <h3 className="font-bold text-sm text-[#333333]">Métricas de Coleta</h3>
               </div>
-              <span className="flex items-center gap-1.5 bg-blue-50 text-[#3483FA] text-[10px] font-bold px-2 py-1 rounded-full border border-blue-100">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#3483FA] animate-pulse"></div>
-                Tempo Real
-              </span>
             </div>
 
             {/* Total de Coletados Card Grande */}
@@ -1748,7 +1847,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 {listaAtiva.status === 'em_andamento' && (
                   <button
                     type="button"
-                    onClick={() => handleFinalizarLista(listaAtiva.id)}
+                    onClick={() => setListaParaFinalizar(listaAtiva)}
                     className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4" />
@@ -1767,83 +1866,87 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </div>
           </motion.div>
 
-          {/* Painel 2: Quem Está Registrado no Sistema e Online na Tela */}
+          {/* Painel: Quem está na tela de lista e quantos bips teve (reflete em tempo real para todos) */}
           <motion.div 
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md space-y-5"
+            transition={{ delay: 0.05 }}
+            className="bg-white border border-gray-200 rounded-2xl p-5 shadow-md space-y-4"
           >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-sm text-[#333333]">Operadores Ativos</h3>
+                <Users className="w-5 h-5 text-[#3483FA]" />
+                <div>
+                  <h3 className="font-bold text-sm text-[#333333]">Bips por Operador</h3>
+                  <p className="text-[10px] text-gray-400 font-medium">Contagem de bips nesta lista</p>
+                </div>
               </div>
-              {(() => {
-                const usuariosDaLista = usuariosSistemaOnline.filter(user => {
-                  if (!listaAtiva) return true;
-                  const isResp = user.username === listaAtiva.responsavel;
-                  const hasItens = listaAtiva.itens.some(item => item.responsavel === user.username);
-                  return isResp || hasItens;
-                });
-                const usuariosParaExibir = usuariosDaLista.length > 0 ? usuariosDaLista : usuariosSistemaOnline;
-                return (
-                  <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-3 py-1 rounded-full border border-emerald-200 shadow-sm">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    {usuariosParaExibir.length} Online
-                  </span>
-                );
-              })()}
+              <span className="text-[10px] font-extrabold text-[#3483FA] bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">
+                {bipsPorOperador.length} {bipsPorOperador.length === 1 ? 'operador' : 'operadores'}
+              </span>
             </div>
 
-            <div className="space-y-3">
-              {(() => {
-                const usuariosDaLista = usuariosSistemaOnline.filter(user => {
-                  if (!listaAtiva) return true;
-                  const isResp = user.username === listaAtiva.responsavel;
-                  const hasItens = listaAtiva.itens.some(item => item.responsavel === user.username);
-                  return isResp || hasItens;
-                });
-                const usuariosParaExibir = usuariosDaLista.length > 0 ? usuariosDaLista : usuariosSistemaOnline;
-                return usuariosParaExibir.map((user) => {
-                  let userTab = 'Hub / Início';
-                  try {
-                    const activePresences = JSON.parse(localStorage.getItem('app_active_presences') || '{}');
-                    if (activePresences[user.id || user.username]?.tab) {
-                      userTab = activePresences[user.id || user.username].tab;
-                    }
-                  } catch {}
+            <div className="space-y-2.5">
+              {bipsPorOperador.length === 0 ? (
+                <div className="p-4 text-center text-gray-400 text-xs bg-gray-50 rounded-xl">
+                  Nenhum bip registrado ainda.
+                </div>
+              ) : (
+                bipsPorOperador.map((op) => {
+                  const pct = totalColetados > 0 ? Math.round((op.total / totalColetados) * 100) : 0;
                   return (
-                    <div key={user.id} className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100/80 rounded-2xl border border-gray-100 transition-colors">
-                      <div className="flex items-center gap-3">
-                        <div className="relative">
-                          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#3483FA] to-blue-600 text-white font-bold text-sm flex items-center justify-center shadow-md">
-                            {user.username.slice(0, 2).toUpperCase()}
+                    <div 
+                      key={op.nome} 
+                      className={`p-3 rounded-xl border transition-all ${
+                        op.isVoce 
+                          ? 'bg-blue-50/70 border-blue-200 shadow-xs' 
+                          : 'bg-gray-50/80 border-gray-100 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-xs ${
+                            op.isVoce 
+                              ? 'bg-[#3483FA] text-white' 
+                              : 'bg-gray-300 text-gray-700'
+                          }`}>
+                            {op.nome.slice(0, 2).toUpperCase()}
                           </div>
-                          <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-[#333333] truncate flex items-center gap-1.5">
+                              {op.nome}
+                              {op.isVoce && (
+                                <span className="text-[9px] bg-blue-100 text-[#3483FA] px-1.5 py-0.2 rounded font-black uppercase tracking-tight">
+                                  VOCÊ
+                                </span>
+                              )}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-xs font-bold text-[#333333] flex items-center gap-1.5">
-                            {user.username}
-                            {user.username === operanteNome && (
-                              <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg font-bold">
-                                VOCÊ
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-[10px] text-gray-500 font-medium tracking-tight flex items-center gap-1.5 mt-0.5">
-                            <span>{user.isAdmin ? 'Administrador' : 'Operador'}</span>
-                            <span>•</span>
-                            <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                              Aba: {userTab}
-                            </span>
-                          </p>
+
+                        <div className="text-right flex-shrink-0">
+                          <span className="text-xs font-black text-gray-800">
+                            {op.total} <span className="text-[10px] font-semibold text-gray-500">{op.total === 1 ? 'bip' : 'bips'}</span>
+                          </span>
+                          {totalColetados > 0 && (
+                            <p className="text-[10px] font-bold text-gray-400">{pct}%</p>
+                          )}
                         </div>
+                      </div>
+
+                      {/* Barra de Progresso visual dos bips */}
+                      <div className="w-full bg-gray-200/80 rounded-full h-1.5 overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            op.isVoce ? 'bg-[#3483FA]' : 'bg-gray-500'
+                          }`}
+                          style={{ width: `${Math.max(pct, op.total > 0 ? 3 : 0)}%` }}
+                        />
                       </div>
                     </div>
                   );
-                });
-              })()}
+                })
+              )}
             </div>
           </motion.div>
 
@@ -2009,8 +2112,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             <div className="flex items-center gap-3">
                               <span className="font-mono text-xs text-gray-400 font-bold w-6">#{globalIndex}</span>
                               <div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <p className="font-mono font-bold text-sm text-[#333333]">{item.codigo}</p>
+                                  <span 
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-tight border ${
+                                      (item.responsavel || listaAtiva.responsavel) === operanteNome
+                                        ? 'bg-blue-50 text-[#3483FA] border-blue-200'
+                                        : 'bg-gray-100 text-gray-700 border-gray-200'
+                                    }`}
+                                    title={`Bipado por: ${item.responsavel || listaAtiva.responsavel || 'Operador'}`}
+                                  >
+                                    <UserIcon className="w-2.5 h-2.5 opacity-60" />
+                                    {item.responsavel || listaAtiva.responsavel || 'Operador'}
+                                  </span>
                                   {isVerificado && (
                                     <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded font-black text-[10px] uppercase flex items-center gap-1">
                                       <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Verificado
@@ -2161,48 +2275,67 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </button>
             </div>
 
-            <form onSubmit={handleAdicionarLote} className="space-y-4">
-              <p className="text-xs text-gray-500">
-                Cole múltiplos IDs abaixo (separados por linha ou vírgula). Todos serão vinculados ao ciclo <strong className="text-blue-700">{selectedSaida}</strong>.
-              </p>
-              <textarea
-                value={loteText}
-                onChange={(e) => setLoteText(e.target.value)}
-                placeholder="78230012345678&#10;78230098765432"
-                rows={5}
-                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs font-mono focus:outline-none focus:border-[#3483FA]"
-                required
-              />
-
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase tracking-wider font-bold text-gray-500">Motivo para o Lote</label>
-                <select
-                  value={loteMotivo}
-                  onChange={(e) => setLoteMotivo(e.target.value)}
-                  className="w-full bg-white border border-gray-300 text-xs font-bold text-gray-700 rounded-lg p-2 focus:outline-none focus:border-[#3483FA]"
-                >
-                  {MOTIVOS_DISPONIVEIS.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
+            {isImporting ? (
+              <div className="py-8 space-y-6 text-center">
+                <div className="inline-block p-4 bg-blue-50 text-[#3483FA] rounded-2xl">
+                  <ListPlus className="w-8 h-8 animate-bounce" />
+                </div>
+                <div className="space-y-2">
+                  <h4 className="text-sm font-black text-gray-800">{importStatusText}</h4>
+                  <div className="w-full bg-gray-100 rounded-full h-3.5 overflow-hidden border border-gray-200 p-0.5">
+                    <div 
+                      className="bg-[#3483FA] h-full transition-all duration-300 rounded-full" 
+                      style={{ width: `${importProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs font-black text-[#3483FA]">{importProgress}% Concluído</p>
+                </div>
+                <p className="text-[11px] text-gray-400 font-medium">Processamento otimizado para carregar todos os IDs sem perdas.</p>
               </div>
+            ) : (
+              <form onSubmit={handleAdicionarLote} className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  Cole múltiplos IDs abaixo (separados por linha ou vírgula). Todos serão vinculados ao ciclo <strong className="text-blue-700">{selectedSaida}</strong>.
+                </p>
+                <textarea
+                  value={loteText}
+                  onChange={(e) => setLoteText(e.target.value)}
+                  placeholder="78230012345678&#10;78230098765432"
+                  rows={5}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs font-mono focus:outline-none focus:border-[#3483FA]"
+                  required
+                />
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowModalLote(false)}
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
-                >
-                  Adicionar Lote
-                </button>
-              </div>
-            </form>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-gray-500">Motivo para o Lote</label>
+                  <select
+                    value={loteMotivo}
+                    onChange={(e) => setLoteMotivo(e.target.value)}
+                    className="w-full bg-white border border-gray-300 text-xs font-bold text-gray-700 rounded-lg p-2 focus:outline-none focus:border-[#3483FA]"
+                  >
+                    {MOTIVOS_DISPONIVEIS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowModalLote(false)}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
+                  >
+                    Adicionar Lote
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
@@ -2350,6 +2483,107 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* POPUP DE CONFIRMAÇÃO DE FINALIZAÇÃO DE LISTA */}
+      <AnimatePresence>
+        {listaParaFinalizar && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setListaParaFinalizar(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden z-10"
+            >
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-emerald-50/50">
+                <div className="flex items-center gap-2 text-emerald-600">
+                  <CheckCircle2 className="w-6 h-6" />
+                  <h3 className="text-lg font-black uppercase tracking-tight">Finalizar Lista</h3>
+                </div>
+                <button 
+                  onClick={() => setListaParaFinalizar(null)}
+                  className="p-2 hover:bg-emerald-100 rounded-full text-emerald-400 transition-colors cursor-pointer"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 space-y-3">
+                  <p className="text-sm font-bold text-emerald-900 leading-relaxed">
+                    Deseja realmente finalizar esta lista de coleta? Ao confirmar, o arquivo CSV com todos os IDs limpos e corrigidos será baixado automaticamente.
+                  </p>
+                  <div className="pt-3 border-t border-emerald-200">
+                    <p className="text-[10px] uppercase font-black text-emerald-600 tracking-wider">Lista Selecionada:</p>
+                    <p className="text-base font-black text-emerald-800">{listaParaFinalizar.nome}</p>
+                    <p className="text-xs font-bold text-emerald-700/70">{listaParaFinalizar.data} • {listaParaFinalizar.itens.length} itens coletados</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">O que será feito?</h4>
+                  <ul className="space-y-2">
+                    <li className="flex gap-3 items-start">
+                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
+                        <Check className="w-3 h-3 text-emerald-600" />
+                      </div>
+                      <p className="text-xs font-bold text-gray-600 leading-snug">
+                        Todos os IDs serão limpos e corrigidos (removendo espaços extras e caracteres inválidos).
+                      </p>
+                    </li>
+                    <li className="flex gap-3 items-start">
+                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
+                        <Download className="w-3 h-3 text-emerald-600" />
+                      </div>
+                      <p className="text-xs font-bold text-gray-600 leading-snug">
+                        O relatório CSV final será gerado e baixado no seu dispositivo.
+                      </p>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-3">
+                <button
+                  onClick={() => setListaParaFinalizar(null)}
+                  className="flex-1 py-3 bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                >
+                  CANCELAR
+                </button>
+                <button
+                  onClick={() => handleFinalizarLista(listaParaFinalizar.id)}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  SIM, FINALIZAR E BAIXAR
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Overlay com Círculo Giratório ao abrir ou criar lista */}
+      {isLoadingLista && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-[9999] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 flex flex-col items-center gap-4 max-w-xs w-full text-center">
+            <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
+              <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+            </div>
+            <div>
+              <h4 className="text-base font-bold text-[#333333]">{loadingMessage}</h4>
+              <p className="text-xs text-gray-500 mt-1">Aguarde um instante...</p>
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 };

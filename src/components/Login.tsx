@@ -84,9 +84,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       <div className="bg-white rounded shadow-sm border border-gray-200 w-full max-w-[400px] overflow-hidden">
         {/* Header */}
         <div className="bg-[#F9F9F9] border-b border-gray-200 py-6 flex items-center justify-center">
-          <div className="w-12 h-12 bg-white rounded-full border-2 border-[#1E40AF] flex items-center justify-center relative overflow-hidden">
-             <div className="absolute inset-0 bg-[#FACC15] opacity-20"></div>
-             <Handshake className="w-7 h-7 text-[#1E40AF] relative z-10" />
+          <div className="w-16 h-16 bg-white rounded-full border border-gray-200 flex items-center justify-center relative overflow-hidden shadow-sm">
+             <img 
+               src="https://ok3static.oktacdn.com/fs/bco/1/fs01qr8d9ez620FXA1d8" 
+               alt="Logo" 
+               className="w-12 h-12 object-contain"
+               crossOrigin="anonymous"
+             />
           </div>
         </div>
         
