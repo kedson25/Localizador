@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Papa from 'papaparse';
 import { 
   Barcode, 
   CheckCircle2, 
@@ -30,7 +31,8 @@ import {
   Filter,
   CheckCheck,
   Zap,
-  Loader2
+  Loader2,
+  RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -159,6 +161,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [loadingMessage, setLoadingMessage] = useState('Carregando lista...');
   const [openingListaId, setOpeningListaId] = useState<string | null>(null);
 
+  // Modo Individual (Sessão isolada zerada que se unifica na principal ao fechar)
+  const [modoIndividual, setModoIndividual] = useState(false);
+  const [itensModoIndividual, setItensModoIndividual] = useState<ColetaItem[]>([]);
+  const individualInputRef = useRef<HTMLInputElement>(null);
+
+  // Ref para itens ativos como cache em memória ultra-rápido prevenindo race-conditions em bips velozes
+  const activeItensRef = useRef<ColetaItem[]>([]);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   const operanteNome = currentUser?.username || 'Usuário Atual';
@@ -187,20 +197,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     // Carregar base de refugo se existir
     const unsubRefugo = listenToRefugo((data) => {
       if (data && data.rawText) {
-        const lines = data.rawText.split('\n').map(l => l.trim()).filter(Boolean);
-        const parsedRows: RefugoRow[] = lines.map(line => {
-          const parts = line.split(/[,;\t]+/);
-          const id = parts[0]?.trim().toUpperCase();
-          if (!id) return null;
-          const rawFieldsObj: Record<string, string> = {};
-          parts.forEach((p, idx) => { rawFieldsObj[idx.toString()] = p; });
-          return {
-            id,
-            rota: parts[1]?.trim() || 'Sem Rota',
-            rawFields: rawFieldsObj
-          };
-        }).filter(Boolean) as RefugoRow[];
-        setRefugoBaseRows(parsedRows);
+        Papa.parse(data.rawText, {
+          skipEmptyLines: true,
+          complete: (results) => {
+            const parsedRows: RefugoRow[] = (results.data as any[]).map((row: any) => {
+              const values = Array.isArray(row) ? row : Object.values(row);
+              const idRaw = String(values[0] || '').trim().toUpperCase();
+              if (!idRaw || idRaw === 'ID' || idRaw === 'CODIGO' || idRaw === 'CÓDIGO' || idRaw === 'PACOTE' || idRaw === 'TRACKING' || idRaw === 'ENVIO') return null;
+              const rotaRaw = String(values[1] || 'Sem Rota').trim();
+              const rawFieldsObj: Record<string, string> = {};
+              values.forEach((p: any, idx: number) => { rawFieldsObj[idx.toString()] = String(p || ''); });
+              return {
+                id: idRaw,
+                rota: rotaRaw || 'Sem Rota',
+                rawFields: rawFieldsObj
+              };
+            }).filter(Boolean) as RefugoRow[];
+            setRefugoBaseRows(parsedRows);
+          }
+        });
+      } else {
+        setRefugoBaseRows([]);
       }
     });
 
@@ -211,6 +228,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   }, []);
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
+
+  // Sincronizar cache em memória da lista ativa para evitar race-conditions
+  useEffect(() => {
+    if (listaAtiva) {
+      activeItensRef.current = listaAtiva.itens || [];
+    } else {
+      activeItensRef.current = [];
+    }
+  }, [listaAtiva]);
 
   // Quando abre uma lista, ajusta a saída padrão para a Saída do Ciclo definida na lista
   useEffect(() => {
@@ -239,14 +265,62 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     navigate(`/listas/${id}`);
   };
 
-  const cleanDigits = (str: string) => str.replace(/\D/g, '');
+  const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
+
+  // Obter rota oficial baseada estritamente no arquivo de refugo atual
+  const getRotaItem = useCallback((item: { codigo: string; rota?: string }): string => {
+    if (refugoBaseRows && refugoBaseRows.length > 0) {
+      const cleanCod = (item.codigo || '').trim().toUpperCase();
+      const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+      const cleanCodDigits = cleanDigits(cleanCod);
+
+      const match = refugoBaseRows.find(r => {
+        if (!r.id) return false;
+        const rId = r.id.trim().toUpperCase();
+        if (rId === cleanCod) return true;
+        if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+        const rDigits = cleanDigits(rId);
+        return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+      });
+
+      if (match && match.rota && match.rota.trim() !== '' && match.rota.toLowerCase() !== 'sem rota' && match.rota !== '-') {
+        return match.rota.trim();
+      }
+    }
+    return (item.rota && item.rota.trim() !== '' && item.rota.toLowerCase() !== 'sem rota' && item.rota !== '-')
+      ? item.rota.trim()
+      : 'Sem Rota';
+  }, [refugoBaseRows]);
+
+  // Sincronizar automaticamente as rotas dos itens da lista ativa com o arquivo de refugo atual
+  useEffect(() => {
+    if (!listaAtiva || !refugoBaseRows || refugoBaseRows.length === 0) return;
+
+    let hasChanges = false;
+    const novosItens = listaAtiva.itens.map(item => {
+      const rotaAtualizada = getRotaItem(item);
+      if (rotaAtualizada !== 'Sem Rota' && item.rota !== rotaAtualizada) {
+        hasChanges = true;
+        return { ...item, rota: rotaAtualizada };
+      }
+      return item;
+    });
+
+    if (hasChanges) {
+      const updatedLista = { ...listaAtiva, itens: novosItens };
+      activeItensRef.current = novosItens;
+      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+      saveLista(updatedLista).catch(err => console.error('Erro ao sincronizar rotas do refugo:', err));
+    }
+  }, [refugoBaseRows, listaAtiva?.id, getRotaItem]);
 
   // Abrir Modal de Verificação de IDs do Ciclo
   const handleAbrirVerificar = () => {
     if (!listaAtiva) return;
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
     const mapInicial: Record<string, 'valido' | 'verificado' | 'em_rota'> = {};
-    listaAtiva.itens.forEach(item => {
-      if (!item.validado) {
+    listToVerify.forEach(item => {
+      if (modoIndividual || !item.validado) {
         mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
       }
     });
@@ -294,7 +368,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     playShortBeep();
 
-    const matchedItem = listaAtiva.itens.find(i => {
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const matchedItem = listToVerify.find(i => {
       if (i.codigo === cleanInput) return true;
       const iDigits = cleanDigits(i.codigo);
       return iDigits && cleanInputDigits && iDigits === cleanInputDigits;
@@ -335,7 +410,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const rawIds = verificarLoteText.split(/[\n\t,;]+/).map(i => i.trim()).filter(Boolean);
     let processados = 0;
 
-    const itensAtualizados = listaAtiva.itens.map(item => {
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+
+    const itensAtualizados = listToVerify.map(item => {
       if (item.validado) return item;
 
       const itemDigits = cleanDigits(item.codigo);
@@ -361,8 +438,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return item;
     });
 
-    const updatedLista = { ...listaAtiva, itens: itensAtualizados };
-    await saveLista(updatedLista);
+    if (modoIndividual) {
+      setItensModoIndividual(itensAtualizados);
+    } else {
+      const updatedLista = { ...listaAtiva, itens: itensAtualizados };
+      await saveLista(updatedLista);
+    }
     
     setShowVerificarLoteModal(false);
     setVerificarLoteText('');
@@ -373,7 +454,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleCopiarIdsVerificacao = () => {
     if (!listaAtiva) return;
-    const itensPendentes = listaAtiva.itens.filter(i => !i.validado);
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const itensPendentes = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
     if (itensPendentes.length === 0) {
       alert('Não há IDs pendentes para copiar.');
       return;
@@ -405,10 +487,124 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
   };
 
+  const handleCopiarIdsValidados = () => {
+    if (!listaAtiva) return;
+    const itensValidados = listaAtiva.itens.filter(i => i.validado);
+    if (itensValidados.length === 0) {
+      alert('Nenhum item validado encontrado nesta lista.');
+      return;
+    }
+    const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+    const texto = itensValidados.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
+    navigator.clipboard.writeText(texto).then(() => {
+      alert(`${itensValidados.length} IDs validados copiados com sucesso!`);
+    }).catch(err => {
+      console.error('Erro ao copiar:', err);
+    });
+  };
+
+  const handleBaixarListaSoIds = () => {
+    if (!listaAtiva) return;
+    exportarApenasIdsCSV(listaAtiva, listaAtiva.itens, 'IDs');
+  };
+
+  const handleEntrarModoIndividual = () => {
+    setModoIndividual(true);
+    setItensModoIndividual([]); // Sempre começa com lista zerada
+    setTimeout(() => {
+      individualInputRef.current?.focus();
+      inputRef.current?.focus();
+    }, 100);
+  };
+
+  const handleFecharEUnificarModoIndividual = async (itensCustom?: ColetaItem[] | React.MouseEvent) => {
+    if (!listaAtiva) {
+      setModoIndividual(false);
+      return;
+    }
+
+    const itensParaUsar = Array.isArray(itensCustom) ? itensCustom : itensModoIndividual;
+
+    if (itensParaUsar.length === 0) {
+      setModoIndividual(false);
+      return;
+    }
+
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : listaAtiva.itens;
+
+    // Mapa de itens existentes por código e dígitos limpos
+    const mapaItens = new Map<string, number>();
+    currentItens.forEach((item, index) => {
+      mapaItens.set(item.codigo, index);
+      const digits = cleanDigits(item.codigo);
+      if (digits) mapaItens.set(digits, index);
+    });
+
+    let novosItens = [...currentItens];
+    let countNovos = 0;
+    let countAtualizados = 0;
+
+    itensParaUsar.forEach(itemInd => {
+      const cleanCod = itemInd.codigo;
+      const cleanCodDigits = cleanDigits(cleanCod);
+
+      const idxExistente = mapaItens.has(cleanCod)
+        ? mapaItens.get(cleanCod)!
+        : (cleanCodDigits && mapaItens.has(cleanCodDigits) ? mapaItens.get(cleanCodDigits)! : -1);
+
+      if (idxExistente !== -1 && idxExistente < novosItens.length) {
+        novosItens[idxExistente] = {
+          ...novosItens[idxExistente],
+          validado: itemInd.validado !== undefined ? itemInd.validado : true,
+          responsavel: operanteNome,
+          scannedAt: itemInd.scannedAt || new Date().toLocaleString('pt-BR')
+        };
+        countAtualizados++;
+      } else {
+        const novoItem: ColetaItem = {
+          ...itemInd,
+          validado: itemInd.validado !== undefined ? itemInd.validado : true,
+          responsavel: operanteNome
+        };
+        novosItens = [novoItem, ...novosItens];
+        mapaItens.set(cleanCod, 0);
+        if (cleanCodDigits) mapaItens.set(cleanCodDigits, 0);
+        countNovos++;
+      }
+    });
+
+    activeItensRef.current = novosItens;
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+    await saveLista(updatedLista);
+
+    alert(`${itensParaUsar.length} IDs validados foram unificados com a lista principal com sucesso! (${countAtualizados} validados, ${countNovos} novos)`);
+    setModoIndividual(false);
+    setItensModoIndividual([]);
+  };
+
+  const handleCancelarModoIndividual = () => {
+    if (itensModoIndividual.length > 0) {
+      if (!confirm('Deseja fechar o Modo Individual sem unificar os IDs bipados nesta sessão?')) {
+        return;
+      }
+    }
+    setModoIndividual(false);
+    setItensModoIndividual([]);
+  };
+
+  const handleRemoverItemIndividual = (itemId: string) => {
+    setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
+  };
+
   const handleConcluirVerificacao = async () => {
     if (!listaAtiva) return;
 
-    const itensMantidos = listaAtiva.itens.filter(i => verificarMap[i.id] !== 'em_rota');
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+
+    const itensMantidos = listToVerify.filter(i => verificarMap[i.id] !== 'em_rota');
     
     const itensAtualizados = itensMantidos.map(i => {
       // Se estava no mapa de verificação (ou seja, não estava validado antes) e não foi removido, agora está validado.
@@ -418,9 +614,45 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return i; // Mantém os já validados intactos
     });
 
-    const updatedLista = { ...listaAtiva, itens: itensAtualizados };
+    if (modoIndividual) {
+      setShowVerificarModal(false);
+      await handleFecharEUnificarModoIndividual(itensAtualizados);
+    } else {
+      activeItensRef.current = itensAtualizados;
+      const updatedLista = { ...listaAtiva, itens: itensAtualizados };
+      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+      await saveLista(updatedLista);
+      setShowVerificarModal(false);
+    }
+  };
+
+  // Alternar validação de um item individualmente (Validado / Não Validado)
+  const handleToggleItemValidado = async (itemId: string) => {
+    if (!listaAtiva) return;
+
+    if (modoIndividual) {
+      setItensModoIndividual(prev => prev.map(i => {
+        if (i.id === itemId) return { ...i, validado: !i.validado };
+        return i;
+      }));
+      return;
+    }
+
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : listaAtiva.itens;
+
+    const novosItens = currentItens.map(i => {
+      if (i.id === itemId) {
+        return { ...i, validado: !i.validado };
+      }
+      return i;
+    });
+
+    activeItensRef.current = novosItens;
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
     await saveLista(updatedLista);
-    setShowVerificarModal(false);
   };
 
 
@@ -503,23 +735,79 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     playShortBeep();
 
     // Tentar localizar se existe na base de refugo para puxar a rota exata
+    const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
     const refugoMatch = refugoBaseRows.find(r => {
-      if (r.id === cleanInput) return true;
-      const rDigits = cleanDigits(r.id);
-      return rDigits && cleanInputDigits && rDigits === cleanInputDigits;
+      if (!r.id) return false;
+      const rId = r.id.trim().toUpperCase();
+      if (rId === cleanInput) return true;
+      if (rId.replace(/m$/i, '') === cleanInputWithoutM) return true;
+      const rDigits = cleanDigits(rId);
+      return Boolean(rDigits && cleanInputDigits && rDigits === cleanInputDigits);
     });
 
-    const rotaItemFinal = refugoMatch ? refugoMatch.rota : 'Sem Rota';
+    const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+      ? refugoMatch.rota.trim()
+      : 'Sem Rota';
 
     // Usar obrigatoriamente a saída do ciclo configurada
     const saidaItemFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
 
+    // Se estiver no Modo Individual, opera na lista zerada da sessão individual
+    if (modoIndividual) {
+      const jaExisteNaSessao = itensModoIndividual.some(
+        item => item.codigo === cleanInput || (cleanDigits(item.codigo) === cleanInputDigits && cleanInputDigits !== '')
+      );
+
+      if (jaExisteNaSessao) {
+        setLastScanResult({
+          status: 'success',
+          code: cleanInput,
+          message: `ID já bipado e validado nesta sessão individual!`
+        });
+      } else {
+        const itemPrincipal = listaAtiva.itens.find(
+          item => item.codigo === cleanInput || (cleanDigits(item.codigo) === cleanInputDigits && cleanInputDigits !== '')
+        );
+
+        const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
+
+        const novoItemIndividual: ColetaItem = {
+          id: 'ind-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+          codigo: cleanInput,
+          rota: rotaParaUsar,
+          saida: saidaItemFinal,
+          motivo: selectedMotivo || itemPrincipal?.motivo || 'Verificado no Modo Individual',
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
+          validado: true
+        };
+
+        setItensModoIndividual(prev => [novoItemIndividual, ...prev]);
+        setLastScanResult({
+          status: 'success',
+          code: cleanInput,
+          message: `ID validado na sessão individual! (Rota: ${novoItemIndividual.rota})`
+        });
+      }
+
+      setBipInput('');
+      individualInputRef.current?.focus();
+      inputRef.current?.focus();
+      return;
+    }
+
+    // Usar activeItensRef.current para prevenir race-conditions em bips rápidos
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : listaAtiva.itens;
+
     // Verificar se o item já existe nesta lista
-    const idx = listaAtiva.itens.findIndex(
+    const idx = currentItens.findIndex(
       item => item.codigo === cleanInput || (cleanDigits(item.codigo) === cleanInputDigits && cleanInputDigits !== '')
     );
 
-    let novosItens = [...listaAtiva.itens];
+    let novosItens = [...currentItens];
 
     if (idx !== -1) {
       // Atualizar item existente
@@ -547,7 +835,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         motivo: selectedMotivo,
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
-        grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
+        grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
+        validado: false
       };
       novosItens = [novoItem, ...novosItens];
       setLastScanResult({
@@ -557,8 +846,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       });
     }
 
+    // Salvar no cache em memória imediatamente
+    activeItensRef.current = novosItens;
+
     const updatedLista = { ...listaAtiva, itens: novosItens };
-    await saveLista(updatedLista);
+    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+    saveLista(updatedLista).catch(err => console.error('Erro ao salvar no banco:', err));
 
     setBipInput('');
     inputRef.current?.focus();
@@ -568,15 +861,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleMudarMotivoItem = async (novoMotivoEscolha: string) => {
     if (!itemParaMudarMotivo || !listaAtiva) return;
 
-    const novosItens = listaAtiva.itens.map(item => {
-      if (item.id === itemParaMudarMotivo.id) {
-        return { ...item, motivo: novoMotivoEscolha };
-      }
-      return item;
-    });
+    if (modoIndividual) {
+      setItensModoIndividual(prev => prev.map(item => {
+        if (item.id === itemParaMudarMotivo.id) {
+          return { ...item, motivo: novoMotivoEscolha };
+        }
+        return item;
+      }));
+    } else {
+      const novosItens = listaAtiva.itens.map(item => {
+        if (item.id === itemParaMudarMotivo.id) {
+          return { ...item, motivo: novoMotivoEscolha };
+        }
+        return item;
+      });
 
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    await saveLista(updatedLista);
+      const updatedLista = { ...listaAtiva, itens: novosItens };
+      await saveLista(updatedLista);
+    }
 
     setItemParaMudarMotivo(null);
   };
@@ -652,9 +954,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleExcluirSelecionadosEmMassa = async () => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
     if (window.confirm(`Confirma a exclusão de ${selectedItemIds.length} item(ns) selecionado(s)?`)) {
-      const novosItens = listaAtiva.itens.filter(i => !selectedItemIds.includes(i.id));
-      const updatedLista = { ...listaAtiva, itens: novosItens };
-      await saveLista(updatedLista);
+      if (modoIndividual) {
+        setItensModoIndividual(prev => prev.filter(i => !selectedItemIds.includes(i.id)));
+      } else {
+        const novosItens = listaAtiva.itens.filter(i => !selectedItemIds.includes(i.id));
+        activeItensRef.current = novosItens;
+        const updatedLista = { ...listaAtiva, itens: novosItens };
+        setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+        await saveLista(updatedLista);
+      }
       setSelectedItemIds([]);
     }
   };
@@ -710,6 +1018,56 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const saidaCicloFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
     const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
 
+    if (modoIndividual) {
+      const codigosSet = new Set(itensModoIndividual.map(i => i.codigo));
+      const novosIndividuais: ColetaItem[] = [];
+
+      codigos.forEach(cod => {
+        let processedCod = cod.replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4').replace(/^[^0-9a-zA-Z]+/, '');
+        const match47 = processedCod.match(/(47\d+)/);
+        if (match47) processedCod = match47[1];
+        else processedCod = processedCod.replace(/m$/i, '');
+
+        const cleanCod = processedCod.toUpperCase();
+        if (!cleanCod || codigosSet.has(cleanCod)) return;
+        codigosSet.add(cleanCod);
+
+        const cleanCodDigits = cleanDigits(cleanCod);
+        const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+        const refugoMatch = refugoBaseRows.find(r => {
+          if (!r.id) return false;
+          const rId = r.id.trim().toUpperCase();
+          if (rId === cleanCod) return true;
+          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+          const rDigits = cleanDigits(rId);
+          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+        });
+        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+          ? refugoMatch.rota.trim()
+          : 'Sem Rota';
+        const itemPrincipal = listaAtiva.itens.find(i => i.codigo === cleanCod || (cleanDigits(i.codigo) === cleanCodDigits && cleanCodDigits !== ''));
+        const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
+
+        novosIndividuais.push({
+          id: 'ind-lote-' + Date.now() + '-' + Math.floor(Math.random() * 100000),
+          codigo: cleanCod,
+          rota: rotaParaUsar,
+          saida: saidaCicloFinal,
+          motivo: motivoFinal,
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          validado: true
+        });
+      });
+
+      setItensModoIndividual(prev => [...novosIndividuais, ...prev]);
+      setIsImporting(false);
+      setShowModalLote(false);
+      setLoteText('');
+      alert(`${novosIndividuais.length} IDs adicionados e validados na sessão individual!`);
+      return;
+    }
+
     const novosItensMap = new Map<string, ColetaItem>();
     listaAtiva.itens.forEach(i => novosItensMap.set(i.codigo, i));
 
@@ -734,13 +1092,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
         const cleanCod = processedCod.toUpperCase();
         const cleanCodDigits = cleanDigits(cleanCod);
+        const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
 
         const refugoMatch = refugoBaseRows.find(r => {
-          if (r.id === cleanCod) return true;
-          const rDigits = cleanDigits(r.id);
-          return rDigits && cleanCodDigits && rDigits === cleanCodDigits;
+          if (!r.id) return false;
+          const rId = r.id.trim().toUpperCase();
+          if (rId === cleanCod) return true;
+          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+          const rDigits = cleanDigits(rId);
+          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
         });
-        const rotaItemFinal = refugoMatch ? refugoMatch.rota : 'Sem Rota';
+        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+          ? refugoMatch.rota.trim()
+          : 'Sem Rota';
 
         if (novosItensMap.has(cleanCod)) {
           const item = novosItensMap.get(cleanCod)!;
@@ -793,34 +1157,36 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setListaParaExcluir(null);
   };
 
+  const handleReabrirLista = async (listaId: string) => {
+    const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
+    if (lista) {
+      const updatedLista: ColetaLista = { ...lista, status: 'em_andamento' };
+      setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
+      await saveLista(updatedLista);
+    }
+  };
+
   const handleFinalizarLista = async (listaId: string) => {
-    const lista = listas.find(l => l.id === listaId);
+    const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
       const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
+      setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
       await saveLista(updatedLista);
 
       if (lista.itens.length > 0) {
-        const cleanId = (code: string) => {
+        const cleanIdOnly = (code: string) => {
           if (!code) return '';
-          return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, ' ');
+          return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
         };
 
-        const header = ['ID', 'ROTA', 'SAIDA', 'MOTIVO', 'GRUPO'].join(',');
-        const rowsCsv = lista.itens.map(item => {
-          const nomeGrupo = lista.grupos?.find(g => g.id === item.grupoId)?.nome || '';
-          const cleanedCode = cleanId(item.codigo);
-          const cleanedRota = cleanId(item.rota || '');
-          const cleanedSaida = cleanId(lista.saidaPadrao || item.saida || '');
-          const cleanedMotivo = cleanId(item.motivo || '');
-          const cleanedGrupo = cleanId(nomeGrupo);
-          return `"${cleanedCode}","${cleanedRota}","${cleanedSaida}","${cleanedMotivo}","${cleanedGrupo}"`;
-        });
-        const csvContent = [header, ...rowsCsv].join('\n');
+        // CSV contendo estritamente só com os IDs e mais nada
+        const rowsCsv = lista.itens.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
+        const csvContent = rowsCsv.join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}_Finalizada_Limpa.csv`);
+        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}_IDs.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -832,9 +1198,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleRemoverItem = async (itemId: string) => {
     if (!listaAtiva) return;
-    const novosItens = listaAtiva.itens.filter(i => i.id !== itemId);
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    await saveLista(updatedLista);
+    if (modoIndividual) {
+      setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
+    } else {
+      const novosItens = listaAtiva.itens.filter(i => i.id !== itemId);
+      activeItensRef.current = novosItens;
+      const updatedLista = { ...listaAtiva, itens: novosItens };
+      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+      await saveLista(updatedLista);
+    }
   };
 
   const handleCopy = (id: string) => {
@@ -843,19 +1215,29 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const exportListaCSV = (lista: ColetaLista) => {
-    if (lista.itens.length === 0) return;
-    const csvContent = "CODIGO,ROTA,SAIDA_CICLO,MOTIVO,DATA_HORA,CRIADO_POR\n" + 
-      lista.itens.map(i => `${i.codigo},${i.rota},${i.saida},${i.motivo},${i.scannedAt},${i.responsavel || ''}`).join("\n");
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const exportarApenasIdsCSV = (lista: ColetaLista, itensCustom?: ColetaItem[], sufixoNome?: string) => {
+    const itens = itensCustom || lista.itens;
+    if (itens.length === 0) {
+      alert('Não há itens para exportar.');
+      return;
+    }
+    const cleanIdOnly = (code: string) => {
+      if (!code) return '';
+      return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+    };
+    const rows = itens.map(i => cleanIdOnly(i.codigo)).filter(Boolean);
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `${lista.nome.toLowerCase().replace(/\s+/g, '_')}.csv`);
+    link.setAttribute("download", `${lista.nome.toLowerCase().replace(/\s+/g, '_')}_${sufixoNome || 'IDs'}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const exportListaCSV = (lista: ColetaLista) => {
+    exportarApenasIdsCSV(lista);
   };
 
   // -------------------------------------------------------------
@@ -1043,10 +1425,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <button
                             onClick={() => exportListaCSV(lista)}
                             className="p-1.5 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors border border-gray-200 cursor-pointer"
-                            title="Exportar CSV"
+                            title="Exportar CSV (Apenas IDs)"
                           >
                             <Download className="w-4 h-4" />
                           </button>
+                          {lista.status === 'finalizada' && (
+                            <button
+                              onClick={() => handleReabrirLista(lista.id)}
+                              className="p-1.5 hover:bg-amber-50 text-amber-600 rounded-lg transition-colors border border-amber-200 cursor-pointer"
+                              title="Reabrir Lista Finalizada"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={() => handleExcluirLista(lista.id)}
                             className="p-1.5 hover:bg-red-50 text-red-600 rounded-lg transition-colors border border-red-200 cursor-pointer"
@@ -1242,25 +1633,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     return 'bg-blue-50 text-blue-700 border-blue-200';
   };
 
-  const totalColetados = listaAtiva.itens.length;
+  const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+  const totalColetados = listToVerify.length;
 
   // Saídas presentes apenas nos IDs que realmente foram inseridos/bipados
-  const saídasPresentes: string[] = Array.from(new Set(listaAtiva.itens.map(i => i.saida).filter(Boolean)));
+  const saídasPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.saida).filter(Boolean)));
   const contagemSaidas = saídasPresentes.reduce((acc, s: string) => {
-    acc[s] = listaAtiva.itens.filter(i => i.saida === s).length;
+    acc[s] = listToVerify.filter(i => i.saida === s).length;
     return acc;
   }, {} as Record<string, number>);
 
   // Motivos presentes apenas nos IDs que realmente foram inseridos/bipados
-  const motivosPresentes: string[] = Array.from(new Set(listaAtiva.itens.map(i => i.motivo).filter(Boolean)));
+  const motivosPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.motivo).filter(Boolean)));
   const contagemMotivos = motivosPresentes.reduce((acc, m: string) => {
-    acc[m] = listaAtiva.itens.filter(i => i.motivo === m).length;
+    acc[m] = listToVerify.filter(i => i.motivo === m).length;
     return acc;
   }, {} as Record<string, number>);
 
   // Contagem de bips por operador na lista ativa (reflete em tempo real para todos)
   const contagemBips: Record<string, number> = {};
-  listaAtiva.itens.forEach(item => {
+  listToVerify.forEach(item => {
     const op = item.responsavel || listaAtiva.responsavel || 'Operador';
     contagemBips[op] = (contagemBips[op] || 0) + 1;
   });
@@ -1283,13 +1675,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     { id: 'usr-1', username: operanteNome, email: '', isAdmin: true, isApproved: true, allowedGroups: [] }
   ];
 
-  const filteredItems = listaAtiva.itens.filter(item => {
+  const meusItensCount = listToVerify.filter(i => (i.responsavel || listaAtiva.responsavel) === operanteNome).length;
+
+  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+
+  const filteredItems = itemsFiltradosBase.filter(item => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
     const nomeGrupo = grupo ? grupo.nome.toLowerCase() : '';
+    const rotaCalculada = getRotaItem(item).toLowerCase();
     return item.codigo.toLowerCase().includes(term) || 
-           item.rota.toLowerCase().includes(term) || 
+           rotaCalculada.includes(term) || 
            item.motivo.toLowerCase().includes(term) || 
            (item.saida && item.saida.toLowerCase().includes(term)) ||
            (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
@@ -1315,6 +1712,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         <span className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
           {listaAtiva?.nome || 'Coleta em Andamento'}
         </span>
+        {listaAtiva?.status === 'finalizada' ? (
+          <div className="flex items-center gap-2">
+            <span className="bg-emerald-100 text-emerald-800 text-[11px] font-black px-2.5 py-1 rounded-lg border border-emerald-300 uppercase">
+              Finalizada
+            </span>
+            <button
+              onClick={() => handleReabrirLista(listaAtiva.id)}
+              className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold shadow-sm transition-colors cursor-pointer"
+              title="Reabrir Lista de Coleta"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reabrir Lista
+            </button>
+          </div>
+        ) : (
+          <span className="bg-blue-50 text-[#3483FA] text-[11px] font-black px-2.5 py-1 rounded-lg border border-blue-200 uppercase">
+            Em Andamento
+          </span>
+        )}
         {listaAtiva && (currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) && (
           <button
             onClick={() => setShowTransferirModal(true)}
@@ -1416,41 +1832,187 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
           <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
             
-            {/* Header da Tabela + Busca + Ações de Seleção Rápida */}
-            <div className="flex flex-col gap-3 pb-3 border-b border-gray-100">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <h3 className="font-bold text-base text-[#333333]">Lista</h3>
-                  <button
-                    onClick={() => setShowModalLote(true)}
-                    className="px-2.5 py-1 bg-[#3483FA]/10 hover:bg-[#3483FA]/20 text-[#3483FA] rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <ListPlus className="w-3.5 h-3.5" />
-                    Colar Lote
-                  </button>
-                  <button
-                    onClick={handleCopiarIdsComMotivoESaida}
-                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title="Copiar lista com IDs, saídas e motivos"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    Copiar Lista
-                  </button>
+            {modoIndividual ? (
+              <div className="space-y-4 animate-in fade-in">
+                {/* Header do Modo Individual (Sem descrição) */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-blue-50/80 border border-blue-200 rounded-xl p-3.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold">
+                      <UserIcon className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-sm text-[#333333]">Modo Individual</h3>
+                        <span className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded-full font-bold">
+                          {operanteNome}
+                        </span>
+                      </div>
+                      <p className="text-xs text-blue-800 font-bold mt-0.5">
+                        {itensModoIndividual.length} {itensModoIndividual.length === 1 ? 'pacote validado' : 'pacotes validados'} nesta sessão
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setShowModalLote(true)}
+                      className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <ListPlus className="w-3.5 h-3.5 text-blue-600" />
+                      Colar Lote
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (itensModoIndividual.length === 0) {
+                          alert('Nenhum ID nesta sessão para copiar.');
+                          return;
+                        }
+                        const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+                        const texto = itensModoIndividual.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
+                        navigator.clipboard.writeText(texto).then(() => {
+                          alert(`${itensModoIndividual.length} IDs desta sessão copiados!`);
+                        });
+                      }}
+                      className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Copiar IDs
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFecharEUnificarModoIndividual}
+                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Fechar e Unificar com a Principal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelarModoIndividual}
+                      className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                      title="Fechar sem unificar"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Buscar ID, rota, motivo ou grupo..."
-                    className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:border-[#3483FA] w-full sm:w-56"
-                  />
+                {/* Input de Bipagem Rápida no Modo Individual */}
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Barcode className="w-4 h-4 absolute left-3 top-3 text-[#3483FA]" />
+                      <input
+                        ref={individualInputRef}
+                        type="text"
+                        value={bipInput}
+                        onChange={(e) => setBipInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleBip(e);
+                          }
+                        }}
+                        placeholder="Bipar ou digitar ID do pacote para validar..."
+                        className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-xl text-sm font-mono font-bold focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-[#3483FA]/20"
+                        autoFocus
+                      />
+                    </div>
+                    <select
+                      value={selectedMotivo}
+                      onChange={(e) => setSelectedMotivo(e.target.value)}
+                      className="px-3 py-2 bg-white border border-gray-300 text-xs font-bold text-gray-700 rounded-xl focus:outline-none focus:border-[#3483FA] max-w-[150px]"
+                    >
+                      <option value="">Motivo Automático</option>
+                      {MOTIVOS_DISPONIVEIS.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleBip}
+                      disabled={!bipInput.trim()}
+                      className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
+                    >
+                      Bipar / Validar
+                    </button>
+                  </div>
                 </div>
+
               </div>
+            ) : (
+              <div className="space-y-4 animate-in fade-in">
+                {/* Header da Tabela + Busca + Ações de Seleção Rápida */}
+                <div className="flex flex-col gap-3 pb-3 border-b border-gray-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h3 className="font-bold text-base text-[#333333]">Lista</h3>
 
-              {/* BARRA DE ATALHOS DE SELEÇÃO RÁPIDA */}
+                      {/* BOTÃO INDIVIDUAL (Abre sessão zerada para bipagem e validação) */}
+                      <button
+                        type="button"
+                        onClick={handleEntrarModoIndividual}
+                        className="px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-sm bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100"
+                        title="Abrir Modo Individual (sessão zerada para bipagem e validação)"
+                      >
+                        <UserIcon className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Modo Individual</span>
+                      </button>
+
+                      <button
+                        onClick={() => setShowModalLote(true)}
+                        className="px-2.5 py-1.5 bg-[#3483FA]/10 hover:bg-[#3483FA]/20 text-[#3483FA] rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <ListPlus className="w-3.5 h-3.5" />
+                        Colar Lote
+                      </button>
+
+                      {/* COPIAR LISTA SÓ IDS VALIDADOS */}
+                      <button
+                        onClick={handleCopiarIdsValidados}
+                        className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                        title="Copiar para a área de transferência apenas os IDs validados (um por linha)"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Copiar IDs Validados
+                      </button>
+
+                      {/* BAIXAR LISTA (SÓ IDS) */}
+                      <button
+                        onClick={handleBaixarListaSoIds}
+                        className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Baixar lista contendo apenas os IDs (um por linha)"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Baixar Lista
+                      </button>
+
+                      {/* COPIAR COM DETALHES (MOTIVO E SAÍDA) */}
+                      <button
+                        onClick={handleCopiarIdsComMotivoESaida}
+                        className="px-2.5 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-500 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Copiar lista completa com IDs, saídas e motivos"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        Copiar com Detalhes
+                      </button>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
+                      <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Buscar ID, rota, motivo ou grupo..."
+                        className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:border-[#3483FA] w-full sm:w-56"
+                      />
+                    </div>
+                  </div>
+
+                {/* BARRA DE ATALHOS DE SELEÇÃO RÁPIDA */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-gray-400 font-semibold text-[11px] flex items-center gap-1 mr-1">
@@ -1480,6 +2042,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </div>
               </div>
             </div>
+            </div>
+            )}
 
             {/* PAINEL FLUTUANTE DE AÇÃO EM MASSA (QUANDO HÁ ITENS SELECIONADOS) */}
             {selectedItemIds.length > 0 && (
@@ -1573,6 +2137,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       </th>
                       <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-12 bg-gray-100">#</th>
                       <th className="py-2 px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
+                      {listaAtiva.tipo === 'grupos' && (
+                        <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-28 bg-gray-100 text-gray-700">Grupo</th>
+                      )}
+                      <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-28 bg-gray-100">Status</th>
                       <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-36 bg-gray-100">Bipado por</th>
                       <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-24 bg-gray-100">Rota</th>
                       <th className="py-2 px-2 text-center border-b border-r border-gray-200 w-20 bg-gray-100">Saída</th>
@@ -1585,6 +2153,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     {filteredItems.map((item, idx) => {
                       const isSelected = selectedItemIds.includes(item.id);
                       const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
+                      const itemRota = getRotaItem(item);
+                      const hasRota = itemRota && itemRota.trim() !== '' && itemRota.toLowerCase() !== 'sem rota' && itemRota !== '-';
                       return (
                         <React.Fragment key={`frag-${item.id}-${idx}`}>
                         <tr 
@@ -1605,7 +2175,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <td className="py-1 px-2 text-center text-gray-500 font-bold w-12 border-r border-gray-200">{filteredItems.length - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-2 text-left font-bold text-[#333333] cursor-pointer hover:text-[#3483FA] transition-colors border-r border-gray-200"
+                            className="py-1 px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
                             <div className="flex items-center gap-1.5 font-mono text-xs">
@@ -1613,52 +2183,106 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                               <span>{item.codigo}</span>
                             </div>
                           </td>
+
+                          {/* COLUNA DE GRUPO (Se tipo = grupos) - NEUTRA SEM COR */}
+                          {listaAtiva.tipo === 'grupos' && (
+                            <td 
+                              onClick={() => setItemParaMudarMotivo(item)}
+                              className="py-1 px-2 text-center border-r border-gray-200 w-28 cursor-pointer"
+                            >
+                              {(() => {
+                                const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
+                                return grupo ? (
+                                  <span className="text-gray-700 font-semibold text-xs truncate block max-w-[105px] mx-auto">
+                                    {grupo.nome}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400 text-xs italic">Sem Grupo</span>
+                                );
+                              })()}
+                            </td>
+                          )}
+
+                          {/* COLUNA DE STATUS DE VALIDAÇÃO - TEM COR */}
+                          <td className="py-1 px-2 text-center border-r border-gray-200 w-28">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleItemValidado(item.id)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
+                                item.validado
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                                  : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                              }`}
+                              title="Clique para alternar entre Validado e Pendente"
+                            >
+                              {item.validado ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Validado</span>
+                                </>
+                              ) : (
+                                <>
+                                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                                  <span>Pendente</span>
+                                </>
+                              )}
+                            </button>
+                          </td>
+
+                          {/* COLUNA BIPADO POR - NEUTRA SEM COR */}
                           <td 
                             className="py-1 px-2 text-center border-r border-gray-200 w-36"
                           >
                             <span 
-                              className={`inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold tracking-tight border ${
-                                (item.responsavel || listaAtiva.responsavel) === operanteNome
-                                  ? 'bg-blue-50 text-[#3483FA] border-blue-200 font-extrabold'
-                                  : 'bg-gray-100 text-gray-700 border-gray-200'
-                              }`}
+                              className="text-gray-700 font-medium text-xs truncate max-w-[120px] inline-flex items-center justify-center gap-1"
                               title={`Bipado por: ${item.responsavel || listaAtiva.responsavel || 'Operador'}`}
                             >
-                              <UserIcon className="w-2.5 h-2.5 opacity-60 flex-shrink-0" />
-                              <span className="truncate max-w-[110px]">{item.responsavel || listaAtiva.responsavel || 'Operador'}</span>
+                              <UserIcon className="w-2.5 h-2.5 text-gray-400 flex-shrink-0" />
+                              <span className="truncate">{item.responsavel || listaAtiva.responsavel || 'Operador'}</span>
                             </span>
                           </td>
+
+                          {/* COLUNA ROTA - BASEADA NO ARQUIVO DE REFUGO ATUAL, SÓ TEM COR SE TIVER ROTA */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className={`py-1 px-2 text-center font-bold cursor-pointer w-24 border-r border-gray-200 ${
-                              !item.rota || item.rota.trim() === '' || item.rota.toLowerCase() === 'sem rota' || item.rota === '-'
-                                ? 'text-red-600 bg-red-50/50'
-                                : 'text-[#3483FA]'
-                            }`}
+                            className="py-1 px-2 text-center cursor-pointer w-24 border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            {item.rota && item.rota.trim() !== '' ? item.rota : 'Sem Rota'}
+                            {hasRota ? (
+                              <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-bold text-xs inline-block shadow-2xs">
+                                {itemRota}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 text-xs italic">
+                                Sem Rota
+                              </span>
+                            )}
                           </td>
+
+                          {/* COLUNA SAÍDA - NEUTRA SEM COR */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
                             className="py-1 px-2 text-center cursor-pointer w-20 border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
-                            <span className="bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 font-black text-[10px] uppercase tracking-tighter">
+                            <span className="text-gray-600 font-semibold text-xs uppercase">
                               {getShortSaida(item.saida)}
                             </span>
                           </td>
-                          {/* ÁREA CLICÁVEL DO MOTIVO - ABRE GAVETA DE ALTERAÇÃO INDIVIDUAL */}
+
+                          {/* COLUNA MOTIVO - TEM COR */}
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
                             className="py-1 px-2 text-center cursor-pointer w-48 border-r border-gray-200"
                             title="Clique para abrir a gaveta e alterar o motivo"
                           >
-                            <div className={`${getMotivoStyle(item.motivo)} border px-2 py-0.5 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs group-hover:shadow mx-auto uppercase tracking-wide`}>
+                            <div className={`${getMotivoStyle(item.motivo)} border px-2 py-0.5 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs group-hover:shadow mx-auto uppercase tracking-wide rounded`}>
                               <span>{item.motivo || 'Pendente'}</span>
                               <Edit2 className="w-3 h-3 opacity-50 group-hover:opacity-100" />
                             </div>
                           </td>
+
+                          {/* COLUNA DATA / HORA - NEUTRA */}
                           <td className="py-1 px-2 text-center text-gray-500 text-[11px] w-40 border-r border-gray-200">
                             {item.scannedAt}
                           </td>
@@ -1683,7 +2307,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         </tr>
                         {isEditingMotivo && (
                           <tr className="bg-blue-50/30 border-b border-gray-300 shadow-inner">
-                            <td colSpan={9} className="p-0">
+                            <td colSpan={listaAtiva.tipo === 'grupos' ? 11 : 10} className="p-0">
                               <div className="px-6 py-4 border-l-4 border-[#3483FA]">
                                 <div className="flex flex-col xl:flex-row gap-6 items-start xl:items-center justify-between">
                                   <div className="flex-1 space-y-2 w-full max-w-md">
@@ -2040,7 +2664,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </form>
 
               {(() => {
-                const itensNaoValidados = listaAtiva.itens.filter(i => !i.validado);
+                const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+                const itensNaoValidados = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
                 const totalItens = itensNaoValidados.length;
                 if (totalItens === 0) {
                   return (
@@ -2081,20 +2706,22 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             const text = itensExibidos.map(i => i.codigo).join('\n');
                             navigator.clipboard.writeText(text).then(() => setCopiedPage(paginaAtualSafe));
                           }}
-                          className={`px-3 py-1.5 border rounded-md shadow-sm flex items-center gap-2 cursor-pointer font-black transition-colors ${
+                          className={`px-4 py-1.5 rounded-lg shadow-sm flex items-center gap-2 cursor-pointer font-black text-xs transition-all active:scale-95 ${
                             copiedPage === paginaAtualSafe 
-                              ? 'bg-emerald-50 text-emerald-600 border-emerald-300 hover:bg-emerald-100'
-                              : 'bg-white border-[#3483FA] text-[#3483FA] hover:bg-blue-50'
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md ring-2 ring-emerald-300'
+                              : 'bg-[#3483FA] hover:bg-blue-600 text-white'
                           }`}
-                          title="Copiar IDs"
+                          title="Copiar IDs para validação no sistema"
                         >
                           {copiedPage === paginaAtualSafe ? (
                             <>
-                              <CheckCircle2 className="w-4 h-4" /> Copiado
+                              <CheckCircle2 className="w-4 h-4 text-white" />
+                              <span>Copiado</span>
                             </>
                           ) : (
                             <>
-                              <Barcode className="w-4 h-4" /> Copiar {itensExibidos.length}
+                              <Copy className="w-4 h-4 text-white" />
+                              <span>Copiar {itensExibidos.length}</span>
                             </>
                           )}
                         </button>
