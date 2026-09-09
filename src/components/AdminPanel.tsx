@@ -3,7 +3,8 @@ import { User, getAllUsers, updateUserAdminStatus, getUserById } from '../lib/au
 import { 
   Shield, ShieldAlert, CheckCircle, XCircle, Users, Activity, Settings2, 
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
-  AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check 
+  AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check,
+  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { listenToListas, saveLista } from '../lib/firebase';
@@ -21,7 +22,81 @@ interface AdminPanelProps {
   currentUser?: User | null;
 }
 
+function parseToYYYYMMDD(dateStr: string | undefined): string | null {
+  if (!dateStr) return null;
+  const trimmed = dateStr.trim();
+
+  // Se já for YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Se for DD/MM/YYYY ou DD-MM-YYYY
+  const brMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
+  if (brMatch) {
+    const day = brMatch[1].padStart(2, '0');
+    const month = brMatch[2].padStart(2, '0');
+    const year = brMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Tenta buscar padrão DD/MM/YYYY dentro do texto (ex: "Saída PM - 08/09/2026")
+  const brInTextMatch = trimmed.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (brInTextMatch) {
+    const day = brInTextMatch[1].padStart(2, '0');
+    const month = brInTextMatch[2].padStart(2, '0');
+    const year = brInTextMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
+}
+
+// Gera string de data em fuso horário local no formato YYYY-MM-DD
+function getLocalDateIso(offsetDays = 0): string {
+  const d = new Date();
+  if (offsetDays !== 0) {
+    d.setDate(d.getDate() + offsetDays);
+  }
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Extrai a data ISO de uma lista de forma resiliente
+function getListDateIso(l: ColetaLista): string | null {
+  if (!l) return null;
+  const dateFromData = parseToYYYYMMDD(l.data);
+  if (dateFromData) return dateFromData;
+
+  const dateFromNome = parseToYYYYMMDD(l.nome);
+  if (dateFromNome) return dateFromNome;
+
+  if ((l as any).createdAt) {
+    const dateFromCreated = parseToYYYYMMDD((l as any).createdAt);
+    if (dateFromCreated) return dateFromCreated;
+  }
+
+  if (l.id && l.id.startsWith('lista-')) {
+    const ts = parseInt(l.id.replace('lista-', ''), 10);
+    if (!isNaN(ts) && ts > 1000000000000) {
+      const d = new Date(ts);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
+  return null;
+}
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
+  const [adminTab, setAdminTab] = useState<'metricas' | 'usuarios'>('metricas');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [quickFilter, setQuickFilter] = useState<'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual' | 'custom'>('todos');
   const [users, setUsers] = useState<User[]>([]);
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [loading, setLoading] = useState(true);
@@ -211,266 +286,639 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const approvedUsers = users.filter(u => u.isApproved);
   const pendingUsers = users.filter(u => !u.isApproved);
 
-  // Cálculos de métricas mensais
-  const listasFinalizadas = listas.filter(l => l.status === 'finalizada');
-  const totalItensColetados = listas.reduce((acc, l) => acc + (l.itens?.length || 0), 0);
-  const totalValidadosGeral = listas.reduce((acc, l) => acc + (l.itens?.filter(i => i.validado).length || 0), 0);
-  const totalNaoValidadosGeral = listas.reduce((acc, l) => acc + (l.itens?.filter(i => !i.validado).length || 0), 0);
+  // Extrai todas as datas únicas existentes nas listas (formato YYYY-MM-DD)
+  const availableDates: string[] = Array.from(
+    new Set<string>(
+      listas
+        .map(l => getListDateIso(l))
+        .filter((d): d is string => Boolean(d))
+    )
+  ).sort((a, b) => b.localeCompare(a)); // Ordenado do mais recente para o mais antigo
+
+  // Aplicar filtro rápido de atalho (Hoje, Ontem, 7 Dias, etc)
+  const applyPreset = (preset: 'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual') => {
+    setQuickFilter(preset);
+    const today = getLocalDateIso(0);
+
+    if (preset === 'todos') {
+      setStartDate('');
+      setEndDate('');
+    } else if (preset === 'hoje') {
+      setStartDate(today);
+      setEndDate(today);
+    } else if (preset === 'ontem') {
+      const yesterday = getLocalDateIso(-1);
+      setStartDate(yesterday);
+      setEndDate(yesterday);
+    } else if (preset === '7dias') {
+      setStartDate(getLocalDateIso(-6));
+      setEndDate(today);
+    } else if (preset === '15dias') {
+      setStartDate(getLocalDateIso(-14));
+      setEndDate(today);
+    } else if (preset === 'mes_atual') {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      setStartDate(`${yyyy}-${mm}-01`);
+      setEndDate(today);
+    }
+  };
+
+  // Filtrar listas por período selecionado
+  const filteredListas = listas.filter(l => {
+    if (!startDate && !endDate) return true;
+
+    const listIso = getListDateIso(l);
+    if (!listIso) return true;
+
+    if (startDate && listIso < startDate) return false;
+    if (endDate && listIso > endDate) return false;
+
+    return true;
+  });
+
+  // Texto legível descrevendo o período de cálculo ativo
+  const getFilterDescription = () => {
+    if (!startDate && !endDate) {
+      return 'Exibindo acumulado geral de todas as datas de coleta registradas';
+    }
+    if (startDate && endDate && startDate === endDate) {
+      return `Métricas operacionais para o dia ${startDate.split('-').reverse().join('/')}`;
+    }
+    if (startDate && endDate) {
+      return `Métricas operacionais no período de ${startDate.split('-').reverse().join('/')} até ${endDate.split('-').reverse().join('/')}`;
+    }
+    if (startDate) {
+      return `Métricas operacionais a partir de ${startDate.split('-').reverse().join('/')}`;
+    }
+    if (endDate) {
+      return `Métricas operacionais até ${endDate.split('-').reverse().join('/')}`;
+    }
+    return '';
+  };
+
+  // Cálculos de métricas operacionais filtradas pelo Período de Cálculo
+  const listasFinalizadas = filteredListas.filter(l => l.status === 'finalizada');
+  const totalItensColetados = filteredListas.reduce((acc, l) => acc + (l.itens?.length || 0), 0);
+  const totalValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => i.validado).length || 0), 0);
+  const totalNaoValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => !i.validado).length || 0), 0);
   const totalFaltantesGeral = listasFinalizadas.reduce((acc, l) => acc + (l.itensFaltaram || 0), 0);
   const mediaAcertoGeral = listasFinalizadas.length > 0 
     ? (listasFinalizadas.reduce((acc, l) => acc + (l.porcentagemAcerto ?? 100), 0) / listasFinalizadas.length).toFixed(1)
     : '100.0';
 
   return (
-    <div className="space-y-8 animate-in pb-12">
-      {/* Header Geral e Métricas */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
-        <div className="flex items-center gap-3">
-          <Activity className="w-6 h-6 text-blue-600" />
-          <h2 className="text-lg font-bold text-gray-800">Painel de Métricas Mensais & Operacionais</h2>
+    <div className="space-y-6 animate-in pb-12">
+      {/* NAVEGAÇÃO DE ABAS DO PAINEL ADMIN */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setAdminTab('metricas')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              adminTab === 'metricas'
+                ? 'bg-[#3483FA] text-white shadow-md'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>Métricas & Fechamentos</span>
+            {(startDate || endDate) && (
+              <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] font-black">
+                {startDate === endDate ? startDate.split('-').reverse().join('/') : 'Período Filtrado'}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAdminTab('usuarios')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer relative ${
+              adminTab === 'usuarios'
+                ? 'bg-[#3483FA] text-white shadow-md'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>Usuários & Solicitações</span>
+            {pendingUsers.length > 0 && (
+              <span className="bg-amber-500 text-white font-black px-2 py-0.5 rounded-full text-[10px] animate-pulse shadow-2xs">
+                {pendingUsers.length} {pendingUsers.length === 1 ? 'pendente' : 'pendentes'}
+              </span>
+            )}
+          </button>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl">
-            <div className="text-2xl font-black text-blue-700">{totalItensColetados}</div>
-            <div className="text-xs text-blue-600 font-bold uppercase mt-1">Total Coletado</div>
-          </div>
-          <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl">
-            <div className="text-2xl font-black text-emerald-700">{totalValidadosGeral}</div>
-            <div className="text-xs text-emerald-600 font-bold uppercase mt-1">Validados</div>
-          </div>
-          <div className={`p-4 rounded-xl border ${
-            totalNaoValidadosGeral > 0 
-              ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200' 
-              : 'bg-gray-50 border-gray-100'
-          }`}>
-            <div className="text-2xl font-black text-amber-800">{totalNaoValidadosGeral}</div>
-            <div className="text-xs text-amber-700 font-bold uppercase mt-1 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3 text-amber-600" />
-              Não Validados
-            </div>
-          </div>
-          <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
-            <div className="text-2xl font-black text-blue-800">{mediaAcertoGeral}%</div>
-            <div className="text-xs text-blue-600 font-bold uppercase mt-1">Média de Acerto</div>
-          </div>
-          <div className="bg-purple-50 border border-purple-100 p-4 rounded-xl">
-            <div className="text-2xl font-black text-purple-700">{listasFinalizadas.length} / {listas.length}</div>
-            <div className="text-xs text-purple-600 font-bold uppercase mt-1">Finalizadas</div>
-          </div>
+
+        <div className="text-xs text-gray-500 font-bold px-3 py-1">
+          {adminTab === 'metricas' 
+            ? `${filteredListas.length} ${filteredListas.length === 1 ? 'lista encontrada' : 'listas encontradas'}` 
+            : `${users.length} usuários cadastrados`}
         </div>
       </div>
 
-      {/* GERENCIAR LISTAS E MÉTRICAS DE ACERTIVIDADE */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Package className="w-6 h-6 text-[#3483FA]" />
-            <div>
-              <h2 className="text-lg font-bold text-gray-800">Listas de Coleta & Fechamento de Gaiolas</h2>
-              <p className="text-xs text-gray-500">Clique em "Relatório" para abrir a visualização de IDs não validados ou "Métricas" para registrar o fechamento.</p>
+      {/* ABA 1: MÉTRICAS & CÁLCULOS */}
+      {adminTab === 'metricas' && (
+        <div className="space-y-6 animate-in fade-in">
+          {/* SELETOR DE PERÍODO & DATA DE CÁLCULO */}
+          <div className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-50 text-[#3483FA] rounded-xl border border-blue-100">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight flex items-center gap-2">
+                    <span>Período & Data de Cálculo</span>
+                    {(startDate || endDate) && (
+                      <span className="bg-blue-100 text-[#3483FA] px-2 py-0.5 rounded text-[10px] font-bold">
+                        Filtrado
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {getFilterDescription()}
+                  </p>
+                </div>
+              </div>
+
+              {/* BOTOES DE ATALHO RÁPIDO */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => applyPreset('todos')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                    quickFilter === 'todos' && !startDate && !endDate
+                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  Todas as Datas
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => applyPreset('hoje')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                    quickFilter === 'hoje'
+                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  Hoje
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => applyPreset('ontem')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                    quickFilter === 'ontem'
+                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  Ontem
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => applyPreset('7dias')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                    quickFilter === '7dias'
+                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  Última Semana (7d)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => applyPreset('15dias')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                    quickFilter === '15dias'
+                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  15 Dias
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => applyPreset('mes_atual')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                    quickFilter === 'mes_atual'
+                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  Mês Atual
+                </button>
+              </div>
+            </div>
+
+            {/* BARRA DE INTERVALO CUSTOMIZADO DE DATAS */}
+            <div className="flex items-center gap-3 flex-wrap pt-1">
+              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
+                <span className="text-[10px] font-black text-gray-500 uppercase">De:</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    setQuickFilter('custom');
+                  }}
+                  className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
+                <span className="text-[10px] font-black text-gray-500 uppercase">Até:</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => {
+                    setEndDate(e.target.value);
+                    setQuickFilter('custom');
+                  }}
+                  className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer"
+                />
+              </div>
+
+              {availableDates.length > 0 && (
+                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
+                  <span className="text-[10px] font-black text-gray-500 uppercase">Data com Lista:</span>
+                  <select
+                    value={startDate === endDate ? startDate : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setStartDate(val);
+                      setEndDate(val);
+                      setQuickFilter('custom');
+                    }}
+                    className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer max-w-[160px]"
+                  >
+                    <option value="">Todas com registro...</option>
+                    {availableDates.map(dateIso => {
+                      const brDisplay = dateIso.split('-').reverse().join('/');
+                      return (
+                        <option key={dateIso} value={dateIso}>
+                          {brDisplay}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={() => applyPreset('todos')}
+                  className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Limpar Filtros</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* PAINEL DE CARDS DE MÉTRICAS */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Activity className="w-6 h-6 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">Resultado Operacional de Cálculo</h2>
+                  <p className="text-xs text-gray-500">Métricas geradas em tempo real com base na data selecionada</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-blue-700">{totalItensColetados}</div>
+                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Total Coletado</div>
+              </div>
+              <div className="bg-emerald-50/80 border border-emerald-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-emerald-700">{totalValidadosGeral}</div>
+                <div className="text-xs text-emerald-600 font-bold uppercase mt-1">Validados</div>
+              </div>
+              <div className={`p-4 rounded-xl border ${
+                totalNaoValidadosGeral > 0 
+                  ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200' 
+                  : 'bg-gray-50 border-gray-100'
+              }`}>
+                <div className="text-2xl font-black text-amber-800">{totalNaoValidadosGeral}</div>
+                <div className="text-xs text-amber-700 font-bold uppercase mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                  Não Validados
+                </div>
+              </div>
+              <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-blue-800">{mediaAcertoGeral}%</div>
+                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Média de Acerto</div>
+              </div>
+              <div className="bg-purple-50/80 border border-purple-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-purple-700">{listasFinalizadas.length} / {filteredListas.length}</div>
+                <div className="text-xs text-purple-600 font-bold uppercase mt-1">Finalizadas</div>
+              </div>
+            </div>
+          </div>
+
+          {/* TABELA DE LISTAS DA DATA DE CÁLCULO */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Package className="w-6 h-6 text-[#3483FA]" />
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">Listas de Coleta do Período</h2>
+                  <p className="text-xs text-gray-500">
+                    {getFilterDescription()}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left text-gray-700">
+                <thead className="bg-gray-50 font-bold uppercase tracking-wider text-gray-600 border-b border-gray-200">
+                  <tr>
+                    <th className="py-3 px-4">Nome da Lista</th>
+                    <th className="py-3 px-4 text-center">Data</th>
+                    <th className="py-3 px-4 text-center">Tipo</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                    <th className="py-3 px-4 text-center">Itens</th>
+                    <th className="py-3 px-4 text-center">Validação</th>
+                    <th className="py-3 px-4 text-center">Acerto (%)</th>
+                    <th className="py-3 px-4 text-center">Gaiola</th>
+                    <th className="py-3 px-4 text-center">Faltaram</th>
+                    <th className="py-3 px-4 text-center">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredListas.map(lista => {
+                    const itensCount = lista.itens?.length || 0;
+                    const validadosCount = (lista.itens || []).filter(i => i.validado).length;
+                    const naoValidadosCount = (lista.itens || []).filter(i => !i.validado).length;
+
+                    return (
+                    <tr key={lista.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-gray-900">{lista.nome}</td>
+                      <td className="py-3.5 px-4 text-center font-mono text-gray-600">
+                        {lista.data ? lista.data.split('-').reverse().join('/') : '-'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded font-bold text-[11px]">
+                          {lista.tipo === 'grupos' ? 'Grupo' : 'Comum'}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
+                          lista.status === 'finalizada' 
+                            ? 'bg-emerald-100 text-emerald-800' 
+                            : 'bg-blue-100 text-blue-800'
+                        }`}>
+                          {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-bold text-gray-800">{itensCount}</td>
+                      
+                      {/* Status de Validação da Lista */}
+                      <td className="py-3.5 px-4 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedListaForReport(lista);
+                            setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
+                            setReportSearch('');
+                          }}
+                          className="inline-flex flex-col items-center gap-1 cursor-pointer group"
+                          title="Clique para abrir o relatório detalhado desta lista"
+                        >
+                          <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-bold text-[10px]">
+                              {validadosCount} validados
+                            </span>
+                            {naoValidadosCount > 0 && (
+                              <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded font-black text-[10px] flex items-center gap-1 shadow-2xs">
+                                <AlertCircle className="w-3 h-3 text-amber-600" />
+                                {naoValidadosCount} pendentes
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-[#3483FA] group-hover:underline font-bold">
+                            Ver relatório
+                          </span>
+                        </button>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-center font-bold text-emerald-600">
+                        {lista.porcentagemAcerto !== undefined ? `${lista.porcentagemAcerto}%` : '-'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-medium">
+                        {lista.fechamentoGaiola || '-'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-bold text-red-600">
+                        {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => {
+                              setSelectedListaForReport(lista);
+                              setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
+                              setReportSearch('');
+                            }}
+                            className={`px-3 py-1.5 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border ${
+                              naoValidadosCount > 0
+                                ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                                : 'bg-blue-50 hover:bg-blue-100 text-[#3483FA] border-blue-200'
+                            }`}
+                            title="Abrir Relatório para ver IDs não validados e detalhes"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-amber-700" />
+                            <span>Relatório {naoValidadosCount > 0 ? `(${naoValidadosCount})` : ''}</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                  {filteredListas.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="py-12 text-center text-gray-400 font-medium">
+                        Nenhuma lista de coleta encontrada para o período selecionado. ({getFilterDescription()})
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
+      )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left text-gray-700">
-            <thead className="bg-gray-50 font-bold uppercase tracking-wider text-gray-600 border-b border-gray-200">
-              <tr>
-                <th className="py-3 px-4">Nome da Lista</th>
-                <th className="py-3 px-4 text-center">Tipo</th>
-                <th className="py-3 px-4 text-center">Status</th>
-                <th className="py-3 px-4 text-center">Itens</th>
-                <th className="py-3 px-4 text-center">Validação</th>
-                <th className="py-3 px-4 text-center">Acerto (%)</th>
-                <th className="py-3 px-4 text-center">Gaiola</th>
-                <th className="py-3 px-4 text-center">Faltaram</th>
-                <th className="py-3 px-4 text-center">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {listas.map(lista => {
-                const itensCount = lista.itens?.length || 0;
-                const validadosCount = (lista.itens || []).filter(i => i.validado).length;
-                const naoValidadosCount = (lista.itens || []).filter(i => !i.validado).length;
-
-                return (
-                <tr key={lista.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="py-3.5 px-4 font-bold text-gray-900">{lista.nome}</td>
-                  <td className="py-3.5 px-4 text-center">
-                    <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded font-bold text-[11px]">
-                      {lista.tipo === 'grupos' ? 'Grupo' : 'Comum'}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-4 text-center">
-                    <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
-                      lista.status === 'finalizada' 
-                        ? 'bg-emerald-100 text-emerald-800' 
-                        : 'bg-blue-100 text-blue-800'
-                    }`}>
-                      {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-4 text-center font-bold text-gray-800">{itensCount}</td>
-                  
-                  {/* Status de Validação da Lista */}
-                  <td className="py-3.5 px-4 text-center">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedListaForReport(lista);
-                        setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
-                        setReportSearch('');
-                      }}
-                      className="inline-flex flex-col items-center gap-1 cursor-pointer group"
-                      title="Clique para abrir o relatório detalhado desta lista"
-                    >
-                      <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-bold text-[10px]">
-                          {validadosCount} validados
-                        </span>
-                        {naoValidadosCount > 0 && (
-                          <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded font-black text-[10px] flex items-center gap-1 shadow-2xs">
-                            <AlertCircle className="w-3 h-3 text-amber-600" />
-                            {naoValidadosCount} pendentes
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-[#3483FA] group-hover:underline font-bold">
-                        Ver relatório
+      {/* ABA 2: USUÁRIOS & SOLICITAÇÕES */}
+      {adminTab === 'usuarios' && (
+        <div className="space-y-6 animate-in fade-in">
+          {/* PAINEL 1: SOLICITAÇÕES DE ACESSO PENDENTES */}
+          <div className="bg-white rounded-2xl shadow-sm border border-amber-200 p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
+                  <UserPlus className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                    Solicitações de Acesso Pendentes
+                    {pendingUsers.length > 0 && (
+                      <span className="bg-amber-500 text-white text-xs px-2.5 py-0.5 rounded-full font-black">
+                        {pendingUsers.length}
                       </span>
-                    </button>
-                  </td>
+                    )}
+                  </h2>
+                  <p className="text-xs text-gray-500">Novos usuários aguardando aprovação para acessar o sistema</p>
+                </div>
+              </div>
+            </div>
 
-                  <td className="py-3.5 px-4 text-center font-bold text-emerald-600">
-                    {lista.porcentagemAcerto !== undefined ? `${lista.porcentagemAcerto}%` : '-'}
-                  </td>
-                  <td className="py-3.5 px-4 text-center font-medium">
-                    {lista.fechamentoGaiola || '-'}
-                  </td>
-                  <td className="py-3.5 px-4 text-center font-bold text-red-600">
-                    {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
-                  </td>
-                  <td className="py-3.5 px-4 text-center">
-                    <div className="flex items-center justify-center gap-2">
+            {pendingUsers.length === 0 ? (
+              <div className="py-8 text-center text-gray-400 text-xs font-medium flex flex-col items-center gap-2">
+                <UserCheck className="w-8 h-8 text-gray-300" />
+                <span>Nenhuma solicitação de cadastro pendente no momento. Todos os usuários estão aprovados.</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {pendingUsers.map(pUser => (
+                  <div key={pUser.id} className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 flex flex-col justify-between gap-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-amber-200 text-amber-900 font-bold flex items-center justify-center text-sm uppercase">
+                          {pUser.username.substring(0, 2)}
+                        </div>
+                        <div>
+                          <p className="font-bold text-sm text-gray-900">{pUser.username}</p>
+                          <p className="text-xs text-gray-600 font-mono">{pUser.email}</p>
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-[10px] font-black uppercase">
+                        Pendente
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2 border-t border-amber-200/60">
                       <button
-                        onClick={() => {
-                          setSelectedListaForReport(lista);
-                          setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
-                          setReportSearch('');
-                        }}
-                        className={`px-3 py-1.5 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border ${
-                          naoValidadosCount > 0
-                            ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
-                            : 'bg-blue-50 hover:bg-blue-100 text-[#3483FA] border-blue-200'
-                        }`}
-                        title="Abrir Relatório para ver IDs não validados e detalhes"
+                        onClick={() => toggleApproval(pUser.id, false)}
+                        className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                       >
-                        <FileText className="w-3.5 h-3.5 text-amber-700" />
-                        <span>Relatório {naoValidadosCount > 0 ? `(${naoValidadosCount})` : ''}</span>
+                        <CheckCircle className="w-4 h-4" />
+                        Aprovar Acesso
                       </button>
 
                       <button
-                        onClick={() => handleOpenMetricsModal(lista)}
-                        className="px-3 py-1.5 bg-[#3483FA] hover:bg-blue-600 text-white font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                        onClick={async () => {
+                          await toggleApproval(pUser.id, false);
+                          await toggleAdmin(pUser.id, false);
+                        }}
+                        className="py-2 px-3 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Aprovar com nível Administrador"
                       >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        {lista.status === 'finalizada' ? 'Métricas' : 'Finalizar'}
+                        <Shield className="w-4 h-4" />
+                        Aprovar como Admin
                       </button>
                     </div>
-                  </td>
-                </tr>
-                );
-              })}
-              {listas.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="py-8 text-center text-gray-400 font-medium">
-                    Nenhuma lista de coleta encontrada.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* GERENCIAR USUÁRIOS */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <Users className="w-6 h-6 text-gray-700" />
-            <h2 className="text-lg font-bold text-gray-800">Gerenciar Usuários & Permissões</h2>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-gray-50 text-gray-600 font-medium uppercase text-xs border-b border-gray-200">
-              <tr>
-                <th className="px-4 py-3">Usuário / E-mail</th>
-                <th className="px-4 py-3 text-center">Status</th>
-                <th className="px-4 py-3 text-center">Admin</th>
-                <th className="px-4 py-3">Acesso às Abas</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {users.map(user => (
-                <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-4">
-                    <div className="font-medium text-gray-800">{user.username}</div>
-                    <div className="text-xs text-gray-500">{user.email}</div>
-                  </td>
-                  
-                  <td className="px-4 py-4 text-center">
-                    <button 
-                      onClick={() => toggleApproval(user.id, user.isApproved)}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                        user.isApproved 
-                        ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
-                        : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                      }`}
-                    >
-                      {user.isApproved ? <CheckCircle className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5" />}
-                      {user.isApproved ? 'Aprovado' : 'Aprovar'}
-                    </button>
-                  </td>
-                  
-                  <td className="px-4 py-4 text-center">
-                    <button 
-                      onClick={() => toggleAdmin(user.id, user.isAdmin)}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                        user.isAdmin 
-                        ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      <Shield className="w-3.5 h-3.5" />
-                      {user.isAdmin ? 'Sim' : 'Não'}
-                    </button>
-                  </td>
+          {/* PAINEL 2: GERENCIAR USUÁRIOS CADASTRADOS */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Users className="w-6 h-6 text-gray-700" />
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">Usuários Cadastrados & Permissões</h2>
+                  <p className="text-xs text-gray-500">Controle o status de aprovação, perfil admin e acesso às abas do sistema</p>
+                </div>
+              </div>
+            </div>
 
-                  <td className="px-4 py-4">
-                    <div className="flex flex-wrap gap-2">
-                      {TABS.map(tab => (
-                        <button
-                          key={tab.id}
-                          onClick={() => toggleTabAccess(user.id, user.allowedGroups || [], tab.id)}
-                          className={`px-2 py-1 border rounded text-[11px] font-medium transition-colors ${
-                            (user.allowedGroups || []).includes(tab.id)
-                            ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                            : 'bg-white border-gray-200 text-gray-400 hover:bg-gray-50'
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-gray-50 text-gray-600 font-bold uppercase text-xs border-b border-gray-200">
+                  <tr>
+                    <th className="px-4 py-3">Usuário / E-mail</th>
+                    <th className="px-4 py-3 text-center">Status</th>
+                    <th className="px-4 py-3 text-center">Admin</th>
+                    <th className="px-4 py-3">Permissão de Abas</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {users.map(user => (
+                    <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-4">
+                        <div className="font-bold text-gray-800">{user.username}</div>
+                        <div className="text-xs text-gray-500 font-mono">{user.email}</div>
+                      </td>
+                      
+                      <td className="px-4 py-4 text-center">
+                        <button 
+                          onClick={() => toggleApproval(user.id, user.isApproved)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                            user.isApproved 
+                            ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
+                            : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
                           }`}
                         >
-                          {tab.label}
+                          {user.isApproved ? <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> : <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />}
+                          {user.isApproved ? 'Aprovado' : 'Aprovar'}
                         </button>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      </td>
+                      
+                      <td className="px-4 py-4 text-center">
+                        <button 
+                          onClick={() => toggleAdmin(user.id, user.isAdmin)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                            user.isAdmin 
+                            ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          <Shield className="w-3.5 h-3.5" />
+                          {user.isAdmin ? 'Sim' : 'Não'}
+                        </button>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="flex flex-wrap gap-1.5">
+                          {TABS.map(tab => (
+                            <button
+                              key={tab.id}
+                              onClick={() => toggleTabAccess(user.id, user.allowedGroups || [], tab.id)}
+                              className={`px-2.5 py-1 border rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                                (user.allowedGroups || []).includes(tab.id)
+                                ? 'bg-blue-50 border-blue-200 text-[#3483FA] hover:bg-blue-100'
+                                : 'bg-white border-gray-200 text-gray-400 hover:bg-gray-50'
+                              }`}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* MODAL DE METRICAS E FECHAMENTO DE GAIOLA */}
       {selectedListaForMetrics && (
