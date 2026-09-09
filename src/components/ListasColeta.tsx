@@ -174,6 +174,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const operanteNome = currentUser?.username || 'Usuário Atual';
 
+  const listaAtiva = listas.find(l => l.id === activeListaId);
+
   const getModoIndKey = useCallback((listaId: string, username: string) => {
     return `coleta_modo_ind_${listaId}_${username}`;
   }, []);
@@ -269,8 +271,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       unsubRefugo();
     };
   }, []);
-
-  const listaAtiva = listas.find(l => l.id === activeListaId);
 
   // Sincronizar cache em memória da lista ativa para evitar race-conditions
   useEffect(() => {
