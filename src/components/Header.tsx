@@ -17,102 +17,87 @@ export const Header: React.FC<HeaderProps> = ({
   totalRows,
 }) => {
   return (
-    <header className="bg-[#111827] border-b border-[#374151] text-white sticky top-0 z-30 shadow-sm shrink-0">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+    <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-30 font-sans">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
           
-          {/* Tab Navigation */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Hub Button */}
             <button
               onClick={() => setActiveTab('tools')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono tracking-wide uppercase transition-colors border ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold uppercase transition-colors ${
                 activeTab === 'tools'
-                  ? 'bg-white text-gray-950 font-black border-white shadow-sm'
-                  : 'bg-gray-900/90 text-gray-300 hover:text-white hover:bg-gray-800 border-gray-800 font-medium'
+                  ? 'bg-white text-slate-900'
+                  : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700'
               }`}
-              title="Ver todas as ferramentas disponíveis"
             >
-              <LayoutGrid className="w-3.5 h-3.5 text-amber-500" />
+              <LayoutGrid className="w-3.5 h-3.5" />
               <span>Ferramentas</span>
             </button>
 
-            {/* Tab Navigation: Lista Backlog Group */}
-            <div className="flex items-center gap-1 bg-gray-900/90 p-1 rounded border border-gray-800">
-              <div className="px-2 py-1 text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1 border-r border-gray-700 pr-2 mr-1">
-                <Filter className="w-3.5 h-3.5 text-amber-500" />
-                <span className="hidden sm:inline">Lista Backlog</span>
-              </div>
-              
+            <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded">
               <button
                 onClick={() => setActiveTab('lookup')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono tracking-wide uppercase transition-colors ${
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold uppercase transition-colors ${
                   activeTab === 'lookup'
-                    ? 'bg-amber-500 text-gray-950 font-black shadow-sm'
-                    : 'text-gray-300 hover:text-white hover:bg-gray-800 font-medium'
+                    ? 'bg-[#3483FA] text-white'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700'
                 }`}
               >
                 <Search className="w-3.5 h-3.5" />
-                <span>Consultar ID</span>
+                <span>Consultar</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('remove')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono tracking-wide uppercase transition-colors ${
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold uppercase transition-colors ${
                   activeTab === 'remove'
-                    ? 'bg-amber-500 text-gray-950 font-black shadow-sm'
-                    : 'text-gray-300 hover:text-white hover:bg-gray-800 font-medium'
+                    ? 'bg-[#3483FA] text-white'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700'
                 }`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Remover IDs</span>
+                <span>Remover</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('report')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono tracking-wide uppercase transition-colors ${
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold uppercase transition-colors ${
                   activeTab === 'report'
-                    ? 'bg-emerald-500 text-gray-950 font-black shadow-sm'
-                    : 'text-gray-300 hover:text-white hover:bg-gray-800 font-medium'
+                    ? 'bg-[#3483FA] text-white'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700'
                 }`}
               >
                 <MessageSquare className="w-3.5 h-3.5" />
-                <span>Reporte WhatsApp</span>
+                <span>Reporte</span>
               </button>
             </div>
 
-            {/* CSV Base Tab */}
             <button
               onClick={() => setActiveTab('upload')}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono tracking-wide uppercase transition-colors border ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold uppercase transition-colors ${
                 activeTab === 'upload'
-                  ? 'bg-amber-500 text-gray-950 font-black border-amber-500 shadow-sm'
-                  : 'bg-gray-900/90 text-gray-400 hover:text-white hover:bg-gray-800 border-gray-800 font-medium'
+                  ? 'bg-white text-slate-900'
+                  : 'bg-slate-800 text-slate-300 hover:text-white'
               }`}
-              title="Carregar ou atualizar arquivo CSV"
             >
               <UploadCloud className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">CSV Base</span>
+              <span>Base CSV</span>
             </button>
           </div>
 
-          {/* System status & Actions */}
           <div className="flex items-center gap-3">
-            <div className="hidden lg:flex items-center gap-1.5 text-xs font-mono text-gray-300 bg-gray-800/80 px-2.5 py-1 rounded border border-gray-700">
-              <span className={`w-2 h-2 rounded-full ${totalRows > 0 ? 'bg-green-500 animate-pulse' : 'bg-amber-500'}`}></span>
-              <span className="text-[11px] font-bold tracking-wider">
-                {totalRows > 0 ? `${totalRows.toLocaleString()} IDs CARREGADOS` : 'AGUARDANDO CSV'}
+            <div className="hidden lg:flex items-center gap-1.5 text-xs font-mono text-slate-300">
+              <span className="font-bold">
+                {totalRows > 0 ? `${totalRows.toLocaleString('pt-BR')} IDs` : 'Base Vazia'}
               </span>
             </div>
 
             {totalRows > 0 && (
               <button
                 onClick={onClear}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono bg-red-950/60 text-red-300 hover:text-white hover:bg-red-900 border border-red-800 transition-all font-bold"
-                title="Apagar e zerar todos os dados"
+                className="px-2 py-1 rounded text-xs font-bold bg-red-900/80 text-red-100 hover:bg-red-800 transition-colors"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Apagar & Zerar</span>
+                Zerar
               </button>
             )}
           </div>
@@ -122,4 +107,3 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
-

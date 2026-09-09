@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, getAllUsers, updateUserAdminStatus, getUserById } from '../lib/auth';
 import { 
   Shield, ShieldAlert, CheckCircle, XCircle, Users, Activity, Settings2, 
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
   AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check,
-  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw
+  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw, MoreVertical, Trophy,
+  ChevronRight, ChevronDown, RefreshCw
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { listenToListas, saveLista } from '../lib/firebase';
-import { ColetaLista } from '../types';
+import { ColetaLista, ColetaItem } from '../types';
 
 const TABS = [
   { id: 'consulta', label: 'Buscar grupos' },
@@ -94,32 +95,58 @@ function getListDateIso(l: ColetaLista): string | null {
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [adminTab, setAdminTab] = useState<'metricas' | 'usuarios'>('metricas');
+  const [isPresentationMode, setIsPresentationMode] = useState<boolean>(false);
+  const [lastUpdatedTime, setLastUpdatedTime] = useState<string>(new Date().toLocaleTimeString('pt-BR'));
+  
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [quickFilter, setQuickFilter] = useState<'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual' | 'custom'>('todos');
+  const [tableSearch, setTableSearch] = useState<string>('');
+  
   const [users, setUsers] = useState<User[]>([]);
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [loading, setLoading] = useState(true);
   const [isVerifiedAdmin, setIsVerifiedAdmin] = useState(false);
   const navigate = useNavigate();
 
+  // Modal de ranking completo de colaboradores
+  const [showRankingModal, setShowRankingModal] = useState<boolean>(false);
+
+  // Menu de ações ativo por ID de lista
+  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+
   // Modal de métricas para a lista selecionada
   const [selectedListaForMetrics, setSelectedListaForMetrics] = useState<ColetaLista | null>(null);
   const [formAcerto, setFormAcerto] = useState<string>('100');
-  const [formGaiola, setFormGaiola] = useState<string>('Fechado');
+  const [formGaiola, setFormGaiola] = useState<string>('Fechado com Sucesso');
   const [formFaltaram, setFormFaltaram] = useState<string>('0');
+  const [formStatus, setFormStatus] = useState<'em_andamento' | 'finalizada'>('finalizada');
+  const [formData, setFormData] = useState<string>('');
 
-  // Modal de Relatório da Lista (Visualização Não Validada & Completa)
+  // Painel Lateral (Drawer) de Relatório Detalhado
   const [selectedListaForReport, setSelectedListaForReport] = useState<ColetaLista | null>(null);
   const [reportTab, setReportTab] = useState<'nao_validados' | 'todos' | 'validados'>('nao_validados');
   const [reportSearch, setReportSearch] = useState('');
   const [copiedReportNaoValidados, setCopiedReportNaoValidados] = useState(false);
   const [copiedItemId, setCopiedItemId] = useState<string | null>(null);
 
+  // Fechar menus de ação ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.action-menu-container')) {
+        setActiveActionMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
     verifyAndFetch();
     const unsubListas = listenToListas((data) => {
       setListas(data);
+      setLastUpdatedTime(new Date().toLocaleTimeString('pt-BR'));
     });
     return () => {
       unsubListas();
@@ -171,15 +198,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const handleOpenMetricsModal = (lista: ColetaLista) => {
     setSelectedListaForMetrics(lista);
     setFormAcerto(lista.porcentagemAcerto !== undefined ? lista.porcentagemAcerto.toString() : '100');
-    setFormGaiola(lista.fechamentoGaiola || 'Fechado');
+    setFormGaiola(lista.fechamentoGaiola || 'Fechado com Sucesso');
     setFormFaltaram(lista.itensFaltaram !== undefined ? lista.itensFaltaram.toString() : '0');
+    setFormStatus(lista.status || 'finalizada');
+    setFormData(lista.data || getLocalDateIso(0));
+    setActiveActionMenuId(null);
   };
 
   const handleSaveMetrics = async () => {
     if (!selectedListaForMetrics) return;
     const updated: ColetaLista = {
       ...selectedListaForMetrics,
-      status: 'finalizada',
+      status: formStatus,
+      data: formData || selectedListaForMetrics.data,
       porcentagemAcerto: parseFloat(formAcerto) || 0,
       fechamentoGaiola: formGaiola,
       itensFaltaram: parseInt(formFaltaram, 10) || 0
@@ -196,7 +227,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     }
   }, [listas]);
 
-  // Alternar validação de um item específico no relatório do Admin
+  // Alternar validação de um item específico no relatório
   const handleToggleValidadoInAdmin = async (itemId: string) => {
     if (!selectedListaForReport) return;
     const updatedItens = (selectedListaForReport.itens || []).map(it => {
@@ -213,7 +244,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     await saveLista(updatedLista);
   };
 
-  // Validar todos os pendentes de uma vez no relatório do Admin
+  // Validar todos os pendentes de uma vez no relatório
   const handleValidarTodosPendentes = async () => {
     if (!selectedListaForReport) return;
     if (!window.confirm("Deseja marcar todos os IDs pendentes desta lista como validados?")) return;
@@ -241,7 +272,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     });
   };
 
-  // Baixar CSV de IDs Não Validados (somente IDs)
+  // Baixar CSV de IDs Não Validados
   const handleExportNaoValidadosCSV = () => {
     if (!selectedListaForReport) return;
     const naoValidados = (selectedListaForReport.itens || []).filter(i => !i.validado);
@@ -264,20 +295,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-gray-500">Verificando permissões...</div>;
+    return (
+      <div className="p-12 text-center text-gray-500 font-sans">
+        <div className="w-6 h-6 border-2 border-gray-300 border-t-[#3483FA] rounded-full animate-spin mx-auto mb-3" />
+        <span className="text-xs font-semibold">Carregando dados da Barra Admin...</span>
+      </div>
+    );
   }
   
   if (!isVerifiedAdmin) {
     return (
-      <div className="max-w-xl mx-auto mt-10 bg-white p-8 rounded-lg shadow border border-red-200 text-center">
-        <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Acesso Negado</h2>
-        <p className="text-gray-600 mb-6">Você não tem permissões de administrador para visualizar esta página.</p>
+      <div className="max-w-md mx-auto mt-12 bg-white p-8 rounded-xl shadow-xs border border-gray-200 text-center font-sans">
+        <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
+        <h2 className="text-base font-bold text-gray-900 mb-1">Acesso Restrito</h2>
+        <p className="text-xs text-gray-500 mb-6">Permissão de administrador requerida para visualizar esta área.</p>
         <button 
           onClick={() => navigate('/')}
-          className="bg-blue-600 text-white px-4 py-2 rounded font-medium hover:bg-blue-700 transition-colors"
+          className="bg-[#3483FA] text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-600 transition-colors cursor-pointer"
         >
-          Voltar para Início
+          Voltar para o Início
         </button>
       </div>
     );
@@ -293,7 +329,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
         .map(l => getListDateIso(l))
         .filter((d): d is string => Boolean(d))
     )
-  ).sort((a, b) => b.localeCompare(a)); // Ordenado do mais recente para o mais antigo
+  ).sort((a, b) => b.localeCompare(a));
 
   // Aplicar filtro rápido de atalho (Hoje, Ontem, 7 Dias, etc)
   const applyPreset = (preset: 'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual') => {
@@ -325,432 +361,535 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     }
   };
 
-  // Filtrar listas por período selecionado
+  // Filtrar listas por período selecionado e termo de busca
   const filteredListas = listas.filter(l => {
-    if (!startDate && !endDate) return true;
+    if (startDate || endDate) {
+      const listIso = getListDateIso(l);
+      if (listIso) {
+        if (startDate && listIso < startDate) return false;
+        if (endDate && listIso > endDate) return false;
+      }
+    }
 
-    const listIso = getListDateIso(l);
-    if (!listIso) return true;
-
-    if (startDate && listIso < startDate) return false;
-    if (endDate && listIso > endDate) return false;
+    if (tableSearch.trim()) {
+      const q = tableSearch.toLowerCase().trim();
+      const nameMatch = l.nome.toLowerCase().includes(q);
+      const respMatch = (l.responsavel || '').toLowerCase().includes(q);
+      const dataMatch = (l.data || '').toLowerCase().includes(q);
+      if (!nameMatch && !respMatch && !dataMatch) return false;
+    }
 
     return true;
   });
 
-  // Texto legível descrevendo o período de cálculo ativo
-  const getFilterDescription = () => {
-    if (!startDate && !endDate) {
-      return 'Exibindo acumulado geral de todas as datas de coleta registradas';
-    }
-    if (startDate && endDate && startDate === endDate) {
-      return `Métricas operacionais para o dia ${startDate.split('-').reverse().join('/')}`;
-    }
-    if (startDate && endDate) {
-      return `Métricas operacionais no período de ${startDate.split('-').reverse().join('/')} até ${endDate.split('-').reverse().join('/')}`;
-    }
-    if (startDate) {
-      return `Métricas operacionais a partir de ${startDate.split('-').reverse().join('/')}`;
-    }
-    if (endDate) {
-      return `Métricas operacionais até ${endDate.split('-').reverse().join('/')}`;
-    }
-    return '';
-  };
-
-  // Cálculos de métricas operacionais filtradas pelo Período de Cálculo
+  // Métricas operacionais reais
   const listasFinalizadas = filteredListas.filter(l => l.status === 'finalizada');
   const totalItensColetados = filteredListas.reduce((acc, l) => acc + (l.itens?.length || 0), 0);
   const totalValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => i.validado).length || 0), 0);
   const totalNaoValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => !i.validado).length || 0), 0);
-  const totalFaltantesGeral = listasFinalizadas.reduce((acc, l) => acc + (l.itensFaltaram || 0), 0);
-  const mediaAcertoGeral = listasFinalizadas.length > 0 
-    ? (listasFinalizadas.reduce((acc, l) => acc + (l.porcentagemAcerto ?? 100), 0) / listasFinalizadas.length).toFixed(1)
-    : '100.0';
+
+  const listasComPendencia = filteredListas.filter(l => {
+    const pendingItens = (l.itens || []).some(i => !i.validado);
+    const faltam = l.itensFaltaram && l.itensFaltaram > 0;
+    return pendingItens || faltam;
+  });
+
+  const listas100Fechadas = filteredListas.filter(l => {
+    const allValidados = (l.itens || []).length > 0 && !(l.itens || []).some(i => !i.validado);
+    return l.status === 'finalizada' && allValidados;
+  });
+
+  const assertividadeGeral = totalItensColetados > 0 
+    ? ((totalValidadosGeral / totalItensColetados) * 100)
+    : 100;
+
+  const assertividadeGeralFormatted = assertividadeGeral.toLocaleString('pt-BR', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  }) + '%';
+
+  const totalItensFormatted = totalItensColetados.toLocaleString('pt-BR');
+
+  // Cálculo de Ranking de Colaboradores (Bipado por / Responsável)
+  const collaboratorMap = new Map<string, number>();
+  filteredListas.forEach(l => {
+    (l.itens || []).forEach(it => {
+      const resp = (it.responsavel || l.responsavel || 'Operador').trim();
+      if (resp) {
+        collaboratorMap.set(resp, (collaboratorMap.get(resp) || 0) + 1);
+      }
+    });
+  });
+
+  const ranking = Array.from(collaboratorMap.entries())
+    .map(([nome, total]) => ({ nome, total }))
+    .sort((a, b) => b.total - a.total);
+
+  const topCollaborator = ranking[0] || { nome: 'Nenhum registro', total: 0 };
 
   return (
-    <div className="space-y-6 animate-in pb-12">
-      {/* NAVEGAÇÃO DE ABAS DO PAINEL ADMIN */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setAdminTab('metricas')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
-              adminTab === 'metricas'
-                ? 'bg-[#3483FA] text-white shadow-md'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-            <span>Métricas & Fechamentos</span>
-            {(startDate || endDate) && (
-              <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] font-black">
-                {startDate === endDate ? startDate.split('-').reverse().join('/') : 'Período Filtrado'}
+    <div className="bg-white text-gray-800 font-sans min-h-screen p-4 sm:p-6 space-y-5 rounded-2xl border border-gray-200 shadow-2xs">
+      
+      {/* 1. CABEÇALHO SIMPLES E EXECUTIVO */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-gray-200">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl font-extrabold text-gray-900 tracking-tight">
+              Barra Admin
+            </h1>
+            {isPresentationMode && (
+              <span className="px-2 py-0.5 bg-gray-900 text-white text-[10px] font-bold uppercase tracking-wider rounded">
+                Modo Apresentação
               </span>
             )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAdminTab('usuarios')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer relative ${
-              adminTab === 'usuarios'
-                ? 'bg-[#3483FA] text-white shadow-md'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>Usuários & Solicitações</span>
-            {pendingUsers.length > 0 && (
-              <span className="bg-amber-500 text-white font-black px-2 py-0.5 rounded-full text-[10px] animate-pulse shadow-2xs">
-                {pendingUsers.length} {pendingUsers.length === 1 ? 'pendente' : 'pendentes'}
-              </span>
-            )}
-          </button>
+          </div>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Visão consolidada dos fechamentos e resultados
+          </p>
         </div>
 
-        <div className="text-xs text-gray-500 font-bold px-3 py-1">
-          {adminTab === 'metricas' 
-            ? `${filteredListas.length} ${filteredListas.length === 1 ? 'lista encontrada' : 'listas encontradas'}` 
-            : `${users.length} usuários cadastrados`}
+        <div className="flex items-center gap-3">
+          {/* Informação de Última Atualização */}
+          <div className="text-right">
+            <span className="text-[10px] uppercase font-semibold text-gray-400 block tracking-wider">
+              Última atualização
+            </span>
+            <span className="text-xs font-mono font-bold text-gray-700">
+              {lastUpdatedTime}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setLastUpdatedTime(new Date().toLocaleTimeString('pt-BR'));
+            }}
+            className="p-2 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 rounded-lg text-xs transition-colors cursor-pointer"
+            title="Atualizar dados agora"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Botão de Alternância de Modo Apresentação */}
+          <button
+            type="button"
+            onClick={() => setIsPresentationMode(!isPresentationMode)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs ${
+              isPresentationMode
+                ? 'bg-gray-900 text-white border-gray-900'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5 text-[#3483FA]" />
+            <span>{isPresentationMode ? 'Sair da Apresentação' : 'Modo Apresentação'}</span>
+          </button>
         </div>
       </div>
 
-      {/* ABA 1: MÉTRICAS & CÁLCULOS */}
-      {adminTab === 'metricas' && (
-        <div className="space-y-6 animate-in fade-in">
-          {/* SELETOR DE PERÍODO & DATA DE CÁLCULO */}
-          <div className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-gray-100 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-blue-50 text-[#3483FA] rounded-xl border border-blue-100">
-                  <Calendar className="w-5 h-5" />
+      {/* NAVEGAÇÃO SECUNDÁRIA (OCULTA NO MODO APRESENTAÇÃO) */}
+      {!isPresentationMode && (
+        <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAdminTab('metricas')}
+              className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all cursor-pointer ${
+                adminTab === 'metricas'
+                  ? 'bg-gray-100 text-gray-900'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              Métricas & Resultados
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdminTab('usuarios')}
+              className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all cursor-pointer relative ${
+                adminTab === 'usuarios'
+                  ? 'bg-gray-100 text-gray-900'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              <span>Usuários & Permissões</span>
+              {pendingUsers.length > 0 && (
+                <span className="ml-1.5 bg-amber-500 text-white font-black px-1.5 py-0.2 rounded-full text-[9px]">
+                  {pendingUsers.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {/* Filtros compactos de data */}
+          <div className="flex items-center gap-1.5 text-xs text-gray-600">
+            <span className="text-[11px] font-semibold text-gray-400">Filtrar:</span>
+            <button
+              onClick={() => applyPreset('todos')}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
+                quickFilter === 'todos' && !startDate && !endDate
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              Todas
+            </button>
+            <button
+              onClick={() => applyPreset('hoje')}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
+                quickFilter === 'hoje'
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              Hoje
+            </button>
+            <button
+              onClick={() => applyPreset('7dias')}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
+                quickFilter === '7dias'
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              7 Dias
+            </button>
+            <button
+              onClick={() => applyPreset('mes_atual')}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
+                quickFilter === 'mes_atual'
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              Mês Atual
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* CONTEÚDO DA ABA MÉTRICAS (OU MODO APRESENTAÇÃO) */}
+      {(adminTab === 'metricas' || isPresentationMode) && (
+        <div className="space-y-5">
+          
+          {/* 2. FAIXA ÚNICA DE INDICADORES EXECUTIVOS */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-2xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-gray-100 gap-4 sm:gap-0">
+              
+              {/* 1. Total Pacotes Bipados */}
+              <div className="sm:px-4 py-1 flex flex-col justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  Total Bipados
+                </span>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold tracking-tight text-gray-900 font-mono">
+                    {totalItensFormatted}
+                  </span>
+                  <span className="text-xs text-gray-400 font-medium">pacotes</span>
                 </div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight flex items-center gap-2">
-                    <span>Período & Data de Cálculo</span>
-                    {(startDate || endDate) && (
-                      <span className="bg-blue-100 text-[#3483FA] px-2 py-0.5 rounded text-[10px] font-bold">
-                        Filtrado
+              </div>
+
+              {/* 2. Assertividade Geral */}
+              <div className="sm:px-4 py-1 flex flex-col justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  Assertividade Geral
+                </span>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold tracking-tight text-emerald-700 font-mono">
+                    {assertividadeGeralFormatted}
+                  </span>
+                  <span className="text-xs text-gray-400 font-medium">precisão</span>
+                </div>
+              </div>
+
+              {/* 3. Listas Fechadas 100% */}
+              <div className="sm:px-4 py-1 flex flex-col justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  Listas Fechadas 100%
+                </span>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold tracking-tight text-gray-900 font-mono">
+                    {listas100Fechadas.length}
+                  </span>
+                  <span className="text-xs text-gray-400 font-medium">de {filteredListas.length} listas</span>
+                </div>
+              </div>
+
+              {/* 4. Pendências Totais */}
+              <div className="sm:px-4 py-1 flex flex-col justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  Pendências Totais
+                </span>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className={`text-2xl font-bold tracking-tight font-mono ${totalNaoValidadosGeral > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
+                    {totalNaoValidadosGeral.toLocaleString('pt-BR')}
+                  </span>
+                  <span className="text-xs text-gray-400 font-medium">não validados</span>
+                </div>
+              </div>
+
+              {/* 5. Listas com Pendência */}
+              <div className="sm:px-4 py-1 flex flex-col justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  Listas c/ Pendência
+                </span>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className={`text-2xl font-bold tracking-tight font-mono ${listasComPendencia.length > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
+                    {listasComPendencia.length}
+                  </span>
+                  <span className="text-xs text-gray-400 font-medium">com pendências</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* 3. BLOCOS DE DESEMPENHO E DESTAQUE OPERACIONAL */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            {/* BLOCO 1: DESEMPENHO DAS LISTAS */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-2xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                    Desempenho das Listas
+                  </h3>
+                  <span className="text-xs font-mono font-bold text-gray-600">
+                    {listasFinalizadas.length} de {filteredListas.length} fechadas ({filteredListas.length > 0 ? Math.round((listasFinalizadas.length / filteredListas.length) * 100) : 0}%)
+                  </span>
+                </div>
+
+                {/* Barra de Fechamento Simples */}
+                <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden flex my-2">
+                  <div 
+                    className="bg-[#3483FA] h-full transition-all duration-300"
+                    style={{ width: `${filteredListas.length > 0 ? (listasFinalizadas.length / filteredListas.length) * 100 : 0}%` }}
+                    title={`Finalizadas: ${listasFinalizadas.length}`}
+                  />
+                  <div 
+                    className="bg-amber-400 h-full transition-all duration-300"
+                    style={{ width: `${filteredListas.length > 0 ? ((filteredListas.length - listasFinalizadas.length) / filteredListas.length) * 100 : 0}%` }}
+                    title={`Em Andamento: ${filteredListas.length - listasFinalizadas.length}`}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-gray-500 mt-2.5 font-medium">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#3483FA]"></span>
+                    <span>Finalizadas: <strong className="text-gray-800">{listasFinalizadas.length}</strong></span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                    <span>Em Andamento: <strong className="text-gray-800">{filteredListas.length - listasFinalizadas.length}</strong></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* BLOCO 2: DESTAQUE OPERACIONAL (TOP 1) */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-2xs flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  Destaque Operacional
+                </h3>
+                {ranking.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRankingModal(true)}
+                    className="text-xs font-semibold text-[#3483FA] hover:underline cursor-pointer"
+                  >
+                    Ver ranking completo ({ranking.length})
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3.5 my-1">
+                <div className="w-10 h-10 rounded-full bg-gray-100 border border-gray-200 text-gray-800 font-extrabold flex items-center justify-center text-sm uppercase shrink-0">
+                  {topCollaborator.nome !== 'Nenhum registro' ? topCollaborator.nome.substring(0, 2) : 'OP'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 border border-amber-200 text-[10px] font-bold uppercase rounded">
+                      Top 1
+                    </span>
+                    <p className="text-sm font-bold text-gray-900 truncate">
+                      {topCollaborator.nome}
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    <strong className="text-gray-900 font-mono font-bold">{topCollaborator.total.toLocaleString('pt-BR')}</strong> pacotes bipados
+                    {totalItensColetados > 0 && (
+                      <span className="text-gray-400 ml-1.5">
+                        ({((topCollaborator.total / totalItensColetados) * 100).toFixed(1)}% do total)
                       </span>
                     )}
-                  </h3>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {getFilterDescription()}
                   </p>
                 </div>
               </div>
-
-              {/* BOTOES DE ATALHO RÁPIDO */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => applyPreset('todos')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'todos' && !startDate && !endDate
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Todas as Datas
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('hoje')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'hoje'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Hoje
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('ontem')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'ontem'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Ontem
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('7dias')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === '7dias'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Última Semana (7d)
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('15dias')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === '15dias'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  15 Dias
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('mes_atual')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'mes_atual'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Mês Atual
-                </button>
-              </div>
             </div>
 
-            {/* BARRA DE INTERVALO CUSTOMIZADO DE DATAS */}
-            <div className="flex items-center gap-3 flex-wrap pt-1">
-              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
-                <span className="text-[10px] font-black text-gray-500 uppercase">De:</span>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => {
-                    setStartDate(e.target.value);
-                    setQuickFilter('custom');
-                  }}
-                  className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
-                <span className="text-[10px] font-black text-gray-500 uppercase">Até:</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => {
-                    setEndDate(e.target.value);
-                    setQuickFilter('custom');
-                  }}
-                  className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer"
-                />
-              </div>
-
-              {availableDates.length > 0 && (
-                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
-                  <span className="text-[10px] font-black text-gray-500 uppercase">Data com Lista:</span>
-                  <select
-                    value={startDate === endDate ? startDate : ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setStartDate(val);
-                      setEndDate(val);
-                      setQuickFilter('custom');
-                    }}
-                    className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer max-w-[160px]"
-                  >
-                    <option value="">Todas com registro...</option>
-                    {availableDates.map(dateIso => {
-                      const brDisplay = dateIso.split('-').reverse().join('/');
-                      return (
-                        <option key={dateIso} value={dateIso}>
-                          {brDisplay}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
-
-              {(startDate || endDate) && (
-                <button
-                  type="button"
-                  onClick={() => applyPreset('todos')}
-                  className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Limpar Filtros</span>
-                </button>
-              )}
-            </div>
           </div>
 
-          {/* PAINEL DE CARDS DE MÉTRICAS */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Activity className="w-6 h-6 text-blue-600" />
-                <div>
-                  <h2 className="text-lg font-bold text-gray-800">Resultado Operacional de Cálculo</h2>
-                  <p className="text-xs text-gray-500">Métricas geradas em tempo real com base na data selecionada</p>
-                </div>
+          {/* 4. SEÇÃO LISTAS DO PERÍODO - TABELA CLEAN */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-2xs">
+            <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold text-gray-900">
+                  Listas do Período
+                </h2>
+                <p className="text-xs text-gray-500">
+                  {filteredListas.length} {filteredListas.length === 1 ? 'lista registrada' : 'listas registradas'}
+                </p>
               </div>
-            </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-blue-700">{totalItensColetados}</div>
-                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Total Coletado</div>
-              </div>
-              <div className="bg-emerald-50/80 border border-emerald-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-emerald-700">{totalValidadosGeral}</div>
-                <div className="text-xs text-emerald-600 font-bold uppercase mt-1">Validados</div>
-              </div>
-              <div className={`p-4 rounded-xl border ${
-                totalNaoValidadosGeral > 0 
-                  ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200' 
-                  : 'bg-gray-50 border-gray-100'
-              }`}>
-                <div className="text-2xl font-black text-amber-800">{totalNaoValidadosGeral}</div>
-                <div className="text-xs text-amber-700 font-bold uppercase mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3 text-amber-600" />
-                  Não Validados
-                </div>
-              </div>
-              <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-blue-800">{mediaAcertoGeral}%</div>
-                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Média de Acerto</div>
-              </div>
-              <div className="bg-purple-50/80 border border-purple-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-purple-700">{listasFinalizadas.length} / {filteredListas.length}</div>
-                <div className="text-xs text-purple-600 font-bold uppercase mt-1">Finalizadas</div>
-              </div>
-            </div>
-          </div>
-
-          {/* TABELA DE LISTAS DA DATA DE CÁLCULO */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Package className="w-6 h-6 text-[#3483FA]" />
-                <div>
-                  <h2 className="text-lg font-bold text-gray-800">Listas de Coleta do Período</h2>
-                  <p className="text-xs text-gray-500">
-                    {getFilterDescription()}
-                  </p>
-                </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar lista ou responsável..."
+                  value={tableSearch}
+                  onChange={(e) => setTableSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:border-[#3483FA] focus:bg-white transition-all"
+                />
               </div>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left text-gray-700">
-                <thead className="bg-gray-50 font-bold uppercase tracking-wider text-gray-600 border-b border-gray-200">
+              <table className="w-full text-xs text-left text-gray-700 border-collapse">
+                <thead className="bg-gray-50 font-bold uppercase text-[11px] text-gray-500 border-b border-gray-200 sticky top-0 z-10">
                   <tr>
-                    <th className="py-3 px-4">Nome da Lista</th>
-                    <th className="py-3 px-4 text-center">Data</th>
-                    <th className="py-3 px-4 text-center">Tipo</th>
-                    <th className="py-3 px-4 text-center">Status</th>
-                    <th className="py-3 px-4 text-center">Itens</th>
-                    <th className="py-3 px-4 text-center">Validação</th>
-                    <th className="py-3 px-4 text-center">Acerto (%)</th>
-                    <th className="py-3 px-4 text-center">Gaiola</th>
-                    <th className="py-3 px-4 text-center">Faltaram</th>
-                    <th className="py-3 px-4 text-center">Ações</th>
+                    <th className="py-2.5 px-3">Lista</th>
+                    <th className="py-2.5 px-3 text-center">Data</th>
+                    <th className="py-2.5 px-3 text-center">Pacotes</th>
+                    <th className="py-2.5 px-3 text-center">Validados</th>
+                    <th className="py-2.5 px-3 text-center">Pendentes</th>
+                    <th className="py-2.5 px-3 text-center">Assertividade</th>
+                    <th className="py-2.5 px-3 text-center">Fechamento</th>
+                    <th className="py-2.5 px-3 text-center">Status</th>
+                    {!isPresentationMode && (
+                      <th className="py-2.5 px-3 text-right">Ações</th>
+                    )}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 font-sans">
                   {filteredListas.map(lista => {
                     const itensCount = lista.itens?.length || 0;
                     const validadosCount = (lista.itens || []).filter(i => i.validado).length;
                     const naoValidadosCount = (lista.itens || []).filter(i => !i.validado).length;
 
+                    const porcentagem = itensCount > 0 
+                      ? ((validadosCount / itensCount) * 100)
+                      : (lista.porcentagemAcerto !== undefined ? lista.porcentagemAcerto : 100);
+
+                    const dateBr = lista.data 
+                      ? lista.data.split('-').reverse().join('/') 
+                      : (getListDateIso(lista)?.split('-').reverse().join('/') || '-');
+
                     return (
-                    <tr key={lista.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="py-3.5 px-4 font-bold text-gray-900">{lista.nome}</td>
-                      <td className="py-3.5 px-4 text-center font-mono text-gray-600">
-                        {lista.data ? lista.data.split('-').reverse().join('/') : '-'}
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded font-bold text-[11px]">
-                          {lista.tipo === 'grupos' ? 'Grupo' : 'Comum'}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
-                          lista.status === 'finalizada' 
-                            ? 'bg-emerald-100 text-emerald-800' 
-                            : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-center font-bold text-gray-800">{itensCount}</td>
-                      
-                      {/* Status de Validação da Lista */}
-                      <td className="py-3.5 px-4 text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedListaForReport(lista);
-                            setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
-                            setReportSearch('');
-                          }}
-                          className="inline-flex flex-col items-center gap-1 cursor-pointer group"
-                          title="Clique para abrir o relatório detalhado desta lista"
-                        >
-                          <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-bold text-[10px]">
-                              {validadosCount} validados
+                      <tr 
+                        key={lista.id}
+                        onClick={() => setSelectedListaForReport(lista)}
+                        className="hover:bg-gray-50/80 transition-colors cursor-pointer group"
+                      >
+                        <td className="py-2.5 px-3 font-semibold text-gray-900">
+                          <div className="flex items-center gap-2">
+                            <span className="group-hover:text-[#3483FA] transition-colors">
+                              {lista.nome}
                             </span>
-                            {naoValidadosCount > 0 && (
-                              <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded font-black text-[10px] flex items-center gap-1 shadow-2xs">
-                                <AlertCircle className="w-3 h-3 text-amber-600" />
-                                {naoValidadosCount} pendentes
+                            {lista.tipo === 'grupos' && (
+                              <span className="px-1.5 py-0.2 bg-purple-50 text-purple-700 rounded text-[9px] font-bold">
+                                Grupos
                               </span>
                             )}
                           </div>
-                          <span className="text-[10px] text-[#3483FA] group-hover:underline font-bold">
-                            Ver relatório
-                          </span>
-                        </button>
-                      </td>
+                        </td>
 
-                      <td className="py-3.5 px-4 text-center font-bold text-emerald-600">
-                        {lista.porcentagemAcerto !== undefined ? `${lista.porcentagemAcerto}%` : '-'}
-                      </td>
-                      <td className="py-3.5 px-4 text-center font-medium">
-                        {lista.fechamentoGaiola || '-'}
-                      </td>
-                      <td className="py-3.5 px-4 text-center font-bold text-red-600">
-                        {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => {
-                              setSelectedListaForReport(lista);
-                              setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
-                              setReportSearch('');
-                            }}
-                            className={`px-3 py-1.5 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border ${
-                              naoValidadosCount > 0
-                                ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
-                                : 'bg-blue-50 hover:bg-blue-100 text-[#3483FA] border-blue-200'
-                            }`}
-                            title="Abrir Relatório para ver IDs não validados e detalhes"
+                        <td className="py-2.5 px-3 text-center font-mono text-gray-600">
+                          {dateBr}
+                        </td>
+
+                        <td className="py-2.5 px-3 text-center font-mono font-bold text-gray-900">
+                          {itensCount.toLocaleString('pt-BR')}
+                        </td>
+
+                        <td className="py-2.5 px-3 text-center font-mono text-emerald-700 font-bold">
+                          {validadosCount.toLocaleString('pt-BR')}
+                        </td>
+
+                        <td className="py-2.5 px-3 text-center font-mono">
+                          {naoValidadosCount > 0 ? (
+                            <span className="text-amber-800 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                              {naoValidadosCount.toLocaleString('pt-BR')}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">0</span>
+                          )}
+                        </td>
+
+                        <td className="py-2.5 px-3 text-center font-mono font-bold text-gray-800">
+                          {porcentagem.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                        </td>
+
+                        <td className="py-2.5 px-3 text-center text-gray-600">
+                          {lista.fechamentoGaiola || '-'}
+                        </td>
+
+                        <td className="py-2.5 px-3 text-center">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            lista.status === 'finalizada'
+                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                              : 'bg-blue-50 text-blue-800 border border-blue-200'
+                          }`}>
+                            {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'}
+                          </span>
+                        </td>
+
+                        {!isPresentationMode && (
+                          <td 
+                            className="py-2.5 px-3 text-right relative action-menu-container"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <FileText className="w-3.5 h-3.5 text-amber-700" />
-                            <span>Relatório {naoValidadosCount > 0 ? `(${naoValidadosCount})` : ''}</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                            <button
+                              type="button"
+                              onClick={() => setActiveActionMenuId(activeActionMenuId === lista.id ? null : lista.id)}
+                              className="p-1 hover:bg-gray-100 text-gray-500 rounded transition-colors cursor-pointer"
+                              title="Mais Ações"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+
+                            {activeActionMenuId === lista.id && (
+                              <div className="absolute right-3 top-8 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-30 text-left text-xs">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedListaForReport(lista);
+                                    setActiveActionMenuId(null);
+                                  }}
+                                  className="w-full px-3 py-2 text-left hover:bg-gray-50 flex items-center gap-2 font-medium text-gray-700 cursor-pointer"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-gray-400" />
+                                  <span>Relatório Detalhado</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenMetricsModal(lista)}
+                                  className="w-full px-3 py-2 text-left hover:bg-gray-50 flex items-center gap-2 font-medium text-gray-700 cursor-pointer border-t border-gray-100"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5 text-gray-400" />
+                                  <span>Editar Métricas / Gaiola</span>
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        )}
+                      </tr>
                     );
                   })}
+
                   {filteredListas.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="py-12 text-center text-gray-400 font-medium">
-                        Nenhuma lista de coleta encontrada para o período selecionado. ({getFilterDescription()})
+                      <td colSpan={isPresentationMode ? 8 : 9} className="py-10 text-center text-gray-400 font-medium">
+                        Nenhuma lista de coleta encontrada para o filtro informado.
                       </td>
                     </tr>
                   )}
@@ -758,76 +897,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
               </table>
             </div>
           </div>
+
         </div>
       )}
 
-      {/* ABA 2: USUÁRIOS & SOLICITAÇÕES */}
-      {adminTab === 'usuarios' && (
-        <div className="space-y-6 animate-in fade-in">
-          {/* PAINEL 1: SOLICITAÇÕES DE ACESSO PENDENTES */}
-          <div className="bg-white rounded-2xl shadow-sm border border-amber-200 p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
-                  <UserPlus className="w-6 h-6" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                    Solicitações de Acesso Pendentes
-                    {pendingUsers.length > 0 && (
-                      <span className="bg-amber-500 text-white text-xs px-2.5 py-0.5 rounded-full font-black">
-                        {pendingUsers.length}
-                      </span>
-                    )}
-                  </h2>
-                  <p className="text-xs text-gray-500">Novos usuários aguardando aprovação para acessar o sistema</p>
-                </div>
+      {/* ABA USUÁRIOS E SOLICITAÇÕES (EXIBIDA APENAS FORA DO MODO APRESENTAÇÃO) */}
+      {!isPresentationMode && adminTab === 'usuarios' && (
+        <div className="space-y-5">
+          
+          {/* SOLICITAÇÕES PENDENTES */}
+          <div className="bg-white rounded-xl border border-amber-200 p-4 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-amber-600" />
+                <h2 className="text-sm font-bold text-gray-900">
+                  Solicitações de Acesso Pendentes ({pendingUsers.length})
+                </h2>
               </div>
             </div>
 
             {pendingUsers.length === 0 ? (
-              <div className="py-8 text-center text-gray-400 text-xs font-medium flex flex-col items-center gap-2">
-                <UserCheck className="w-8 h-8 text-gray-300" />
-                <span>Nenhuma solicitação de cadastro pendente no momento. Todos os usuários estão aprovados.</span>
-              </div>
+              <p className="text-xs text-gray-400 text-center py-4">
+                Nenhuma solicitação pendente no momento. Todos os usuários estão aprovados.
+              </p>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {pendingUsers.map(pUser => (
-                  <div key={pUser.id} className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 flex flex-col justify-between gap-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-amber-200 text-amber-900 font-bold flex items-center justify-center text-sm uppercase">
-                          {pUser.username.substring(0, 2)}
-                        </div>
-                        <div>
-                          <p className="font-bold text-sm text-gray-900">{pUser.username}</p>
-                          <p className="text-xs text-gray-600 font-mono">{pUser.email}</p>
-                        </div>
-                      </div>
-                      <span className="px-2.5 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-[10px] font-black uppercase">
-                        Pendente
-                      </span>
+                  <div key={pUser.id} className="bg-amber-50/50 border border-amber-200 rounded-lg p-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-xs text-gray-900">{pUser.username}</p>
+                      <p className="text-[11px] text-gray-500 font-mono">{pUser.email}</p>
                     </div>
 
-                    <div className="flex items-center gap-2 pt-2 border-t border-amber-200/60">
+                    <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => toggleApproval(pUser.id, false)}
-                        className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded transition-colors cursor-pointer"
                       >
-                        <CheckCircle className="w-4 h-4" />
-                        Aprovar Acesso
-                      </button>
-
-                      <button
-                        onClick={async () => {
-                          await toggleApproval(pUser.id, false);
-                          await toggleAdmin(pUser.id, false);
-                        }}
-                        className="py-2 px-3 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                        title="Aprovar com nível Administrador"
-                      >
-                        <Shield className="w-4 h-4" />
-                        Aprovar como Admin
+                        Aprovar
                       </button>
                     </div>
                   </div>
@@ -836,74 +943,64 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
             )}
           </div>
 
-          {/* PAINEL 2: GERENCIAR USUÁRIOS CADASTRADOS */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Users className="w-6 h-6 text-gray-700" />
-                <div>
-                  <h2 className="text-lg font-bold text-gray-800">Usuários Cadastrados & Permissões</h2>
-                  <p className="text-xs text-gray-500">Controle o status de aprovação, perfil admin e acesso às abas do sistema</p>
-                </div>
-              </div>
+          {/* GERENCIAR USUÁRIOS */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h2 className="text-sm font-bold text-gray-900">
+                Usuários Cadastrados ({users.length})
+              </h2>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-gray-50 text-gray-600 font-bold uppercase text-xs border-b border-gray-200">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-gray-50 text-gray-500 font-bold uppercase text-[10px] border-b border-gray-200">
                   <tr>
-                    <th className="px-4 py-3">Usuário / E-mail</th>
-                    <th className="px-4 py-3 text-center">Status</th>
-                    <th className="px-4 py-3 text-center">Admin</th>
-                    <th className="px-4 py-3">Permissão de Abas</th>
+                    <th className="px-3 py-2">Usuário</th>
+                    <th className="px-3 py-2 text-center">Aprovação</th>
+                    <th className="px-3 py-2 text-center">Admin</th>
+                    <th className="px-3 py-2">Permissão de Abas</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {users.map(user => (
-                    <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-4">
-                        <div className="font-bold text-gray-800">{user.username}</div>
-                        <div className="text-xs text-gray-500 font-mono">{user.email}</div>
+                    <tr key={user.id} className="hover:bg-gray-50">
+                      <td className="px-3 py-2.5">
+                        <div className="font-bold text-gray-900">{user.username}</div>
+                        <div className="text-[11px] text-gray-400 font-mono">{user.email}</div>
                       </td>
-                      
-                      <td className="px-4 py-4 text-center">
-                        <button 
+
+                      <td className="px-3 py-2.5 text-center">
+                        <button
                           onClick={() => toggleApproval(user.id, user.isApproved)}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-colors cursor-pointer ${
-                            user.isApproved 
-                            ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
-                            : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold cursor-pointer ${
+                            user.isApproved ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
                           }`}
                         >
-                          {user.isApproved ? <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> : <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />}
-                          {user.isApproved ? 'Aprovado' : 'Aprovar'}
+                          {user.isApproved ? 'Aprovado' : 'Pendente'}
                         </button>
                       </td>
-                      
-                      <td className="px-4 py-4 text-center">
-                        <button 
+
+                      <td className="px-3 py-2.5 text-center">
+                        <button
                           onClick={() => toggleAdmin(user.id, user.isAdmin)}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-colors cursor-pointer ${
-                            user.isAdmin 
-                            ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold cursor-pointer ${
+                            user.isAdmin ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-600'
                           }`}
                         >
-                          <Shield className="w-3.5 h-3.5" />
                           {user.isAdmin ? 'Sim' : 'Não'}
                         </button>
                       </td>
 
-                      <td className="px-4 py-4">
-                        <div className="flex flex-wrap gap-1.5">
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-wrap gap-1">
                           {TABS.map(tab => (
                             <button
                               key={tab.id}
                               onClick={() => toggleTabAccess(user.id, user.allowedGroups || [], tab.id)}
-                              className={`px-2.5 py-1 border rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium border cursor-pointer ${
                                 (user.allowedGroups || []).includes(tab.id)
-                                ? 'bg-blue-50 border-blue-200 text-[#3483FA] hover:bg-blue-100'
-                                : 'bg-white border-gray-200 text-gray-400 hover:bg-gray-50'
+                                  ? 'bg-blue-50 border-blue-200 text-[#3483FA]'
+                                  : 'bg-white border-gray-200 text-gray-400'
                               }`}
                             >
                               {tab.label}
@@ -917,107 +1014,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
               </table>
             </div>
           </div>
+
         </div>
       )}
 
-      {/* MODAL DE METRICAS E FECHAMENTO DE GAIOLA */}
-      {selectedListaForMetrics && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-lg overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-blue-50/50">
-              <div className="flex items-center gap-2 text-[#3483FA]">
-                <BarChart3 className="w-6 h-6" />
-                <h3 className="text-lg font-black uppercase tracking-tight">Finalizar & Registrar Métricas</h3>
-              </div>
-              <button 
-                onClick={() => setSelectedListaForMetrics(null)}
-                className="p-2 hover:bg-blue-100 rounded-full text-blue-400 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                <p className="text-xs font-bold text-gray-400 uppercase">Lista Selecionada</p>
-                <p className="text-base font-black text-gray-800">{selectedListaForMetrics.nome}</p>
-                <p className="text-xs font-bold text-gray-600 mt-1">Total de Bips Coletados: <span className="text-[#3483FA]">{selectedListaForMetrics.itens?.length || 0} itens</span></p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-black uppercase text-gray-600">Porcentagem de Acerto (%)</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.1"
-                  value={formAcerto}
-                  onChange={(e) => setFormAcerto(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3483FA]"
-                  placeholder="Ex: 99.5"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-black uppercase text-gray-600">Fechamento de Gaiola</label>
-                <select
-                  value={formGaiola}
-                  onChange={(e) => setFormGaiola(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3483FA]"
-                >
-                  <option value="Fechado com Sucesso">Fechado com Sucesso</option>
-                  <option value="Fechamento Parcial">Fechamento Parcial</option>
-                  <option value="Aguardando Recontagem">Aguardando Recontagem</option>
-                  <option value="Divergência Encontrada">Divergência Encontrada</option>
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-black uppercase text-gray-600">Quantos Faltaram (Itens Ausentes)</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={formFaltaram}
-                  onChange={(e) => setFormFaltaram(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3483FA]"
-                  placeholder="Ex: 0"
-                />
-              </div>
-            </div>
-
-            <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-3">
-              <button
-                onClick={() => setSelectedListaForMetrics(null)}
-                className="flex-1 py-3 bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 font-bold rounded-xl text-xs transition-all cursor-pointer"
-              >
-                CANCELAR
-              </button>
-              <button
-                onClick={handleSaveMetrics}
-                className="flex-1 py-3 bg-[#3483FA] hover:bg-blue-600 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <CheckCircle className="w-4 h-4" />
-                SALVAR E FINALIZAR LISTA
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DE RELATÓRIO DA LISTA (VISUALIZAÇÃO DE NÃO VALIDADOS & DETALHES) */}
+      {/* PAINEL LATERAL (DRAWER) DE RELATÓRIO DETALHADO */}
       {selectedListaForReport && (() => {
         const itensLista = selectedListaForReport.itens || [];
         const naoValidadosList = itensLista.filter(i => !i.validado);
         const validadosList = itensLista.filter(i => !!i.validado);
 
-        // Filtrar por aba
         let listToDisplay = reportTab === 'nao_validados' 
           ? naoValidadosList 
           : reportTab === 'validados' 
           ? validadosList 
           : itensLista;
 
-        // Filtrar por busca
         if (reportSearch.trim()) {
           const q = reportSearch.toLowerCase().trim();
           listToDisplay = listToDisplay.filter(i => 
@@ -1029,366 +1041,345 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
         }
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
-              {/* Header do Relatório */}
-              <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-amber-50/70 via-blue-50/40 to-white">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-amber-100 text-amber-800 rounded-xl border border-amber-200 shadow-2xs">
-                    <FileText className="w-6 h-6" />
-                  </div>
+          <div className="fixed inset-0 z-50 overflow-hidden">
+            {/* Backdrop */}
+            <div 
+              className="fixed inset-0 bg-black/40 backdrop-blur-2xs transition-opacity"
+              onClick={() => setSelectedListaForReport(null)}
+            />
+
+            <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+              <div className="w-screen max-w-3xl bg-white shadow-2xl flex flex-col border-l border-gray-200 font-sans">
+                
+                {/* Header do Drawer */}
+                <div className="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
                   <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-lg font-black text-gray-900 uppercase tracking-tight">
-                        Relatório: {selectedListaForReport.nome}
-                      </h3>
-                      <span className={`px-2 py-0.5 rounded font-black text-[10px] uppercase border ${
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-gray-900">
+                        {selectedListaForReport.nome}
+                      </h2>
+                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${
                         selectedListaForReport.status === 'finalizada'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-blue-50 text-[#3483FA] border-blue-200'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-blue-100 text-blue-800'
                       }`}>
                         {selectedListaForReport.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'}
                       </span>
-                      <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded font-black text-[10px] uppercase">
-                        {selectedListaForReport.tipo === 'grupos' ? 'Lista de Grupos' : 'Lista Comum'}
-                      </span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1 flex items-center gap-3 font-medium">
-                      <span>Data: <strong className="text-gray-700">{selectedListaForReport.data}</strong></span>
-                      <span>•</span>
-                      <span>Saída: <strong className="text-gray-700">{selectedListaForReport.saida}</strong></span>
-                      <span>•</span>
-                      <span>Responsável: <strong className="text-gray-700">{selectedListaForReport.responsavel || 'Operador'}</strong></span>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Data: {selectedListaForReport.data ? selectedListaForReport.data.split('-').reverse().join('/') : '-'} • 
+                      Responsável: {selectedListaForReport.responsavel || 'Operador'}
                     </p>
                   </div>
-                </div>
-                <button 
-                  onClick={() => setSelectedListaForReport(null)}
-                  className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-                  title="Fechar Relatório"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Cards de Métricas */}
-              <div className="p-4 sm:p-5 border-b border-gray-100 bg-gray-50/50">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                  <div className="bg-white border border-gray-200 p-3.5 rounded-xl shadow-2xs">
-                    <span className="text-[11px] font-black text-gray-400 uppercase tracking-wider block">Total Bipado</span>
-                    <span className="text-2xl font-black text-gray-800">{itensLista.length}</span>
-                    <span className="text-xs text-gray-500 font-medium block mt-0.5">IDs na lista</span>
-                  </div>
-
-                  <div className="bg-white border border-emerald-200 p-3.5 rounded-xl shadow-2xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-emerald-600 uppercase tracking-wider block">IDs Validados</span>
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    </div>
-                    <span className="text-2xl font-black text-emerald-700">{validadosList.length}</span>
-                    <span className="text-xs text-emerald-600 font-medium block mt-0.5">
-                      {itensLista.length > 0 ? `${((validadosList.length / itensLista.length) * 100).toFixed(0)}% validado` : '0%'}
-                    </span>
-                  </div>
-
-                  <div className={`p-3.5 rounded-xl shadow-2xs border ${
-                    naoValidadosList.length > 0 
-                      ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-200' 
-                      : 'bg-white border-gray-200'
-                  }`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-amber-800 uppercase tracking-wider block">IDs Não Validados</span>
-                      <AlertCircle className="w-4 h-4 text-amber-600" />
-                    </div>
-                    <span className="text-2xl font-black text-amber-900">{naoValidadosList.length}</span>
-                    <span className="text-xs text-amber-700 font-bold block mt-0.5">
-                      {naoValidadosList.length > 0 ? 'Requerem validação na base' : 'Todos validados'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Barra de Abas & Ações */}
-              <div className="p-3.5 bg-white border-b border-gray-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
-                {/* Abas */}
-                <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => setReportTab('nao_validados')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                      reportTab === 'nao_validados'
-                        ? 'bg-amber-500 text-white shadow-xs'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/60'
-                    }`}
-                  >
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    <span>Não Validados</span>
-                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                      reportTab === 'nao_validados' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
-                    }`}>
-                      {naoValidadosList.length}
-                    </span>
-                  </button>
 
                   <button
                     type="button"
-                    onClick={() => setReportTab('todos')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                      reportTab === 'todos'
-                        ? 'bg-white text-gray-900 shadow-xs'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/60'
-                    }`}
+                    onClick={() => setSelectedListaForReport(null)}
+                    className="p-1.5 hover:bg-gray-200 rounded-lg text-gray-500 transition-colors cursor-pointer"
                   >
-                    <span>Todos os IDs</span>
-                    <span className="px-1.5 py-0.2 bg-gray-200 text-gray-700 rounded-full text-[10px] font-mono">
-                      {itensLista.length}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setReportTab('validados')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                      reportTab === 'validados'
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/60'
-                    }`}
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Validados</span>
-                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                      reportTab === 'validados' ? 'bg-emerald-700 text-white' : 'bg-emerald-100 text-emerald-800'
-                    }`}>
-                      {validadosList.length}
-                    </span>
+                    <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                {/* Busca e Botões */}
-                <div className="flex items-center gap-2 w-full md:w-auto flex-wrap">
-                  <div className="relative flex-1 md:w-44">
-                    <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      placeholder="Buscar no relatório..."
-                      value={reportSearch}
-                      onChange={(e) => setReportSearch(e.target.value)}
-                      className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:border-[#3483FA] focus:bg-white transition-all"
-                    />
+                {/* Resumo Métrico */}
+                <div className="p-3 bg-white border-b border-gray-100 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">
+                    <span className="text-[10px] uppercase font-bold text-gray-400 block">Total</span>
+                    <span className="text-base font-bold text-gray-800 font-mono">{itensLista.length}</span>
                   </div>
+                  <div className="bg-emerald-50 p-2.5 rounded-lg border border-emerald-100">
+                    <span className="text-[10px] uppercase font-bold text-emerald-700 block">Validados</span>
+                    <span className="text-base font-bold text-emerald-800 font-mono">{validadosList.length}</span>
+                  </div>
+                  <div className="bg-amber-50 p-2.5 rounded-lg border border-amber-100">
+                    <span className="text-[10px] uppercase font-bold text-amber-700 block">Não Validados</span>
+                    <span className="text-base font-bold text-amber-900 font-mono">{naoValidadosList.length}</span>
+                  </div>
+                </div>
 
-                  {/* Copiar IDs Não Validados com Feedback Verde/Azul */}
-                  <button
-                    type="button"
-                    onClick={handleCopyNaoValidados}
-                    disabled={naoValidadosList.length === 0}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-40 active:scale-95 ${
-                      copiedReportNaoValidados
-                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md ring-2 ring-emerald-300'
-                        : 'bg-[#3483FA] hover:bg-blue-600 text-white'
-                    }`}
-                    title="Copiar lista de códigos dos IDs não validados"
-                  >
-                    {copiedReportNaoValidados ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                        <span>Copiado!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-white" />
-                        <span>Copiar Não Validados ({naoValidadosList.length})</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* Baixar CSV com apenas IDs */}
-                  <button
-                    type="button"
-                    onClick={handleExportNaoValidadosCSV}
-                    disabled={naoValidadosList.length === 0}
-                    className="px-3 py-1.5 bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-40"
-                    title="Baixar CSV somente com os IDs não validados"
-                  >
-                    <Download className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Baixar CSV</span>
-                  </button>
-
-                  {/* Validar Todos os Pendentes */}
-                  {naoValidadosList.length > 0 && (
+                {/* Controles e Filtros */}
+                <div className="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1 bg-gray-200 p-0.5 rounded-lg text-xs">
                     <button
-                      type="button"
-                      onClick={handleValidarTodosPendentes}
-                      className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer"
-                      title="Marcar todos os itens pendentes como validados nesta lista"
+                      onClick={() => setReportTab('nao_validados')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                        reportTab === 'nao_validados' ? 'bg-amber-500 text-white' : 'text-gray-600'
+                      }`}
                     >
-                      <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Validar Todos</span>
+                      Não Validados ({naoValidadosList.length})
                     </button>
-                  )}
-                </div>
-              </div>
+                    <button
+                      onClick={() => setReportTab('todos')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                        reportTab === 'todos' ? 'bg-white text-gray-900 shadow-2xs' : 'text-gray-600'
+                      }`}
+                    >
+                      Todos ({itensLista.length})
+                    </button>
+                    <button
+                      onClick={() => setReportTab('validados')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                        reportTab === 'validados' ? 'bg-emerald-600 text-white' : 'text-gray-600'
+                      }`}
+                    >
+                      Validados ({validadosList.length})
+                    </button>
+                  </div>
 
-              {/* Tabela de Itens */}
-              <div className="flex-1 overflow-y-auto p-4 max-h-[50vh]">
-                {listToDisplay.length > 0 ? (
-                  <div className="border border-gray-200 rounded-xl overflow-hidden shadow-2xs">
-                    <table className="w-full text-xs text-left text-gray-700 border-collapse">
-                      <thead className="bg-gray-100 text-gray-700 font-black uppercase tracking-wider sticky top-0 z-10 border-b border-gray-200">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="relative w-36">
+                      <Search className="w-3 h-3 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Buscar..."
+                        value={reportSearch}
+                        onChange={(e) => setReportSearch(e.target.value)}
+                        className="w-full pl-7 pr-2 py-1 bg-white border border-gray-200 rounded text-xs focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      onClick={handleCopyNaoValidados}
+                      disabled={naoValidadosList.length === 0}
+                      className="px-2.5 py-1 bg-[#3483FA] hover:bg-blue-600 text-white rounded text-xs font-bold cursor-pointer disabled:opacity-40"
+                    >
+                      {copiedReportNaoValidados ? 'Copiado!' : 'Copiar IDs'}
+                    </button>
+
+                    <button
+                      onClick={handleExportNaoValidadosCSV}
+                      disabled={naoValidadosList.length === 0}
+                      className="px-2.5 py-1 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded text-xs font-bold cursor-pointer disabled:opacity-40"
+                    >
+                      Baixar CSV
+                    </button>
+
+                    {!isPresentationMode && naoValidadosList.length > 0 && (
+                      <button
+                        onClick={handleValidarTodosPendentes}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold cursor-pointer"
+                      >
+                        Validar Todos
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tabela do Drawer */}
+                <div className="flex-1 overflow-y-auto p-3">
+                  {listToDisplay.length > 0 ? (
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead className="bg-gray-100 text-gray-600 font-bold uppercase text-[10px] sticky top-0 border-b border-gray-200">
                         <tr>
-                          <th className="py-2.5 px-3 text-center w-12 bg-gray-100 border-r border-gray-200">#</th>
-                          <th className="py-2.5 px-3 text-left bg-gray-100 border-r border-gray-200">ID / Código</th>
-                          {selectedListaForReport.tipo === 'grupos' && (
-                            <th className="py-2.5 px-3 text-center w-28 bg-purple-50 text-purple-900 border-r border-gray-200">Grupo</th>
-                          )}
-                          <th className="py-2.5 px-3 text-center w-28 bg-gray-100 border-r border-gray-200">Status Validação</th>
-                          <th className="py-2.5 px-3 text-center w-32 bg-gray-100 border-r border-gray-200">Bipado por</th>
-                          <th className="py-2.5 px-3 text-center w-20 bg-gray-100 border-r border-gray-200">Rota</th>
-                          <th className="py-2.5 px-3 text-center w-20 bg-gray-100 border-r border-gray-200">Saída</th>
-                          <th className="py-2.5 px-3 text-center w-40 bg-gray-100 border-r border-gray-200">Motivo</th>
-                          <th className="py-2.5 px-3 text-center w-36 bg-gray-100 border-r border-gray-200">Data / Hora</th>
-                          <th className="py-2.5 px-3 text-center w-16 bg-gray-100">Copiar</th>
+                          <th className="py-2 px-2 text-center w-8">#</th>
+                          <th className="py-2 px-2">ID / Código</th>
+                          <th className="py-2 px-2 text-center">Status</th>
+                          <th className="py-2 px-2 text-center">Bipado Por</th>
+                          <th className="py-2 px-2 text-center">Rota</th>
+                          <th className="py-2 px-2 text-center">Motivo</th>
+                          <th className="py-2 px-2 text-center">Hora</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-200 font-sans">
-                        {listToDisplay.map((item, idx) => {
-                          const grupo = selectedListaForReport.grupos?.find(g => g.id === item.grupoId);
-                          return (
-                            <tr 
-                              key={item.id}
-                              className={`transition-colors hover:bg-gray-50 ${
-                                !item.validado ? 'bg-amber-50/40' : 'bg-white'
-                              }`}
-                            >
-                              <td className="py-2 px-3 text-center text-gray-400 font-bold border-r border-gray-200 w-12">
-                                {idx + 1}
-                              </td>
-                              <td className="py-2 px-3 font-mono font-bold text-gray-900 border-r border-gray-200">
-                                <div className="flex items-center gap-1.5">
-                                  <Barcode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                                  <span>{item.codigo}</span>
-                                </div>
-                              </td>
-
-                              {selectedListaForReport.tipo === 'grupos' && (
-                                <td className="py-2 px-3 text-center border-r border-gray-200 w-28">
-                                  {grupo ? (
-                                    <span className="bg-purple-100 text-purple-800 border border-purple-200 px-2 py-0.5 rounded font-black text-[10px] uppercase truncate block max-w-[100px] mx-auto">
-                                      {grupo.nome}
-                                    </span>
-                                  ) : (
-                                    <span className="text-gray-400 text-[10px] italic">Sem Grupo</span>
-                                  )}
-                                </td>
-                              )}
-
-                              <td className="py-2 px-3 text-center border-r border-gray-200 w-28">
+                      <tbody className="divide-y divide-gray-100">
+                        {listToDisplay.map((item, idx) => (
+                          <tr key={item.id} className={!item.validado ? 'bg-amber-50/40' : ''}>
+                            <td className="py-2 px-2 text-center text-gray-400 font-mono">{idx + 1}</td>
+                            <td className="py-2 px-2 font-mono font-bold text-gray-900">{item.codigo}</td>
+                            <td className="py-2 px-2 text-center">
+                              {!isPresentationMode ? (
                                 <button
-                                  type="button"
                                   onClick={() => handleToggleValidadoInAdmin(item.id)}
-                                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
-                                    item.validado
-                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
-                                      : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                                    item.validado ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
                                   }`}
-                                  title="Clique para alternar o status de validação"
                                 >
-                                  {item.validado ? (
-                                    <>
-                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                      <span>Validado</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <AlertCircle className="w-3 h-3 text-amber-600" />
-                                      <span>Não Validado</span>
-                                    </>
-                                  )}
+                                  {item.validado ? 'Validado' : 'Pendente'}
                                 </button>
-                              </td>
-
-                              <td className="py-2 px-3 text-center border-r border-gray-200 w-32">
-                                <span className="inline-flex items-center justify-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-[11px] font-bold truncate max-w-[120px]">
-                                  <UserIcon className="w-2.5 h-2.5 opacity-60" />
-                                  <span className="truncate">{item.responsavel || selectedListaForReport.responsavel || 'Operador'}</span>
+                              ) : (
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  item.validado ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {item.validado ? 'Validado' : 'Pendente'}
                                 </span>
-                              </td>
-
-                              <td className="py-2 px-3 text-center font-bold text-gray-800 border-r border-gray-200 w-20">
-                                {item.rota && item.rota.trim() !== '' ? item.rota : '-'}
-                              </td>
-
-                              <td className="py-2 px-3 text-center border-r border-gray-200 w-20">
-                                <span className="bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded font-black text-[10px]">
-                                  {item.saida?.includes('PM') ? 'PM' : item.saida?.includes('AM') ? 'AM' : 'Ciclo'}
-                                </span>
-                              </td>
-
-                              <td className="py-2 px-3 text-center border-r border-gray-200 w-40">
-                                <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-800 border border-gray-200 font-bold text-[10px] uppercase truncate block max-w-[150px] mx-auto">
-                                  {item.motivo || 'Sem Motivo'}
-                                </span>
-                              </td>
-
-                              <td className="py-2 px-3 text-center text-gray-500 text-[11px] border-r border-gray-200 w-36">
-                                {item.scannedAt}
-                              </td>
-
-                              <td className="py-2 px-3 text-center w-16">
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopySingleCode(item.codigo)}
-                                  className="p-1 hover:bg-gray-200 text-gray-500 hover:text-black rounded transition-colors cursor-pointer inline-flex items-center justify-center"
-                                  title="Copiar ID"
-                                >
-                                  {copiedItemId === item.codigo ? (
-                                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                                  ) : (
-                                    <Copy className="w-3.5 h-3.5" />
-                                  )}
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-center text-gray-600">{item.responsavel || '-'}</td>
+                            <td className="py-2 px-2 text-center text-gray-600">{item.rota || '-'}</td>
+                            <td className="py-2 px-2 text-center text-gray-600">{item.motivo || '-'}</td>
+                            <td className="py-2 px-2 text-center text-gray-400 font-mono text-[10px]">{item.scannedAt}</td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
-                  </div>
-                ) : (
-                  <div className="py-12 text-center text-gray-400 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
-                    {reportTab === 'nao_validados' ? (
-                      <div className="space-y-2">
-                        <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
-                        <p className="font-bold text-gray-700 text-sm">Nenhum ID não validado encontrado!</p>
-                        <p className="text-xs text-gray-500">Todos os IDs desta lista já foram validados com sucesso.</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <Package className="w-10 h-10 text-gray-300 mx-auto" />
-                        <p className="font-bold text-gray-600 text-sm">Nenhum item corresponde aos filtros aplicados.</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                  ) : (
+                    <div className="py-12 text-center text-gray-400 text-xs">
+                      Nenhum item encontrado nesta visualização.
+                    </div>
+                  )}
+                </div>
 
-              {/* Footer do Modal */}
-              <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-                <span className="text-xs text-gray-500 font-bold">
-                  Exibindo {listToDisplay.length} de {itensLista.length} itens registrados
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedListaForReport(null)}
-                  className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-xl text-xs transition-colors cursor-pointer"
-                >
-                  Fechar Relatório
-                </button>
+                {/* Footer do Drawer */}
+                <div className="p-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between text-xs text-gray-500">
+                  <span>Exibindo {listToDisplay.length} de {itensLista.length} itens</span>
+                  <button
+                    onClick={() => setSelectedListaForReport(null)}
+                    className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                </div>
+
               </div>
             </div>
           </div>
         );
       })()}
+
+      {/* MODAL DE RANKING COMPLETO */}
+      {showRankingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-2xs">
+          <div className="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-md overflow-hidden font-sans">
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-500" />
+                <h3 className="text-sm font-bold text-gray-900">Ranking Completo de Colaboradores</h3>
+              </div>
+              <button onClick={() => setShowRankingModal(false)} className="p-1 hover:bg-gray-100 rounded text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 max-h-[60vh] overflow-y-auto divide-y divide-gray-100">
+              {ranking.map((col, idx) => (
+                <div key={col.nome} className="py-2.5 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center font-mono font-bold text-[10px] ${
+                      idx === 0 ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                      idx === 1 ? 'bg-gray-100 text-gray-700' :
+                      idx === 2 ? 'bg-orange-100 text-orange-800' : 'text-gray-400'
+                    }`}>
+                      {idx + 1}
+                    </span>
+                    <span className="font-semibold text-gray-900">{col.nome}</span>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="font-mono font-bold text-gray-900">{col.total.toLocaleString('pt-BR')} bips</span>
+                    {totalItensColetados > 0 && (
+                      <span className="text-gray-400 text-[10px] block">
+                        ({((col.total / totalItensColetados) * 100).toFixed(1)}%)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-3 border-t border-gray-100 bg-gray-50 text-right">
+              <button
+                onClick={() => setShowRankingModal(false)}
+                className="px-4 py-1.5 bg-gray-800 text-white font-bold text-xs rounded hover:bg-gray-900 cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE EDITAR MÉTRICAS DA LISTA */}
+      {selectedListaForMetrics && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-2xs">
+          <div className="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-md overflow-hidden font-sans">
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+              <h3 className="text-sm font-bold text-gray-900">Editar Métricas - {selectedListaForMetrics.nome}</h3>
+              <button onClick={() => setSelectedListaForMetrics(null)} className="p-1 hover:bg-gray-200 rounded text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-semibold text-gray-600 mb-1">Status</label>
+                  <select
+                    value={formStatus}
+                    onChange={(e) => setFormStatus(e.target.value as 'em_andamento' | 'finalizada')}
+                    className="w-full p-2 border border-gray-200 rounded font-semibold text-gray-800"
+                  >
+                    <option value="em_andamento">Em Andamento</option>
+                    <option value="finalizada">Finalizada</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-gray-600 mb-1">Data</label>
+                  <input
+                    type="date"
+                    value={formData}
+                    onChange={(e) => setFormData(e.target.value)}
+                    className="w-full p-2 border border-gray-200 rounded font-semibold text-gray-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Assertividade (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={formAcerto}
+                  onChange={(e) => setFormAcerto(e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded font-semibold text-gray-800"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Fechamento de Gaiola</label>
+                <select
+                  value={formGaiola}
+                  onChange={(e) => setFormGaiola(e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded font-semibold text-gray-800"
+                >
+                  <option value="Fechado com Sucesso">Fechado com Sucesso</option>
+                  <option value="Fechamento Parcial">Fechamento Parcial</option>
+                  <option value="Aguardando Recontagem">Aguardando Recontagem</option>
+                  <option value="Divergência Encontrada">Divergência Encontrada</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Quantos Faltaram (Itens Ausentes)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formFaltaram}
+                  onChange={(e) => setFormFaltaram(e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded font-semibold text-gray-800"
+                />
+              </div>
+            </div>
+
+            <div className="p-3 border-t border-gray-100 bg-gray-50 flex gap-2">
+              <button
+                onClick={() => setSelectedListaForMetrics(null)}
+                className="flex-1 py-1.5 bg-white border border-gray-200 text-gray-700 font-bold text-xs rounded hover:bg-gray-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveMetrics}
+                className="flex-1 py-1.5 bg-[#3483FA] text-white font-bold text-xs rounded hover:bg-blue-600 cursor-pointer"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

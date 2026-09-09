@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Trash2, Copy, Check, Download, AlertCircle, X, Layers, FileCode, Filter } from 'lucide-react';
+import { Trash2, Copy, Check, Download, AlertCircle, X, Filter, FileCode } from 'lucide-react';
 import { CsvRow } from '../types';
 import { cleanDigits, parseCsvText } from '../utils/csvParser';
 
@@ -15,7 +15,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
   const [copiedIds, setCopiedIds] = useState<boolean>(false);
   const [copiedFullTable, setCopiedFullTable] = useState<boolean>(false);
 
-  // Derive source rows: if user pasted custom CSV text in this view, use it; otherwise use system loaded rows
   const effectiveSourceRows = useMemo(() => {
     if (pastedCsvText.trim()) {
       return parseCsvText(pastedCsvText).rows;
@@ -23,7 +22,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     return rows;
   }, [pastedCsvText, rows]);
 
-  // Extract unique Saída values for filter dropdown
   const availableSaidas = useMemo(() => {
     const set = new Set<string>();
     effectiveSourceRows.forEach((r) => {
@@ -34,7 +32,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     return Array.from(set).sort();
   }, [effectiveSourceRows]);
 
-  // Set of terms to remove (cleaning non-digits as fallback)
   const { removeTermsSet, totalTermsInput } = useMemo(() => {
     if (!removeText.trim()) {
       return { removeTermsSet: new Set<string>(), totalTermsInput: 0 };
@@ -55,7 +52,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     return { removeTermsSet: set, totalTermsInput: rawTerms.length };
   }, [removeText]);
 
-  // Filter out matching rows
   const { remainingRows, removedCount } = useMemo(() => {
     if (removeTermsSet.size === 0) {
       return { remainingRows: effectiveSourceRows, removedCount: 0 };
@@ -81,7 +77,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     return { remainingRows: remaining, removedCount: removed };
   }, [effectiveSourceRows, removeTermsSet]);
 
-  // Apply Saída filter on remaining rows & sort by Group (1, 2, 3...) then ID
   const displayedRows = useMemo(() => {
     let list = remainingRows;
     if (saidaFilter) {
@@ -103,7 +98,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     });
   }, [remainingRows, saidaFilter]);
 
-  // Group breakdown for displayed remaining rows in numeric order (1, 2, 3...)
   const displayedGroupCounts = useMemo(() => {
     const map = new Map<string, number>();
     displayedRows.forEach((r) => {
@@ -116,7 +110,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   }, [displayedRows]);
 
-  // Quick Copy IDs
   const handleCopyIdsOnly = () => {
     if (displayedRows.length === 0) return;
     const text = ['ID', ...displayedRows.map((r) => r.id || r.cleanId)].join('\n');
@@ -125,7 +118,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     setTimeout(() => setCopiedIds(false), 2000);
   };
 
-  // Quick Copy Table (ID + Grupo + Saída)
   const handleCopyTable = () => {
     if (displayedRows.length === 0) return;
     const header = ['ID', 'GRUPO', 'Saída', 'MOTIVO', 'Concat'].join('\t');
@@ -137,7 +129,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     setTimeout(() => setCopiedFullTable(false), 2000);
   };
 
-  // Download filtered CSV file
   const handleDownloadCsv = () => {
     if (displayedRows.length === 0) return;
     const exportHeaders = ['GRUPO', 'ID', 'Saída', 'MOTIVO', 'Reversão', 'Concat'];
@@ -158,19 +149,17 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
   };
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto">
-      {/* Input Section - Clean & Direct */}
+    <div className="space-y-4 max-w-5xl mx-auto font-sans text-slate-800">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {/* Step 1: Base CSV Data */}
-        <div className="bg-white border border-gray-200 rounded-lg p-3.5 shadow-sm space-y-2">
+        <div className="bg-white border border-slate-200 rounded p-3.5 space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
-              <FileCode className="w-4 h-4 text-blue-600" />
-              1. Lista Base CSV ({effectiveSourceRows.length} IDs)
+            <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <FileCode className="w-4 h-4 text-slate-600" />
+              1. Base CSV ({effectiveSourceRows.length} IDs)
             </label>
 
             {rows.length === 0 && !pastedCsvText && (
-              <span className="text-[11px] font-mono text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+              <span className="text-[11px] font-mono text-slate-500">
                 Aguardando CSV
               </span>
             )}
@@ -181,39 +170,38 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
             onChange={(e) => setPastedCsvText(e.target.value)}
             placeholder={
               rows.length > 0
-                ? `Usando os ${rows.length} IDs do CSV principal carregado.\n(Ou cole um novo CSV aqui para substituir)`
-                : `Cole aqui o relatório CSV com os IDs...\nExemplo:\nID\tSaída\tMOTIVO\nGRUPO 1\t\t\n47691021163\tSaída PM\tEtiqueta Branca`
+                ? `Usando ${rows.length} IDs da base principal.\n(Ou cole um novo CSV para substituir)`
+                : `Cole o CSV aqui...`
             }
             rows={5}
-            className="w-full bg-gray-50/80 border border-gray-300 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/15 rounded-lg p-3 text-gray-900 font-mono text-xs leading-relaxed placeholder:text-gray-400 transition-all shadow-inner resize-y"
+            className="w-full bg-slate-50 border border-slate-300 focus:border-[#3483FA] focus:bg-white rounded p-3 text-slate-900 font-mono text-xs outline-none"
           />
 
           {pastedCsvText && (
             <div className="flex justify-end">
               <button
                 onClick={() => setPastedCsvText('')}
-                className="text-[10px] text-gray-500 hover:text-gray-800 font-mono flex items-center gap-1"
+                className="text-xs text-slate-600 hover:text-slate-900 font-mono flex items-center gap-1 cursor-pointer"
               >
-                <X className="w-3 h-3" /> Usar CSV Principal
+                <X className="w-3.5 h-3.5" /> Usar Base Principal
               </button>
             </div>
           )}
         </div>
 
-        {/* Step 2: IDs to Remove */}
-        <div className="bg-white border border-gray-200 rounded-lg p-3.5 shadow-sm space-y-2">
+        <div className="bg-white border border-slate-200 rounded p-3.5 space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
-              <Trash2 className="w-4 h-4 text-red-500" />
+            <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Trash2 className="w-4 h-4 text-slate-600" />
               2. IDs para Remover ({totalTermsInput})
             </label>
 
             {removeText && (
               <button
                 onClick={() => setRemoveText('')}
-                className="text-[10px] text-gray-500 hover:text-red-600 font-mono flex items-center gap-1"
+                className="text-xs text-slate-600 hover:text-red-600 font-mono flex items-center gap-1 cursor-pointer"
               >
-                <X className="w-3 h-3" /> Limpar
+                <X className="w-3.5 h-3.5" /> Limpar
               </button>
             )}
           </div>
@@ -221,36 +209,34 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
           <textarea
             value={removeText}
             onChange={(e) => setRemoveText(e.target.value)}
-            placeholder="Cole os IDs que deseja remover (ex: 47691021163, 47707799806)..."
+            placeholder="Cole os IDs que deseja dar baixa..."
             rows={5}
-            className="w-full bg-gray-50/80 border border-gray-300 focus:border-red-500 focus:bg-white focus:ring-4 focus:ring-red-500/15 rounded-lg p-3 text-gray-900 font-mono text-xs leading-relaxed placeholder:text-gray-400 transition-all shadow-inner resize-y"
+            className="w-full bg-slate-50 border border-slate-300 focus:border-[#3483FA] focus:bg-white rounded p-3 text-slate-900 font-mono text-xs outline-none"
           />
         </div>
       </div>
 
-      {/* Summary Action Bar */}
-      <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="text-xs font-mono text-gray-700 flex flex-wrap items-center gap-3">
-          <span className="font-bold text-amber-900 bg-amber-100 px-2 py-1 rounded border border-amber-200">
-            {displayedRows.length} IDs Exibidos {saidaFilter ? `(de ${remainingRows.length})` : ''}
+      <div className="bg-white border border-slate-200 rounded p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="text-xs font-mono text-slate-700 flex flex-wrap items-center gap-3">
+          <span className="font-bold text-slate-900">
+            {displayedRows.length} IDs Exibidos
           </span>
           {removedCount > 0 && (
-            <span className="text-red-600 font-bold bg-red-50 px-2 py-1 rounded border border-red-200">
-              {removedCount} Removidos
+            <span className="text-red-600 font-bold">
+              ({removedCount} Removidos)
             </span>
           )}
 
-          {/* Saída Filter selector */}
-          <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded px-2 py-1">
-            <Filter className="w-3.5 h-3.5 text-amber-600" />
-            <span className="text-[11px] font-bold text-gray-500 uppercase">Saída:</span>
+          <div className="flex items-center gap-1.5">
+            <Filter className="w-3.5 h-3.5 text-slate-500" />
+            <span className="text-xs font-semibold text-slate-600">Saída:</span>
             {availableSaidas.length > 0 ? (
               <select
                 value={saidaFilter}
                 onChange={(e) => setSaidaFilter(e.target.value)}
-                className="bg-transparent text-gray-800 text-xs font-mono focus:outline-none cursor-pointer"
+                className="bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
               >
-                <option value="">Todas as Saídas</option>
+                <option value="">Todas</option>
                 {availableSaidas.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -262,111 +248,84 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
                 type="text"
                 value={saidaFilter}
                 onChange={(e) => setSaidaFilter(e.target.value)}
-                placeholder="Filtrar por Saída..."
-                className="bg-transparent text-gray-800 text-xs font-mono focus:outline-none w-28 placeholder:text-gray-400"
+                placeholder="Filtrar saída..."
+                className="border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none w-28"
               />
-            )}
-            {saidaFilter && (
-              <button
-                onClick={() => setSaidaFilter('')}
-                className="text-gray-400 hover:text-red-600 ml-1"
-                title="Limpar filtro"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
             )}
           </div>
         </div>
 
-        {/* Action Buttons */}
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopyIdsOnly}
             disabled={displayedRows.length === 0}
-            className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-gray-950 font-black rounded text-xs font-mono uppercase tracking-wider transition-colors shadow-sm flex items-center gap-1.5"
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-800 rounded text-xs font-bold transition-colors cursor-pointer border border-slate-300"
           >
-            {copiedIds ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>Copiar Apenas IDs</span>
+            {copiedIds ? 'Copiado' : 'Copiar IDs'}
           </button>
 
           <button
             onClick={handleCopyTable}
             disabled={displayedRows.length === 0}
-            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-800 border border-gray-300 rounded text-xs font-mono font-semibold transition-colors flex items-center gap-1.5"
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-800 rounded text-xs font-bold transition-colors cursor-pointer border border-slate-300"
           >
-            {copiedFullTable ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>Copiar Tabela</span>
+            {copiedFullTable ? 'Copiado' : 'Copiar Tabela'}
           </button>
 
           <button
             onClick={handleDownloadCsv}
             disabled={displayedRows.length === 0}
-            className="px-3 py-1.5 bg-[#111827] hover:bg-black disabled:opacity-40 text-white rounded text-xs font-mono font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-1.5"
+            className="px-3 py-1.5 bg-[#3483FA] hover:bg-blue-600 disabled:opacity-40 text-white rounded text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
           >
-            <Download className="w-3.5 h-3.5 text-amber-400" />
+            <Download className="w-3.5 h-3.5" />
             <span>Baixar CSV</span>
           </button>
         </div>
       </div>
 
-      {/* Group distribution in numeric order */}
       {displayedGroupCounts.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
-          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-1.5">
-            Quantidade de IDs por Grupo (Ordem 1, 2, 3...):
+        <div className="bg-white border border-slate-200 rounded p-3">
+          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
+            Resumo por Grupo
           </span>
-          <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+          <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto font-mono text-xs">
             {displayedGroupCounts.map((g) => (
-              <div
-                key={g.name}
-                className="bg-amber-50/70 border border-amber-200 px-2 py-0.5 rounded text-xs flex items-center gap-1 font-mono"
-              >
-                <span className="text-amber-900 font-bold">{g.name}:</span>
-                <span className="text-gray-900 font-black bg-white px-1.5 py-0.2 rounded border border-amber-200">
-                  {g.count} {g.count === 1 ? 'ID' : 'IDs'}
-                </span>
-              </div>
+              <span key={g.name} className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-slate-800">
+                <strong>{g.name}:</strong> {g.count}
+              </span>
             ))}
           </div>
         </div>
       )}
 
-      {/* Fine Compact List Output */}
       {displayedRows.length === 0 ? (
-        <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-xs text-gray-500 font-mono">
-          <AlertCircle className="w-5 h-5 mx-auto text-gray-400 mb-1" />
-          {remainingRows.length > 0 && saidaFilter
-            ? `Nenhum ID encontrado com o filtro de Saída: "${saidaFilter}".`
-            : 'Nenhum ID restante para exibir. Carregue um CSV base ou insira novos dados.'}
+        <div className="bg-white border border-slate-200 rounded p-8 text-center text-xs text-slate-500 font-mono">
+          <AlertCircle className="w-4 h-4 mx-auto text-slate-400 mb-1" />
+          Nenhum ID restante para exibir.
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+        <div className="bg-white border border-slate-200 rounded overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-gray-50 text-gray-500 font-bold border-b border-gray-200 uppercase tracking-wider text-[10px]">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase font-bold text-[10px]">
                 <tr>
-                  <th className="py-2 px-3 text-gray-400 w-10">#</th>
+                  <th className="py-2 px-3 w-10">#</th>
                   <th className="py-2 px-3">ID</th>
-                  <th className="py-2 px-3 text-blue-700">GRUPO</th>
+                  <th className="py-2 px-3">Grupo</th>
                   <th className="py-2 px-3">Saída</th>
-                  <th className="py-2 px-3">MOTIVO</th>
+                  <th className="py-2 px-3">Motivo</th>
                   <th className="py-2 px-3">Concat</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 text-gray-800 text-[11px]">
+              <tbody className="divide-y divide-slate-100 text-slate-800">
                 {displayedRows.map((row, idx) => (
-                  <tr key={`${row.id}-${idx}`} className="hover:bg-blue-50/50 transition-colors">
-                    <td className="py-1.5 px-3 text-gray-400 text-[10px]">{idx + 1}</td>
-                    <td className="py-1.5 px-3 font-bold text-gray-900 whitespace-nowrap">{row.id}</td>
-                    <td className="py-1.5 px-3 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200">
-                        <Layers className="w-3 h-3 text-blue-600" />
-                        {row.group}
-                      </span>
-                    </td>
-                    <td className="py-1.5 px-3 whitespace-nowrap text-gray-700">{row.saida || '—'}</td>
-                    <td className="py-1.5 px-3 whitespace-nowrap text-gray-700">{row.motivo || '—'}</td>
-                    <td className="py-1.5 px-3 whitespace-nowrap font-bold text-blue-900">{row.concat || '—'}</td>
+                  <tr key={`${row.id}-${idx}`} className="hover:bg-slate-50">
+                    <td className="py-1.5 px-3 text-slate-400 text-[10px]">{idx + 1}</td>
+                    <td className="py-1.5 px-3 font-bold text-slate-900 whitespace-nowrap">{row.id}</td>
+                    <td className="py-1.5 px-3 whitespace-nowrap font-bold text-slate-800">{row.group}</td>
+                    <td className="py-1.5 px-3 whitespace-nowrap text-slate-700">{row.saida || '—'}</td>
+                    <td className="py-1.5 px-3 whitespace-nowrap text-slate-700">{row.motivo || '—'}</td>
+                    <td className="py-1.5 px-3 whitespace-nowrap text-slate-800">{row.concat || '—'}</td>
                   </tr>
                 ))}
               </tbody>

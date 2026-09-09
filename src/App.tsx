@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { CsvRow, GroupSummary } from './types';
 import { parseCsvText } from './utils/csvParser';
@@ -12,16 +12,13 @@ import { StatsSummary } from './components/StatsSummary';
 import { ControleRefugo } from './components/ControleRefugo';
 import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
-import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
 import { User } from './lib/auth';
-
 import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const isHome = location.pathname === '/';
 
   const [rawText, setRawText] = useState<string>('');
   const [rows, setRows] = useState<CsvRow[]>([]);
@@ -30,8 +27,13 @@ export default function App() {
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try { return JSON.parse(localStorage.getItem('currentUser') || 'null'); } catch { return null; }
+    try {
+      return JSON.parse(localStorage.getItem('currentUser') || 'null');
+    } catch {
+      return null;
+    }
   });
+
   const isAuthenticated = !!currentUser;
 
   useEffect(() => {
@@ -55,15 +57,11 @@ export default function App() {
     }
   }, [location.pathname, currentUser]);
 
-
-
-
   const showNotification = (msg: string) => {
     setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
+    setTimeout(() => setNotification(null), 3000);
   };
 
-  // On mount, load stored CSV from Firebase Firestore
   useEffect(() => {
     async function initFromFirebase() {
       setLoadingFirebase(true);
@@ -92,12 +90,11 @@ export default function App() {
     setGroups(parsed.groups);
     setHeaders(parsed.headers);
 
-    // Save to Firebase
     const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
     if (saved) {
-      showNotification(`Dados processados e salvos com sucesso! (${parsed.rows.length} IDs)`);
+      showNotification(`Dados salvos: ${parsed.rows.length} IDs`);
     } else {
-      showNotification('Processado localmente.');
+      showNotification('Processado localmente');
     }
   };
 
@@ -107,10 +104,8 @@ export default function App() {
     setGroups([]);
     setHeaders([]);
     navigate('/');
-    
-    // Clear from Firebase
     await clearColetor();
-    showNotification('Dados zerados com sucesso!');
+    showNotification('Dados zerados');
   };
 
   const getPageTitle = () => {
@@ -127,119 +122,87 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#EBEBEB] text-[#333333] flex flex-col font-sans selection:bg-[#3483FA] selection:text-white">
-      {/* Main Content Area */}
-      <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : location.pathname === "/listas" ? "px-4 sm:px-6 py-6 space-y-4" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"}`}>
-        {/* Floating Notification */}
+    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col font-sans">
+      <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : location.pathname === "/listas" ? "px-4 sm:px-6 py-5 space-y-4" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-5 space-y-4"}`}>
+        
         {notification && (
-          <div className="bg-[#111827] text-white px-4 py-2.5 rounded shadow-md text-xs font-mono flex items-center justify-between border border-gray-700 animate-in fade-in">
-            <span className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
-              {notification}
-            </span>
-            <button
-              onClick={() => setNotification(null)}
-              className="ml-4 hover:text-gray-300 font-bold px-1"
-            >
+          <div className="bg-slate-900 text-white px-4 py-2 rounded text-xs font-mono flex items-center justify-between border border-slate-700">
+            <span>{notification}</span>
+            <button onClick={() => setNotification(null)} className="ml-4 font-bold text-slate-400 hover:text-white">
               ✕
             </button>
           </div>
         )}
 
         {loadingFirebase && location.pathname !== '/refugo' ? (
-          <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
-            <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
-            <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>
-            
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-gray-100 rounded-lg animate-pulse"></div>
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 w-1/4 bg-gray-200 rounded animate-pulse"></div>
-                  <div className="h-3 w-2/3 bg-gray-100 rounded animate-pulse"></div>
-                </div>
-              </div>
-              <div className="mt-6 space-y-4 border-t border-gray-50 pt-4">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="flex items-center gap-4">
-                    <div className="w-8 h-8 bg-gray-100 rounded-md animate-pulse"></div>
-                    <div className="flex-1 space-y-2">
-                      <div className="h-3 w-1/3 bg-gray-200 rounded animate-pulse"></div>
-                      <div className="h-2 w-1/2 bg-gray-100 rounded animate-pulse"></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="py-12 text-center text-slate-500 text-xs font-medium">
+            Carregando sistema...
           </div>
         ) : (
           <>
             {isAuthenticated && location.pathname !== '/' && location.pathname !== '/login' && !location.pathname.startsWith('/listas/') && (
-              <div className="flex items-center gap-3 mb-4">
+              <div className="flex items-center gap-3 mb-2">
                 <button
                   onClick={() => navigate('/')}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm cursor-pointer"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  <ArrowLeft className="w-4 h-4 text-[#3483FA]" />
-                  Voltar para o Hub
+                  <ArrowLeft className="w-3.5 h-3.5 text-[#3483FA]" />
+                  <span>Voltar</span>
                 </button>
                 {getPageTitle() && (
                   <>
-                    <div className="h-4 w-px bg-gray-300 mx-1"></div>
-                    <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                    <div className="h-4 w-px bg-slate-300"></div>
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       {getPageTitle()}
                     </span>
                   </>
                 )}
               </div>
             )}
+
             <Routes>
-            {/* Public Routes */}
-            <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
-            <Route path="/login" element={
-              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
-            } />
-            
-            {/* Protected Routes */}
-            {isAuthenticated && (
-              <>
-                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} />} />
-                
-                {currentUser?.isAdmin && (
-                  <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
-                )}
+              <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
+              <Route path="/login" element={
+                isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
+              } />
+              
+              {isAuthenticated && (
+                <>
+                  <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} />} />
+                  
+                  {currentUser?.isAdmin && (
+                    <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
+                  )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('consulta')) && (
-                  <Route path="/consulta" element={<><StatsSummary totalRows={rows.length} groups={groups} /><IdLookup rows={rows} onNavigateToUpload={() => navigate('/upload')} /></>} />
-                )}
+                  {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('consulta')) && (
+                    <Route path="/consulta" element={<><StatsSummary totalRows={rows.length} groups={groups} /><IdLookup rows={rows} onNavigateToUpload={() => navigate('/upload')} /></>} />
+                  )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('remover')) && (
-                  <Route path="/remover" element={<IdRemover rows={rows} headers={headers} />} />
-                )}
+                  {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('remover')) && (
+                    <Route path="/remover" element={<IdRemover rows={rows} headers={headers} />} />
+                  )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('reporte')) && (
-                  <Route path="/reporte" element={<WhatsappReport rows={rows} />} />
-                )}
+                  {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('reporte')) && (
+                    <Route path="/reporte" element={<WhatsappReport rows={rows} />} />
+                  )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
-                  <>
-                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
-                    <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
-                  </>
-                )}
+                  {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
+                    <>
+                      <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                      <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
+                    </>
+                  )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
-                  <Route path="/upload" element={<CsvUploader onLoadText={(text) => { handleParseAndSave(text); navigate('/'); }} currentTotalRows={rows.length} />} />
-                )}
-              </>
-            )}
-            
-            {/* Fallback */}
-            <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to="/login" replace />} />
-          </Routes>
+                  {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
+                    <Route path="/upload" element={<CsvUploader onLoadText={(text) => { handleParseAndSave(text); navigate('/'); }} currentTotalRows={rows.length} />} />
+                  )}
+                </>
+              )}
+              
+              <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to="/login" replace />} />
+            </Routes>
           </>
         )}
-
       </main>
     </div>
   );

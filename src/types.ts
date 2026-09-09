@@ -49,6 +49,7 @@ export interface ColetaItem {
   responsavel?: string;
   grupoId?: string;
   validado?: boolean;
+  syncStatus?: 'pendente' | 'sincronizando' | 'sincronizado';
 }
 
 export interface ColetaGrupo {
