@@ -32,7 +32,8 @@ import {
   CheckCheck,
   Zap,
   Loader2,
-  RotateCcw
+  RotateCcw,
+  Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -164,14 +165,50 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Modo Individual (Sessão isolada zerada que se unifica na principal ao fechar)
   const [modoIndividual, setModoIndividual] = useState(false);
   const [itensModoIndividual, setItensModoIndividual] = useState<ColetaItem[]>([]);
-  const individualInputRef = useRef<HTMLInputElement>(null);
 
   // Ref para itens ativos como cache em memória ultra-rápido prevenindo race-conditions em bips velozes
   const activeItensRef = useRef<ColetaItem[]>([]);
+  const lastRefugoTextRef = useRef<string>('');
 
   const inputRef = useRef<HTMLInputElement>(null);
 
   const operanteNome = currentUser?.username || 'Usuário Atual';
+
+  const getModoIndKey = useCallback((listaId: string, username: string) => {
+    return `coleta_modo_ind_${listaId}_${username}`;
+  }, []);
+
+  // Auto-salvar sessão do Modo Individual no LocalStorage sempre que for alterada
+  useEffect(() => {
+    if (listaAtiva && modoIndividual) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        localStorage.setItem(key, JSON.stringify(itensModoIndividual));
+      } catch (e) {
+        console.warn('Erro ao salvar sessão individual localmente:', e);
+      }
+    }
+  }, [itensModoIndividual, modoIndividual, listaAtiva?.id, operanteNome, getModoIndKey]);
+
+  // Restaurar automaticamente a sessão do Modo Individual se existir para esta lista
+  useEffect(() => {
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItensModoIndividual(parsed);
+            setModoIndividual(true);
+          }
+        }
+      } catch (e) {}
+    } else {
+      setModoIndividual(false);
+      setItensModoIndividual([]);
+    }
+  }, [listaAtiva?.id, operanteNome, getModoIndKey]);
 
   // Buscar usuários registrados no sistema
   useEffect(() => {
@@ -194,9 +231,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setListas(listasServer);
     });
 
-    // Carregar base de refugo se existir
+    // Carregar base de refugo se existir com cache em memória para evitar re-parse pesado
     const unsubRefugo = listenToRefugo((data) => {
       if (data && data.rawText) {
+        if (data.rawText === lastRefugoTextRef.current) {
+          return; // Já está processado em memória RAM!
+        }
+        lastRefugoTextRef.current = data.rawText;
+
         Papa.parse(data.rawText, {
           skipEmptyLines: true,
           complete: (results) => {
@@ -217,6 +259,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           }
         });
       } else {
+        lastRefugoTextRef.current = '';
         setRefugoBaseRows([]);
       }
     });
@@ -489,14 +532,30 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleBaixarListaSoIds = () => {
     if (!listaAtiva) return;
-    exportarApenasIdsCSV(listaAtiva, listaAtiva.itens, 'IDs');
+    const itensParaExportar = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    exportarApenasIdsCSV(listaAtiva, itensParaExportar, modoIndividual ? 'IDs_Individual' : 'IDs');
   };
 
   const handleEntrarModoIndividual = () => {
     setModoIndividual(true);
-    setItensModoIndividual([]); // Sempre começa com lista zerada
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItensModoIndividual(parsed);
+            setTimeout(() => {
+              inputRef.current?.focus();
+            }, 100);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+    setItensModoIndividual([]);
     setTimeout(() => {
-      individualInputRef.current?.focus();
       inputRef.current?.focus();
     }, 100);
   };
@@ -510,6 +569,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const itensParaUsar = Array.isArray(itensCustom) ? itensCustom : itensModoIndividual;
 
     if (itensParaUsar.length === 0) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
       setModoIndividual(false);
       return;
     }
@@ -562,7 +623,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     activeItensRef.current = novosItens;
     const updatedLista = { ...listaAtiva, itens: novosItens };
     setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-    await saveLista(updatedLista);
+    await saveLista(updatedLista, true);
+
+    // Limpar sessão individual salva após unificar
+    const key = getModoIndKey(listaAtiva.id, operanteNome);
+    try { localStorage.removeItem(key); } catch (_) {}
 
     alert(`${itensParaUsar.length} IDs validados foram unificados com a lista principal com sucesso! (${countAtualizados} validados, ${countNovos} novos)`);
     setModoIndividual(false);
@@ -571,9 +636,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleCancelarModoIndividual = () => {
     if (itensModoIndividual.length > 0) {
-      if (!confirm('Deseja fechar o Modo Individual sem unificar os IDs bipados nesta sessão?')) {
+      if (!confirm('Deseja fechar o Modo Individual sem unificar e descartar os pacotes desta sessão?')) {
         return;
       }
+    }
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
     }
     setModoIndividual(false);
     setItensModoIndividual([]);
@@ -760,7 +829,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           codigo: cleanInput,
           rota: rotaParaUsar,
           saida: saidaItemFinal,
-          motivo: selectedMotivo || itemPrincipal?.motivo || 'Verificado no Modo Individual',
+          motivo: selectedMotivo || itemPrincipal?.motivo || 'Pendente',
           scannedAt: new Date().toLocaleString('pt-BR'),
           responsavel: operanteNome,
           grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
@@ -776,7 +845,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       }
 
       setBipInput('');
-      individualInputRef.current?.focus();
       inputRef.current?.focus();
       return;
     }
@@ -921,15 +989,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleAplicarMotivoEmMassa = async (novoMotivoEscolha: string) => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
 
-    const novosItens = listaAtiva.itens.map(item => {
-      if (selectedItemIds.includes(item.id)) {
-        return { ...item, motivo: novoMotivoEscolha };
-      }
-      return item;
-    });
+    if (modoIndividual) {
+      setItensModoIndividual(prev => prev.map(item => {
+        if (selectedItemIds.includes(item.id)) {
+          return { ...item, motivo: novoMotivoEscolha };
+        }
+        return item;
+      }));
+    } else {
+      const novosItens = listaAtiva.itens.map(item => {
+        if (selectedItemIds.includes(item.id)) {
+          return { ...item, motivo: novoMotivoEscolha };
+        }
+        return item;
+      });
 
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    await saveLista(updatedLista);
+      const updatedLista = { ...listaAtiva, itens: novosItens };
+      await saveLista(updatedLista);
+    }
 
     setSelectedItemIds([]);
   };
@@ -1808,7 +1885,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             
             {modoIndividual ? (
               <div className="space-y-4 animate-in fade-in">
-                {/* Header do Modo Individual (Sem descrição) */}
+                {/* Header do Modo Individual */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-blue-50/80 border border-blue-200 rounded-xl p-3.5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold">
@@ -1821,39 +1898,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {operanteNome}
                         </span>
                       </div>
-                      <p className="text-xs text-blue-800 font-bold mt-0.5">
-                        {itensModoIndividual.length} {itensModoIndividual.length === 1 ? 'pacote validado' : 'pacotes validados'} nesta sessão
+                      <p className="text-xs text-blue-800 font-bold mt-0.5 flex items-center gap-2 flex-wrap">
+                        <span>{itensModoIndividual.length} {itensModoIndividual.length === 1 ? 'pacote validado' : 'pacotes validados'} nesta sessão</span>
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-bold border border-emerald-200 inline-flex items-center gap-1 shadow-2xs">
+                          <Save className="w-2.5 h-2.5 text-emerald-600" /> Salvo no navegador
+                        </span>
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => setShowModalLote(true)}
-                      className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-                    >
-                      <ListPlus className="w-3.5 h-3.5 text-blue-600" />
-                      Colar Lote
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (itensModoIndividual.length === 0) {
-                          alert('Nenhum ID nesta sessão para copiar.');
-                          return;
-                        }
-                        const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
-                        const texto = itensModoIndividual.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
-                        navigator.clipboard.writeText(texto).then(() => {
-                          alert(`${itensModoIndividual.length} IDs desta sessão copiados!`);
-                        });
-                      }}
-                      className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      Copiar IDs
-                    </button>
                     <button
                       type="button"
                       onClick={handleFecharEUnificarModoIndividual}
@@ -1873,45 +1927,96 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </div>
                 </div>
 
-                {/* Input de Bipagem Rápida no Modo Individual */}
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <Barcode className="w-4 h-4 absolute left-3 top-3 text-[#3483FA]" />
-                      <input
-                        ref={individualInputRef}
-                        type="text"
-                        value={bipInput}
-                        onChange={(e) => setBipInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleBip(e);
+                {/* Ações da Lista do Modo Individual (Mesmas Funções da Lista) */}
+                <div className="flex flex-col gap-3 pb-3 border-b border-gray-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <button
+                        onClick={() => setShowModalLote(true)}
+                        className="px-2.5 py-1.5 bg-[#3483FA]/10 hover:bg-[#3483FA]/20 text-[#3483FA] rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <ListPlus className="w-3.5 h-3.5" />
+                        Colar Lote
+                      </button>
+
+                      <button
+                        onClick={handleBaixarListaSoIds}
+                        className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Baixar lista contendo apenas os IDs da sessão individual"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Baixar Lista
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (itensModoIndividual.length === 0) {
+                            alert('Nenhum ID nesta sessão para copiar.');
+                            return;
                           }
+                          const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+                          const texto = itensModoIndividual.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
+                          navigator.clipboard.writeText(texto).then(() => {
+                            alert(`${itensModoIndividual.length} IDs desta sessão copiados!`);
+                          });
                         }}
-                        placeholder="Bipar ou digitar ID do pacote para validar..."
-                        className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-xl text-sm font-mono font-bold focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-[#3483FA]/20"
-                        autoFocus
+                        className="px-2.5 py-1.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        Copiar IDs
+                      </button>
+
+                      <button
+                        onClick={handleCopiarIdsComMotivoESaida}
+                        className="px-2.5 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-500 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Copiar lista completa com IDs, saídas e motivos"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        Copiar com Detalhes
+                      </button>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
+                      <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Buscar ID, rota, motivo ou grupo..."
+                        className="pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:border-[#3483FA] w-full sm:w-56"
                       />
                     </div>
-                    <select
-                      value={selectedMotivo}
-                      onChange={(e) => setSelectedMotivo(e.target.value)}
-                      className="px-3 py-2 bg-white border border-gray-300 text-xs font-bold text-gray-700 rounded-xl focus:outline-none focus:border-[#3483FA] max-w-[150px]"
-                    >
-                      <option value="">Motivo Automático</option>
-                      {MOTIVOS_DISPONIVEIS.map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={handleBip}
-                      disabled={!bipInput.trim()}
-                      className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
-                    >
-                      Bipar / Validar
-                    </button>
+                  </div>
+
+                  {/* BARRA DE ATALHOS DE SELEÇÃO RÁPIDA */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-gray-400 font-semibold text-[11px] flex items-center gap-1 mr-1">
+                        <Filter className="w-3 h-3 text-[#3483FA]" /> Seleção Rápida:
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectSemMotivoOuPadrão(filteredItems)}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1"
+                        title="Selecionar IDs sem motivo preenchido ou com motivo inicial"
+                      >
+                        <Zap className="w-3 h-3 text-amber-600" />
+                        Selecionar Sem Motivo / Padrão
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectAll(filteredItems)}
+                        className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1"
+                      >
+                        <CheckCheck className="w-3 h-3 text-gray-600" />
+                        {filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))
+                          ? 'Desmarcar Todos'
+                          : 'Selecionar Todos'}
+                      </button>
+                    </div>
                   </div>
                 </div>
 

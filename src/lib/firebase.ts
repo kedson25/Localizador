@@ -408,52 +408,83 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
 }
 
 /**
- * Persistence for Coleta Listas with instant local storage caching
+ * Persistence for Coleta Listas with high-performance In-Memory RAM Caching,
+ * instant local storage backup, and debounced Firestore synchronization.
  */
 import { ColetaLista } from '../types';
 
 const LOCAL_STORAGE_LISTAS_KEY = 'cached_coleta_listas';
 const LOCAL_STORAGE_LISTA_PREFIX = 'cached_coleta_lista_';
 
+// 🚀 In-Memory RAM Cache Map for instant zero-latency access
+const ramListasMap = new Map<string, ColetaLista>();
+const firestoreSaveDebounceMap = new Map<string, any>();
+
+// Initialize RAM cache from LocalStorage on module load
+try {
+  const cachedRaw = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
+  if (cachedRaw) {
+    const parsed = JSON.parse(cachedRaw) as ColetaLista[];
+    if (Array.isArray(parsed)) {
+      parsed.forEach(l => {
+        if (l && l.id) ramListasMap.set(l.id, l);
+      });
+    }
+  }
+} catch (e) {
+  console.warn('Erro ao inicializar RAM cache de listas:', e);
+}
+
+function getSortedRamListas(): ColetaLista[] {
+  const arr = Array.from(ramListasMap.values());
+  return arr.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+}
+
+function persistRamToLocalStorageAsync() {
+  setTimeout(() => {
+    try {
+      const sorted = getSortedRamListas();
+      localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
+      ramListasMap.forEach((lista, id) => {
+        localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${id}`, JSON.stringify(lista));
+      });
+    } catch (err) {
+      console.warn('Erro ao salvar no LocalStorage em background:', err);
+    }
+  }, 0);
+}
+
 export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {
   const colRef = collection(db, COLETA_LISTAS_COLLECTION);
   
-  // 1. Immediately read from local cache to prevent blank screens and instant render
-  try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached) as ColetaLista[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        callback(parsed);
-      }
-    }
-  } catch (err) {
-    console.warn('Erro ao ler cache local de listas:', err);
+  // 1. Immediately emit RAM cache or LocalStorage for 0ms render
+  const initial = getSortedRamListas();
+  if (initial.length > 0) {
+    callback(initial);
   }
 
+  // 2. Realtime listener with intelligent merging
   return onSnapshot(colRef, (snap) => {
-    const listas: ColetaLista[] = [];
-    snap.forEach((doc) => {
-      const data = { ...doc.data(), id: doc.id } as ColetaLista;
-      listas.push(data);
-      try {
-        localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${data.id}`, JSON.stringify(data));
-      } catch (_) {}
+    snap.forEach((docSnap) => {
+      const remoteData = { ...docSnap.data(), id: docSnap.id } as ColetaLista;
+      const localData = ramListasMap.get(remoteData.id);
+
+      // Prefer local version if it has unsaved rapid scans pending
+      if (localData && firestoreSaveDebounceMap.has(remoteData.id)) {
+        if (localData.itens && remoteData.itens && localData.itens.length > remoteData.itens.length) {
+          return; // Keep unsaved local additions until debounce flushes
+        }
+      }
+
+      ramListasMap.set(remoteData.id, remoteData);
     });
-    // Sort by data or createdAt if needed
-    const sorted = listas.sort((a, b) => b.data.localeCompare(a.data));
-    try {
-      localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
-    } catch (_) {}
+
+    const sorted = getSortedRamListas();
+    persistRamToLocalStorageAsync();
     callback(sorted);
   }, (error) => {
     console.error('Erro ao escutar listas de coleta:', error);
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
-      if (cached) {
-        callback(JSON.parse(cached));
-      }
-    } catch (_) {}
+    callback(getSortedRamListas());
   });
 }
 
@@ -472,26 +503,7 @@ function cleanUndefined(obj: any): any {
   return cleaned;
 }
 
-export async function saveLista(lista: ColetaLista): Promise<boolean> {
-  // 1. Instantly update local cache so rapid scans are never lost or corrupted
-  try {
-    localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${lista.id}`, JSON.stringify(lista));
-    const cachedListasRaw = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
-    if (cachedListasRaw) {
-      const parsed = JSON.parse(cachedListasRaw) as ColetaLista[];
-      const idx = parsed.findIndex(l => l.id === lista.id);
-      if (idx !== -1) {
-        parsed[idx] = lista;
-      } else {
-        parsed.unshift(lista);
-      }
-      localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(parsed));
-    }
-  } catch (cacheErr) {
-    console.warn('Aviso: Falha ao gravar cache local da lista:', cacheErr);
-  }
-
-  // 2. Persist to Firestore
+async function performFirestoreSave(lista: ColetaLista): Promise<boolean> {
   try {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, lista.id);
     const cleanedData = cleanUndefined({
@@ -501,19 +513,60 @@ export async function saveLista(lista: ColetaLista): Promise<boolean> {
     await setDoc(docRef, cleanedData, { merge: true });
     return true;
   } catch (error) {
-    console.error('Erro ao salvar lista de coleta no Firestore (salvo no cache local):', error);
-    return true; // Retorna true porque os dados foram mantidos no cache local com segurança
+    console.error('Erro ao sincronizar com Firestore (mantido no cache local):', error);
+    return true;
   }
 }
 
+export async function saveLista(lista: ColetaLista, immediate = false): Promise<boolean> {
+  // 1. Update In-Memory RAM Cache instantly (0ms UI latency)
+  ramListasMap.set(lista.id, lista);
+  persistRamToLocalStorageAsync();
+
+  // Clear existing debounce timer if any
+  if (firestoreSaveDebounceMap.has(lista.id)) {
+    clearTimeout(firestoreSaveDebounceMap.get(lista.id));
+    firestoreSaveDebounceMap.delete(lista.id);
+  }
+
+  if (immediate) {
+    return await performFirestoreSave(lista);
+  }
+
+  // 2. Debounce Firestore sync by 400ms to batch rapid barcode scans
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(async () => {
+      firestoreSaveDebounceMap.delete(lista.id);
+      const success = await performFirestoreSave(lista);
+      resolve(success);
+    }, 400);
+
+    firestoreSaveDebounceMap.set(lista.id, timer);
+  });
+}
+
+export async function flushSaveLista(listaId: string): Promise<boolean> {
+  if (firestoreSaveDebounceMap.has(listaId)) {
+    clearTimeout(firestoreSaveDebounceMap.get(listaId));
+    firestoreSaveDebounceMap.delete(listaId);
+  }
+  const lista = ramListasMap.get(listaId);
+  if (lista) {
+    return await performFirestoreSave(lista);
+  }
+  return true;
+}
+
 export async function deleteLista(listaId: string): Promise<boolean> {
+  if (firestoreSaveDebounceMap.has(listaId)) {
+    clearTimeout(firestoreSaveDebounceMap.get(listaId));
+    firestoreSaveDebounceMap.delete(listaId);
+  }
+  ramListasMap.delete(listaId);
+  persistRamToLocalStorageAsync();
+
   try {
     localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${listaId}`);
-    const cachedListasRaw = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
-    if (cachedListasRaw) {
-      const parsed = (JSON.parse(cachedListasRaw) as ColetaLista[]).filter(l => l.id !== listaId);
-      localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(parsed));
-    }
   } catch (_) {}
 
   try {
@@ -527,25 +580,17 @@ export async function deleteLista(listaId: string): Promise<boolean> {
 }
 
 export async function getListaById(listaId: string): Promise<ColetaLista | null> {
-  // Try local cache first
-  try {
-    const cached = localStorage.getItem(`${LOCAL_STORAGE_LISTA_PREFIX}${listaId}`);
-    if (cached) {
-      const localLista = JSON.parse(cached) as ColetaLista;
-      if (localLista && localLista.id === listaId) {
-        return localLista;
-      }
-    }
-  } catch (_) {}
+  if (ramListasMap.has(listaId)) {
+    return ramListasMap.get(listaId)!;
+  }
 
   try {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       const data = { ...snap.data(), id: snap.id } as ColetaLista;
-      try {
-        localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${listaId}`, JSON.stringify(data));
-      } catch (_) {}
+      ramListasMap.set(listaId, data);
+      persistRamToLocalStorageAsync();
       return data;
     }
     return null;
