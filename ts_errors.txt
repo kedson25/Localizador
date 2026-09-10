@@ -1,0 +1,2 @@
+src/components/IdRemover.tsx(16,3): error TS2304: Cannot find name 'useEffect'.
+src/components/ListasColeta.tsx(1373,90): error TS2304: Cannot find name 'cleanInput'.

@@ -32,7 +32,13 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     return listenToListas(setListas);
   }, []);
 
-  const [inputText, setInputText] = useState<string>('');
+  const [inputText, setInputText] = useState<string>(() => {
+    return localStorage.getItem('app_whatsapp_input') || '';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('app_whatsapp_input', inputText);
+  }, [inputText]);
   const [copied, setCopied] = useState<boolean>(false);
   const [useAllBase, setUseAllBase] = useState<boolean>(false);
 

@@ -12,7 +12,13 @@ interface IdRemoverProps {
 }
 
 export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
-  const [removeText, setRemoveText] = useState<string>('');
+  const [removeText, setRemoveText] = useState<string>(() => {
+    return localStorage.getItem('app_idremover_input') || '';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('app_idremover_input', removeText);
+  }, [removeText]);
   const [pastedCsvText, setPastedCsvText] = useState<string>('');
   const [saidaFilter, setSaidaFilter] = useState<string>('');
   const [copiedIds, setCopiedIds] = useState<boolean>(false);

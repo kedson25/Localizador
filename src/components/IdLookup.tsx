@@ -13,7 +13,13 @@ interface IdLookupProps {
 }
 
 export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) => {
-  const [inputText, setInputText] = useState<string>('');
+  const [inputText, setInputText] = useState<string>(() => {
+    return localStorage.getItem('app_idlookup_input') || '';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('app_idlookup_input', inputText);
+  }, [inputText]);
   const [saidaFilter, setSaidaFilter] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [copiedDetailId, setCopiedDetailId] = useState<string | null>(null);
