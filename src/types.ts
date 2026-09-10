@@ -71,6 +71,7 @@ export interface ColetaLista {
   saidaPadrao: string;
   motivoPadrao: string;
   itens: ColetaItem[];
+  totalItens?: number;
   porcentagemAcerto?: number;
   fechamentoGaiola?: string;
   itensFaltaram?: number;

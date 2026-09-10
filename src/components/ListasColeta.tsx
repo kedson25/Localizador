@@ -34,7 +34,8 @@ import {
   Loader2,
   RotateCcw,
   Save,
-  Calendar
+  Calendar,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -43,6 +44,9 @@ import {
   saveRefugoScans, 
   listenToRefugo,
   listenToListas,
+  fetchListaById,
+  syncAllListas,
+  listenToColetor,
   saveLista,
   saveListaItemsBatch,
   validateAndCleanIds,
@@ -275,12 +279,85 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Ref para itens ativos como cache em memória ultra-rápido prevenindo race-conditions em bips velozes
   const activeItensRef = useRef<ColetaItem[]>([]);
   const lastRefugoTextRef = useRef<string>('');
+  const lastColetorTextRef = useRef<string>('');
 
   const inputRef = useRef<HTMLInputElement>(null);
 
   const operanteNome = currentUser?.username || 'Usuário Atual';
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
+
+  // Estados para busca direta de lista e sincronização global
+  const [isFetchingDirectLista, setIsFetchingDirectLista] = useState(false);
+  const [directListaNotFound, setDirectListaNotFound] = useState(false);
+  const [isSyncingAllListas, setIsSyncingAllListas] = useState(false);
+  const [coletorBaseRows, setColetorBaseRows] = useState<RefugoRow[]>([]);
+
+  // Tentar carregar lista ativa diretamente pelo ID do Firestore quando acessada via URL (/listas/:id)
+  useEffect(() => {
+    if (!activeListaId) {
+      setDirectListaNotFound(false);
+      return;
+    }
+    if (listaAtiva) {
+      setDirectListaNotFound(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsFetchingDirectLista(true);
+
+    fetchListaById(activeListaId)
+      .then((loaded) => {
+        if (!isMounted) return;
+        if (loaded) {
+          setListas(prev => {
+            const exists = prev.some(l => l.id === loaded.id);
+            if (exists) {
+              return prev.map(l => l.id === loaded.id ? loaded : l);
+            }
+            return [loaded, ...prev];
+          });
+          setDirectListaNotFound(false);
+        } else {
+          setTimeout(() => {
+            if (isMounted && !listas.some(l => l.id === activeListaId)) {
+              setDirectListaNotFound(true);
+            }
+          }, 3000);
+        }
+      })
+      .catch((err) => {
+        console.error('Erro ao buscar lista diretamente por ID:', err);
+        if (isMounted) setDirectListaNotFound(true);
+      })
+      .finally(() => {
+        if (isMounted) setIsFetchingDirectLista(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeListaId, Boolean(listaAtiva)]);
+
+  // Forçar sincronização global de todas as listas criadas no Firestore
+  const handleForceSyncAll = async () => {
+    setIsSyncingAllListas(true);
+    try {
+      const fresh = await syncAllListas();
+      setListas(fresh);
+      if (activeListaId) {
+        const found = fresh.find(l => l.id === activeListaId);
+        if (found) {
+          setDirectListaNotFound(false);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao sincronizar listas:', err);
+    } finally {
+      setIsSyncingAllListas(false);
+    }
+  };
 
   const getModoIndKey = useCallback((listaId: string, username: string) => {
     return `coleta_modo_ind_${listaId}_${username}`;
@@ -372,9 +449,41 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       }
     });
 
+    // Carregar base do coletor para complementar rotas
+    const unsubColetor = listenToColetor((data) => {
+      if (data && data.rawText) {
+        if (data.rawText === lastColetorTextRef.current) {
+          return;
+        }
+        lastColetorTextRef.current = data.rawText;
+
+        Papa.parse(data.rawText, {
+          skipEmptyLines: true,
+          complete: (results) => {
+            const parsedRows: RefugoRow[] = (results.data as any[]).map((row: any) => {
+              const values = Array.isArray(row) ? row : Object.values(row);
+              const idRaw = String(values[0] || '').trim().toUpperCase();
+              if (!idRaw || idRaw === 'ID' || idRaw === 'SHP' || idRaw === 'CODIGO' || idRaw === 'CÓDIGO') return null;
+              const rotaRaw = String(values[1] || '').trim();
+              return {
+                id: idRaw,
+                rota: rotaRaw || 'Sem Rota',
+                rawFields: {}
+              };
+            }).filter(Boolean) as RefugoRow[];
+            setColetorBaseRows(parsedRows);
+          }
+        });
+      } else {
+        lastColetorTextRef.current = '';
+        setColetorBaseRows([]);
+      }
+    });
+
     return () => {
       unsubListas();
       unsubRefugo();
+      unsubColetor();
     };
   }, []);
 
@@ -418,13 +527,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
 
-  // Obter rota oficial baseada estritamente no arquivo de refugo atual
+  // Obter rota oficial baseada no arquivo de refugo ou na base do coletor
   const getRotaItem = useCallback((item: { codigo: string; rota?: string }): string => {
-    if (refugoBaseRows && refugoBaseRows.length > 0) {
-      const cleanInput = (item.codigo || '').trim().toUpperCase();
-      const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
-      const cleanInputDigits = cleanDigits(cleanInput);
+    const cleanInput = (item.codigo || '').trim().toUpperCase();
+    const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
+    const cleanInputDigits = cleanDigits(cleanInput);
 
+    if (refugoBaseRows && refugoBaseRows.length > 0) {
       const match = refugoBaseRows.find(r => {
         if (!r.id) return false;
         const rId = r.id.trim().toUpperCase();
@@ -438,10 +547,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         return match.rota.trim();
       }
     }
+
+    if (coletorBaseRows && coletorBaseRows.length > 0) {
+      const matchColetor = coletorBaseRows.find(r => {
+        if (!r.id) return false;
+        const rId = r.id.trim().toUpperCase();
+        if (rId === cleanInput) return true;
+        if (rId.replace(/m$/i, '') === cleanInputWithoutM) return true;
+        const rDigits = cleanDigits(rId);
+        return Boolean(rDigits && cleanInputDigits && rDigits === cleanInputDigits);
+      });
+
+      if (matchColetor && matchColetor.rota && matchColetor.rota.trim() !== '' && matchColetor.rota.toLowerCase() !== 'sem rota' && matchColetor.rota !== '-') {
+        return matchColetor.rota.trim();
+      }
+    }
+
     return (item.rota && item.rota.trim() !== '' && item.rota.toLowerCase() !== 'sem rota' && item.rota !== '-')
       ? item.rota.trim()
       : 'Sem Rota';
-  }, [refugoBaseRows]);
+  }, [refugoBaseRows, coletorBaseRows]);
 
   // Sincronizar automaticamente as rotas dos itens da lista ativa com o arquivo de refugo atual
   useEffect(() => {
@@ -932,7 +1057,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         itens: []
       };
 
-      await saveLista(novaLista);
+      await saveLista(novaLista, true);
+      setListas(prev => [novaLista, ...prev]);
       setOpeningListaId(novaLista.id);
       setShowModalNovaLista(false);
       navigate(`/listas/${novaLista.id}`);
@@ -1495,6 +1621,39 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
   if (activeListaId && !listaAtiva) {
+    if (directListaNotFound) {
+      return (
+        <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 p-6">
+          <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center shadow-xs">
+            <AlertCircle className="w-8 h-8 text-amber-600" />
+          </div>
+          <div className="text-center max-w-md">
+            <h3 className="text-lg font-bold text-[#333333]">Lista não encontrada</h3>
+            <p className="text-sm text-gray-500 mt-1">
+              A lista <span className="font-mono text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded text-xs">{activeListaId}</span> não foi localizada ou ainda está sincronizando com o servidor.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3 mt-2 justify-center">
+            <button
+              onClick={() => navigate('/listas')}
+              className="px-4 py-2.5 bg-[#3483FA] text-white text-sm font-semibold rounded-xl hover:bg-blue-600 transition shadow-xs flex items-center gap-2 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Ver Todas as Listas
+            </button>
+            <button
+              onClick={handleForceSyncAll}
+              disabled={isSyncingAllListas}
+              className="px-4 py-2.5 bg-gray-100 text-gray-700 text-sm font-semibold rounded-xl hover:bg-gray-200 transition flex items-center gap-2 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncingAllListas ? 'animate-spin' : ''}`} />
+              {isSyncingAllListas ? 'Sincronizando...' : 'Tentar Novamente'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
         <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
@@ -1502,7 +1661,23 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         </div>
         <div className="text-center">
           <h3 className="text-base font-bold text-[#333333]">Carregando lista de coleta...</h3>
-          <p className="text-xs text-gray-500 mt-1">Sincronizando dados em tempo real</p>
+          <p className="text-xs text-gray-500 mt-1">Sincronizando dados em tempo real com o servidor</p>
+        </div>
+        <div className="flex items-center gap-3 mt-2">
+          <button
+            onClick={() => navigate('/listas')}
+            className="text-xs text-[#3483FA] hover:underline font-semibold cursor-pointer"
+          >
+            ← Voltar para listagem
+          </button>
+          <button
+            onClick={handleForceSyncAll}
+            disabled={isSyncingAllListas}
+            className="text-xs text-gray-500 hover:text-gray-800 flex items-center gap-1 font-medium cursor-pointer"
+          >
+            <RefreshCw className={`w-3 h-3 ${isSyncingAllListas ? 'animate-spin' : ''}`} />
+            Forçar sincronização
+          </button>
         </div>
       </div>
     );
@@ -1605,13 +1780,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </div>
           </div>
 
-          <button
-            onClick={() => setShowModalNovaLista(true)}
-            className="w-full sm:w-auto bg-[#3483FA] hover:bg-blue-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer"
-          >
-            <Plus className="w-5 h-5" />
-            Criar Nova Lista
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={handleForceSyncAll}
+              disabled={isSyncingAllListas}
+              className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold px-4 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition shadow-xs cursor-pointer disabled:opacity-60"
+              title="Sincronizar todas as listas criadas por todos os usuários do sistema"
+            >
+              <RefreshCw className={`w-4 h-4 text-[#3483FA] ${isSyncingAllListas ? 'animate-spin' : ''}`} />
+              {isSyncingAllListas ? 'Sincronizando...' : 'Sincronizar Listas'}
+            </button>
+            <button
+              onClick={() => setShowModalNovaLista(true)}
+              className="flex-1 sm:flex-initial bg-[#3483FA] hover:bg-blue-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer"
+            >
+              <Plus className="w-5 h-5" />
+              Criar Nova Lista
+            </button>
+          </div>
         </div>
 
         {/* TABELA DE LISTAS COM FILTROS DE TEXTO, DATA E STATUS */}
@@ -1766,6 +1952,29 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               )}
             </div>
           </div>
+
+          {/* Alerta caso filtros estejam ocultando listas criadas */}
+          {filteredDashboardListas.length < listas.length && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-900">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Exibindo <strong>{filteredDashboardListas.length}</strong> de <strong>{listas.length}</strong> listas criadas. Há listas ocultas pelos filtros aplicados (status, data ou busca).
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDashboardSearchTerm('');
+                  setDashboardDateFilter('');
+                  setDashboardStatusFilter('todas');
+                }}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-md font-bold transition cursor-pointer whitespace-nowrap text-xs shadow-2xs"
+              >
+                Mostrar Todas as Listas ({listas.length})
+              </button>
+            </div>
+          )}
 
           {filteredDashboardListas.length > 0 ? (
             <div className="overflow-x-auto">

@@ -14,7 +14,7 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
-import { User } from './lib/auth';
+import { User, normalizeUser } from './lib/auth';
 
 import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
@@ -30,7 +30,10 @@ export default function App() {
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try { return JSON.parse(localStorage.getItem('currentUser') || 'null'); } catch { return null; }
+    try {
+      const u = JSON.parse(localStorage.getItem('currentUser') || 'null');
+      return u ? normalizeUser(u) : null;
+    } catch { return null; }
   });
   const isAuthenticated = !!currentUser;
 
@@ -221,12 +224,8 @@ export default function App() {
                   <Route path="/reporte" element={<WhatsappReport rows={rows} />} />
                 )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
-                  <>
-                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
-                    <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
-                  </>
-                )}
+                <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
                   <Route path="/upload" element={<CsvUploader onLoadText={(text) => { handleParseAndSave(text); navigate('/'); }} currentTotalRows={rows.length} />} />

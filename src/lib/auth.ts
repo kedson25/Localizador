@@ -79,6 +79,14 @@ export async function signupUser(username: string, email: string, password: stri
   }
 }
 
+export function normalizeUser(user: User): User {
+  const groups = Array.isArray(user.allowedGroups) ? [...user.allowedGroups] : [];
+  if (!groups.includes('listas')) {
+    groups.push('listas');
+  }
+  return { ...user, allowedGroups: groups };
+}
+
 export async function loginUser(emailOrUsername: string, password: string): Promise<{success: boolean, user?: User, message?: string}> {
   const localUsers = getLocalUsers();
 
@@ -93,7 +101,8 @@ export async function loginUser(emailOrUsername: string, password: string): Prom
     }
     
     if (!snap.empty) {
-      const user = snap.docs[0].data() as User;
+      const rawUser = snap.docs[0].data() as User;
+      const user = normalizeUser(rawUser);
       saveLocalUser(user);
 
       if (user.password !== password) {
@@ -113,13 +122,14 @@ export async function loginUser(emailOrUsername: string, password: string): Prom
   // Fallback to local user cache
   const localUser = localUsers.find(u => u.email === emailOrUsername || u.username === emailOrUsername);
   if (localUser) {
-    if (localUser.password !== password) {
+    const user = normalizeUser(localUser);
+    if (user.password !== password) {
       return { success: false, message: 'Senha incorreta' };
     }
-    if (!localUser.isApproved) {
+    if (!user.isApproved) {
       return { success: false, message: 'Acesso pendente de aprovação por um Administrador.' };
     }
-    return { success: true, user: localUser };
+    return { success: true, user };
   }
 
   return { success: false, message: 'Usuário não encontrado' };

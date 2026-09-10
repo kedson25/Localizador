@@ -78,7 +78,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
   ];
 
   const backlogTools = allBacklogTools.filter(tool => 
-    currentUser?.isAdmin || currentUser?.allowedGroups?.includes(tool.id)
+    currentUser?.isAdmin || tool.id === 'listas' || currentUser?.allowedGroups?.includes(tool.id)
   );
 
   // Allow uploading if the user has permission to upload

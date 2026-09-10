@@ -344,6 +344,30 @@ export async function clearColetor(): Promise<boolean> {
   }
 }
 
+export function listenToColetor(callback: (data: ColetorData | null) => void): () => void {
+  const coletorRef = doc(db, COLETOR_COLLECTION, MAIN_DOC_ID);
+  try {
+    const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (cached) callback(JSON.parse(cached) as ColetorData);
+  } catch (_) {}
+
+  return onSnapshot(
+    coletorRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as ColetorData;
+        safeSetLocalStorage(LOCAL_STORAGE_KEY, data);
+        callback(data);
+      } else {
+        callback(null);
+      }
+    },
+    (error) => {
+      console.warn('Erro ao escutar coletor em tempo real:', error);
+    }
+  );
+}
+
 // ----------------------------------------------------------------------
 // REFUGO SCANS OPERATIONS
 // ----------------------------------------------------------------------
@@ -498,26 +522,52 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
 
   return onSnapshot(
     colRef,
+    { includeMetadataChanges: true },
     (snap) => {
       const remoteIds = new Set(snap.docs.map((d) => d.id));
-      // Limpar listas excluídas da memória
-      for (const id of ramListasMap.keys()) {
-        if (!remoteIds.has(id) && !firestoreSaveDebounceMap.has(id)) {
-          ramListasMap.delete(id);
+      // Limpar listas excluídas da memória se a confirmação veio do servidor
+      if (!snap.metadata.fromCache) {
+        for (const id of ramListasMap.keys()) {
+          if (!remoteIds.has(id) && !firestoreSaveDebounceMap.has(id)) {
+            ramListasMap.delete(id);
+          }
         }
       }
 
       snap.forEach((docSnap) => {
-        const remoteData = { ...docSnap.data(), id: docSnap.id } as ColetaLista;
+        const raw = docSnap.data();
+        if (raw._deleted === true) {
+          ramListasMap.delete(docSnap.id);
+          return;
+        }
+
+        const remoteData = { ...raw, id: docSnap.id } as ColetaLista;
         const localData = ramListasMap.get(remoteData.id);
 
-        // Keep local unsaved items if pending debounce
-        if (localData && firestoreSaveDebounceMap.has(remoteData.id)) {
-          if (localData.itens && remoteData.itens && localData.itens.length > remoteData.itens.length) {
-            return;
-          }
+        let finalItens = remoteData.itens || [];
+
+        // If local had more items (e.g. pending save or merged from subcollection), keep them
+        if (localData && localData.itens && localData.itens.length > finalItens.length) {
+          const itemMap = new Map();
+          finalItens.forEach((i: ColetaItem) => itemMap.set(i.id || i.codigo, i));
+          localData.itens.forEach((i: ColetaItem) => {
+            const key = i.id || i.codigo;
+            if (!itemMap.has(key)) {
+              itemMap.set(key, i);
+            }
+          });
+          finalItens = Array.from(itemMap.values());
         }
-        ramListasMap.set(remoteData.id, remoteData);
+
+        const merged: ColetaLista = {
+          ...remoteData,
+          itens: finalItens,
+          totalItens: remoteData.totalItens !== undefined && remoteData.totalItens > finalItens.length 
+            ? remoteData.totalItens 
+            : finalItens.length,
+        };
+
+        ramListasMap.set(remoteData.id, merged);
       });
 
       const sorted = getSortedRamListas();
@@ -535,6 +585,92 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
       callback(getSortedRamListas());
     }
   );
+}
+
+/**
+ * Direct fetch by List ID with subcollection items merger.
+ * Ensures that navigating to /listas/:id immediately retrieves the full document.
+ */
+export async function fetchListaById(listaId: string): Promise<ColetaLista | null> {
+  if (!listaId) return null;
+  try {
+    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    const snap = await withTimeout(getDoc(docRef), 6000);
+    if (!snap.exists()) {
+      return ramListasMap.get(listaId) || null;
+    }
+
+    const data = { ...snap.data(), id: snap.id } as ColetaLista;
+    let itens = data.itens || [];
+
+    // Also check if any items are in the subcollection 'itens'
+    try {
+      const subSnap = await withTimeout(getDocs(collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens')), 3000);
+      if (!subSnap.empty) {
+        const itemMap = new Map();
+        itens.forEach((i: ColetaItem) => itemMap.set(i.id || i.codigo, i));
+        subSnap.docs.forEach((d) => {
+          const subItem = d.data() as ColetaItem;
+          if (subItem && (subItem as any)._deleted !== true) {
+            const key = subItem.id || subItem.codigo || d.id;
+            if (key) itemMap.set(key, { ...itemMap.get(key), ...subItem });
+          }
+        });
+        itens = Array.from(itemMap.values());
+      }
+    } catch (_) {}
+
+    const fullLista: ColetaLista = {
+      ...data,
+      itens,
+      totalItens: data.totalItens !== undefined && data.totalItens > itens.length ? data.totalItens : itens.length,
+    };
+
+    ramListasMap.set(listaId, fullLista);
+    return fullLista;
+  } catch (error) {
+    console.error(`Erro ao buscar lista ${listaId}:`, error);
+    return ramListasMap.get(listaId) || null;
+  }
+}
+
+/**
+ * Forces a fresh Firestore query for all lists to ensure every active list is in RAM.
+ */
+export async function syncAllListas(): Promise<ColetaLista[]> {
+  try {
+    const snap = await withTimeout(getDocs(collection(db, COLETA_LISTAS_COLLECTION)), 8000);
+    for (const docSnap of snap.docs) {
+      const raw = docSnap.data();
+      if (raw._deleted === true) {
+        ramListasMap.delete(docSnap.id);
+        continue;
+      }
+      const data = { ...raw, id: docSnap.id } as ColetaLista;
+      const existing = ramListasMap.get(docSnap.id);
+      let itens = data.itens || [];
+
+      if (existing && existing.itens && existing.itens.length > itens.length) {
+        const map = new Map();
+        itens.forEach((i: ColetaItem) => map.set(i.id || i.codigo, i));
+        existing.itens.forEach((i: ColetaItem) => {
+          const key = i.id || i.codigo;
+          if (!map.has(key)) map.set(key, i);
+        });
+        itens = Array.from(map.values());
+      }
+
+      ramListasMap.set(docSnap.id, {
+        ...data,
+        itens,
+        totalItens: data.totalItens !== undefined && data.totalItens > itens.length ? data.totalItens : itens.length,
+      });
+    }
+    return getSortedRamListas();
+  } catch (err) {
+    console.error('Erro ao sincronizar todas as listas:', err);
+    return getSortedRamListas();
+  }
 }
 
 /**
