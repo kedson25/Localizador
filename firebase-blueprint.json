@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "ColetaLista": {
+      "title": "ColetaLista",
+      "description": "Uma lista de coleta de pacotes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nome": { "type": "string" },
+        "tipo": { "type": "string", "enum": ["comum", "grupos"] },
+        "rota": { "type": "string" },
+        "data": { "type": "string" },
+        "responsavel": { "type": "string" },
+        "status": { "type": "string", "enum": ["em_andamento", "finalizada"] },
+        "saidaPadrao": { "type": "string" },
+        "motivoPadrao": { "type": "string" },
+        "itens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/entities/ColetaItem"
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "data", "responsavel", "status"]
+    },
+    "ColetaItem": {
+      "title": "ColetaItem",
+      "description": "Um item individual bimpado em uma lista de coleta",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "codigo": { "type": "string" },
+        "rota": { "type": "string" },
+        "saida": { "type": "string" },
+        "motivo": { "type": "string" },
+        "scannedAt": { "type": "string" },
+        "responsavel": { "type": "string" }
+      },
+      "required": ["id", "codigo", "scannedAt"]
+    }
+  },
+  "firestore": {
+    "/coleta_listas/{listaId}": {
+      "schema": "ColetaLista",
+      "description": "Coleção de listas de coleta"
+    }
+  }
+}

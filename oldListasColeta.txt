@@ -1,0 +1,266 @@
+import React, { useState, useEffect } from 'react';
+import { Calendar, Layers, Plus, Save, Trash2, ListTodo, FileText, ChevronRight, Play } from 'lucide-react';
+
+interface ColetaList {
+  id: string;
+  name: string;
+  date: string;
+  cycle: string;
+  ids: string[];
+  createdAt: string;
+}
+
+export const ListasColeta: React.FC = () => {
+  const [lists, setLists] = useState<ColetaList[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
+  
+  // Form State
+  const [name, setName] = useState('');
+  const [date, setDate] = useState('');
+  const [cycle, setCycle] = useState('');
+  const [rawIds, setRawIds] = useState('');
+  
+  const [selectedList, setSelectedList] = useState<ColetaList | null>(null);
+
+  // Load from local storage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('coletas_list_db');
+    if (saved) {
+      try {
+        setLists(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to parse coletas');
+      }
+    }
+  }, []);
+
+  // Save to local storage when changed
+  useEffect(() => {
+    localStorage.setItem('coletas_list_db', JSON.stringify(lists));
+  }, [lists]);
+
+  const handleCreate = () => {
+    if (!name || !date || !cycle) return;
+    
+    const idsArray = rawIds.split(/[\n\r,;\t\s]+/).map(i => i.trim()).filter(i => i.length > 0);
+    
+    const newList: ColetaList = {
+      id: Date.now().toString(),
+      name,
+      date,
+      cycle,
+      ids: idsArray,
+      createdAt: new Date().toISOString()
+    };
+    
+    setLists(prev => [newList, ...prev]);
+    setIsCreating(false);
+    setName('');
+    setDate('');
+    setCycle('');
+    setRawIds('');
+  };
+
+  const handleDelete = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm('Deseja realmente excluir esta lista?')) {
+      setLists(prev => prev.filter(l => l.id !== id));
+      if (selectedList?.id === id) setSelectedList(null);
+    }
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-6 animate-in fade-in duration-300">
+      
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-2">
+            <ListTodo className="w-6 h-6 text-purple-600" />
+            Listas de Coleta
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">Configure listas de IDs por data e ciclo operacional.</p>
+        </div>
+        
+        {!isCreating && !selectedList && (
+          <button
+            onClick={() => setIsCreating(true)}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Nova Lista
+          </button>
+        )}
+      </div>
+
+      {isCreating ? (
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+            <h3 className="text-lg font-bold text-gray-800">Criar Nova Lista</h3>
+            <button onClick={() => setIsCreating(false)} className="text-sm font-bold text-gray-500 hover:text-gray-800">
+              Cancelar
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-1.5 md:col-span-3">
+              <label className="text-xs font-bold text-gray-600 uppercase tracking-wider">Nome da Lista</label>
+              <input 
+                type="text" 
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Ex: Coleta Matutina Base SP..."
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm focus:border-purple-500 focus:ring-4 focus:ring-purple-500/15 transition-all outline-none"
+              />
+            </div>
+            
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-gray-600 uppercase tracking-wider flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5" />
+                Data
+              </label>
+              <input 
+                type="date" 
+                value={date}
+                onChange={e => setDate(e.target.value)}
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm focus:border-purple-500 focus:ring-4 focus:ring-purple-500/15 transition-all outline-none"
+              />
+            </div>
+
+            <div className="space-y-1.5 md:col-span-2">
+              <label className="text-xs font-bold text-gray-600 uppercase tracking-wider flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5" />
+                Ciclo
+              </label>
+              <input 
+                type="text" 
+                value={cycle}
+                onChange={e => setCycle(e.target.value)}
+                placeholder="Ex: Ciclo 1, Ciclo 2, etc..."
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm focus:border-purple-500 focus:ring-4 focus:ring-purple-500/15 transition-all outline-none"
+              />
+            </div>
+          </div>
+          
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wider">IDs (Opcional - Pode preencher depois)</label>
+            <textarea 
+              value={rawIds}
+              onChange={e => setRawIds(e.target.value)}
+              placeholder="Cole os IDs aqui (separados por linha ou vírgula)..."
+              rows={4}
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm font-mono focus:border-purple-500 focus:ring-4 focus:ring-purple-500/15 transition-all outline-none resize-y"
+            />
+          </div>
+          
+          <div className="pt-4 flex justify-end">
+            <button
+              onClick={handleCreate}
+              disabled={!name || !date || !cycle}
+              className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              Salvar Lista
+            </button>
+          </div>
+        </div>
+      ) : selectedList ? (
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-0 overflow-hidden flex flex-col">
+          <div className="bg-gray-50 border-b border-gray-100 p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+             <div>
+                <button onClick={() => setSelectedList(null)} className="text-xs font-bold text-purple-600 hover:text-purple-800 mb-2 flex items-center gap-1">
+                  ← Voltar para as listas
+                </button>
+                <h3 className="text-xl font-black text-gray-900">{selectedList.name}</h3>
+                <div className="flex items-center gap-3 mt-2 text-xs font-bold text-gray-500">
+                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> {selectedList.date}</span>
+                  <span className="flex items-center gap-1"><Layers className="w-3.5 h-3.5" /> {selectedList.cycle}</span>
+                  <span className="flex items-center gap-1 bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full">{selectedList.ids.length} IDs</span>
+                </div>
+             </div>
+             
+             <div className="flex gap-2">
+                <button 
+                  onClick={(e) => handleDelete(selectedList.id, e)}
+                  className="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-4 py-2 rounded-xl text-xs font-bold transition-colors"
+                >
+                  Excluir Lista
+                </button>
+             </div>
+          </div>
+          
+          <div className="p-4 sm:p-6 bg-gray-50/50">
+             <div className="bg-white border border-gray-200 rounded-xl p-4 min-h-[300px]">
+               <h4 className="text-sm font-bold text-gray-800 mb-4 border-b border-gray-100 pb-2">IDs Configurados</h4>
+               {selectedList.ids.length === 0 ? (
+                 <div className="text-center text-gray-400 py-12 text-sm font-medium">Nenhum ID configurado nesta lista.</div>
+               ) : (
+                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                   {selectedList.ids.map((id, idx) => (
+                     <div key={idx} className="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs font-mono text-gray-700 text-center truncate">
+                       {id}
+                     </div>
+                   ))}
+                 </div>
+               )}
+             </div>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {lists.length === 0 ? (
+            <div className="col-span-full bg-white border-2 border-dashed border-gray-200 rounded-2xl p-12 flex flex-col items-center justify-center text-center">
+               <div className="w-12 h-12 bg-purple-50 text-purple-500 rounded-xl flex items-center justify-center mb-3">
+                 <ListTodo className="w-6 h-6" />
+               </div>
+               <h3 className="text-gray-900 font-bold mb-1">Nenhuma lista configurada</h3>
+               <p className="text-sm text-gray-500 mb-4">Crie sua primeira lista de coleta para organizar os IDs.</p>
+               <button
+                onClick={() => setIsCreating(true)}
+                className="bg-purple-50 text-purple-700 hover:bg-purple-100 px-4 py-2 rounded-xl text-sm font-bold transition-colors"
+               >
+                 Criar Primeira Lista
+               </button>
+            </div>
+          ) : (
+            lists.map(list => (
+              <div 
+                key={list.id} 
+                onClick={() => setSelectedList(list)}
+                className="bg-white border border-gray-200 hover:border-purple-300 rounded-2xl p-4 shadow-sm hover:shadow transition-all cursor-pointer group flex flex-col relative"
+              >
+                <div className="flex justify-between items-start mb-3">
+                  <h3 className="font-bold text-gray-900 pr-6 line-clamp-2 leading-tight group-hover:text-purple-700 transition-colors">{list.name}</h3>
+                  <button 
+                    onClick={(e) => handleDelete(list.id, e)}
+                    className="absolute top-4 right-4 text-gray-300 hover:text-red-500 p-1"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                
+                <div className="mt-auto space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-gray-500">
+                    <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> {list.date}</span>
+                    <span className="flex items-center gap-1"><Layers className="w-3.5 h-3.5" /> {list.cycle}</span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-gray-400 bg-gray-50 px-2 py-0.5 rounded">
+                      {list.ids.length} IDs
+                    </span>
+                    
+                    <span className="text-purple-600 flex items-center text-xs font-bold group-hover:translate-x-1 transition-transform">
+                      Ver Lista <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+

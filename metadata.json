@@ -1,0 +1,6 @@
+{
+  "name": "Localizador",
+  "description": "Carregue relatórios CSV, identifique grupos de IDs automaticamente e consulte o grupo de qualquer ID colado.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

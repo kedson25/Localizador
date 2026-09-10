@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+@layer base {
+  *, ::before, ::after {
+    border-radius: 0px !important;
+  }
+}
+
