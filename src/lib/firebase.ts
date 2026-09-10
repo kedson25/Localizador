@@ -81,10 +81,13 @@ function safeSetLocalStorage(key: string, data: any) {
 
 // Helper: Timeout wrapper for network resilience
 export function withTimeout<T>(promise: Promise<T>, ms: number = 4000): Promise<T> {
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  const timeoutMs = isOffline ? 400 : ms;
+
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`Firebase operation timed out after ${ms}ms`)), ms)
+      setTimeout(() => reject(new Error(isOffline ? 'Offline timeout' : `Firebase operation timed out after ${ms}ms`)), timeoutMs)
     ),
   ]);
 }
@@ -92,23 +95,37 @@ export function withTimeout<T>(promise: Promise<T>, ms: number = 4000): Promise<
 // Helper: Exponential Backoff Retry Strategy
 export async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  maxRetries: number = 3,
-  initialDelayMs: number = 500
+  maxRetries: number = 2,
+  initialDelayMs: number = 300
 ): Promise<T> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    try {
+      return await fn();
+    } catch (err) {
+      throw err;
+    }
+  }
+
   let attempt = 0;
   let delay = initialDelayMs;
 
   while (attempt < maxRetries) {
     try {
       return await fn();
-    } catch (err) {
+    } catch (err: any) {
       attempt++;
-      if (attempt >= maxRetries) {
+      if (
+        attempt >= maxRetries ||
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        err?.code === 'unavailable' ||
+        err?.message?.includes('unavailable') ||
+        err?.message?.includes('offline')
+      ) {
         throw err;
       }
-      console.warn(`Attempt ${attempt} failed. Retrying in ${delay}ms...`, err);
+      console.warn(`Attempt ${attempt} failed. Retrying in ${delay}ms...`, err?.message || err);
       await new Promise((res) => setTimeout(res, delay));
-      delay *= 2;
+      delay *= 1.5;
     }
   }
   throw new Error('Operation failed after retries.');
@@ -338,14 +355,18 @@ export async function clearColetor(): Promise<boolean> {
 // REFUGO SCANS OPERATIONS
 // ----------------------------------------------------------------------
 export async function saveRefugoScans(scans: any[]): Promise<boolean> {
-  safeSetLocalStorage(LOCAL_STORAGE_REFUGO_SCANS_KEY, scans);
+  const cleanScans = (scans || []).map(s => ({
+    ...s,
+    scannedAt: s.scannedAt instanceof Date ? s.scannedAt.toISOString() : (s.scannedAt || new Date().toISOString())
+  }));
+  safeSetLocalStorage(LOCAL_STORAGE_REFUGO_SCANS_KEY, cleanScans);
 
   try {
     const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
     await retryWithBackoff(() =>
       withTimeout(
         setDoc(refugoScansRef, {
-          scans,
+          scans: cleanScans,
           updatedAt: serverTimestamp(),
         }),
         5000
@@ -451,9 +472,24 @@ function getSortedRamListas(): ColetaLista[] {
   return Array.from(ramListasMap.values()).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
 }
 
+export async function fetchSubcollectionItens(listaId: string): Promise<ColetaItem[]> {
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    const snap = await withTimeout(getDocs(colRef), 5000);
+    const items: ColetaItem[] = [];
+    snap.forEach((d) => {
+      items.push({ ...d.data(), id: d.id } as ColetaItem);
+    });
+    return items;
+  } catch (err) {
+    console.warn(`Aviso ao buscar subcoleção de itens da lista ${listaId}:`, err);
+    return [];
+  }
+}
+
 /**
  * Realtime Listener for Coleta Listas.
- * Fetches and synchronizes list documents without memory leaks.
+ * Fetches and synchronizes list documents without memory leaks or ID loss.
  */
 export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {
   const colRef = collection(db, COLETA_LISTAS_COLLECTION);
@@ -464,28 +500,40 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
 
   return onSnapshot(
     colRef,
-    (snap) => {
-      snap.forEach((docSnap) => {
+    async (snap) => {
+      for (const docSnap of snap.docs) {
         const remoteData = { ...docSnap.data(), id: docSnap.id } as ColetaLista;
         const localData = ramListasMap.get(remoteData.id);
 
-        // Keep local unsaved items if pending debounce
-        if (localData && firestoreSaveDebounceMap.has(remoteData.id)) {
-          if (localData.itens && remoteData.itens && localData.itens.length > remoteData.itens.length) {
-            return;
+        let mergedItens: ColetaItem[] = Array.isArray(remoteData.itens) ? [...remoteData.itens] : [];
+
+        // Always preserve local items if remote doc has fewer items or missing array
+        if (localData && Array.isArray(localData.itens) && localData.itens.length > mergedItens.length) {
+          const remoteCodeSet = new Set(mergedItens.map(i => i.codigo));
+          const missingFromRemote = localData.itens.filter(i => !remoteCodeSet.has(i.codigo));
+          mergedItens = [...mergedItens, ...missingFromRemote];
+        }
+
+        // If expected total > mergedItens length, fetch subcollection items
+        const expectedTotal = remoteData.totalItens || 0;
+        if (expectedTotal > mergedItens.length) {
+          const subCollectionItems = await fetchSubcollectionItens(remoteData.id);
+          if (subCollectionItems.length > 0) {
+            const existingCodeSet = new Set(mergedItens.map(i => i.codigo));
+            const newFromSub = subCollectionItems.filter(i => !existingCodeSet.has(i.codigo));
+            mergedItens = [...mergedItens, ...newFromSub];
           }
         }
-        ramListasMap.set(remoteData.id, remoteData);
-      });
+
+        ramListasMap.set(remoteData.id, {
+          ...remoteData,
+          itens: mergedItens,
+          totalItens: Math.max(expectedTotal, mergedItens.length)
+        });
+      }
 
       const sorted = getSortedRamListas();
-      // Only cache metadata list summary to prevent LocalStorage quota overload
-      const metaOnly = sorted.map((l) => ({
-        ...l,
-        itens: l.itens ? l.itens.slice(0, 100) : [] // Cap cached preview items
-      }));
-      safeSetLocalStorage(LOCAL_STORAGE_LISTAS_KEY, metaOnly);
-
+      safeSetLocalStorage(LOCAL_STORAGE_LISTAS_KEY, sorted);
       callback(sorted);
     },
     (error) => {
@@ -554,7 +602,6 @@ export async function saveListaItemsBatch(
   for (const item of items) {
     const cleanCod = item.codigo ? item.codigo.toString().trim().toUpperCase() : '';
     if (!cleanCod) continue;
-    // Use deterministic key
     uniqueItemsMap.set(cleanCod, {
       ...item,
       codigo: cleanCod
@@ -564,18 +611,32 @@ export async function saveListaItemsBatch(
   const deduplicatedItems = Array.from(uniqueItemsMap.values());
   const total = deduplicatedItems.length;
 
-  // 2. Process in sequential native Firestore Batches of 300 items (between 200 and 400)
+  // Update RAM cache so local memory never loses items
+  const currentLista = ramListasMap.get(listaId);
+  if (currentLista) {
+    const existingMap = new Map((currentLista.itens || []).map(i => [i.codigo, i]));
+    for (const item of deduplicatedItems) {
+      existingMap.set(item.codigo, item);
+    }
+    const mergedItens = Array.from(existingMap.values());
+    ramListasMap.set(listaId, {
+      ...currentLista,
+      itens: mergedItens,
+      totalItens: mergedItens.length
+    });
+  }
+
+  // 2. Process in sequential native Firestore Batches of 300 items
   const BATCH_SIZE = 300;
   let processedCount = 0;
 
   for (let i = 0; i < total; i += BATCH_SIZE) {
     const chunk = deduplicatedItems.slice(i, i + BATCH_SIZE);
 
-    await retryWithBackoff(async () => {
+    try {
       const batch = writeBatch(db);
 
       chunk.forEach((item) => {
-        // Deterministic Subcollection Document ID based on clean barcode/item ID
         const docId = item.id || `item_${item.codigo}`;
         const itemRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', docId);
 
@@ -585,8 +646,10 @@ export async function saveListaItemsBatch(
         }), { merge: true });
       });
 
-      await withTimeout(batch.commit(), 8000);
-    }, 3, 600);
+      await withTimeout(batch.commit(), 5000);
+    } catch (err: any) {
+      console.warn(`Lote de itens (${i}-${i + chunk.length}) mantido no cache offline:`, err?.message || err);
+    }
 
     processedCount += chunk.length;
     const percent = Math.min(100, Math.round((processedCount / total) * 100));
@@ -595,17 +658,20 @@ export async function saveListaItemsBatch(
       onProgress(processedCount, total, percent);
     }
 
-    // Yield control to main thread for smooth 60fps UI rendering
     await new Promise((resolve) => setTimeout(resolve, 15));
   }
 
-  // 3. Update main list metadata document
+  // 3. Update main list metadata document WITH full items list array
   try {
     const mainDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
-    await setDoc(mainDocRef, {
-      totalItens: total,
+    const updatedRAM = ramListasMap.get(listaId);
+    const finalItens = updatedRAM?.itens || deduplicatedItems;
+
+    await setDoc(mainDocRef, cleanUndefined({
+      itens: finalItens,
+      totalItens: finalItens.length,
       updatedAt: serverTimestamp()
-    }, { merge: true });
+    }), { merge: true });
   } catch (err) {
     console.warn('Lista metadata update notice:', err);
   }
@@ -621,24 +687,6 @@ async function performFirestoreSave(lista: ColetaLista): Promise<boolean> {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, lista.id);
     const totalItensCount = lista.itens ? lista.itens.length : 0;
 
-    // Se a lista possui muitos itens (> 150), separa para subcoleção via batch e salva documento principal leve
-    if (lista.itens && lista.itens.length > 150) {
-      // 1. Salvar itens em subcoleção via lotes nativos
-      await saveListaItemsBatch(lista.id, lista.itens);
-
-      // 2. Salvar documento principal sem inflar payload
-      const { itens, ...metadata } = lista;
-      const mainData = cleanUndefined({
-        ...metadata,
-        totalItens: totalItensCount,
-        itens: lista.itens.slice(0, 100), // Preview limitado para cache leve
-        updatedAt: serverTimestamp(),
-      });
-
-      await retryWithBackoff(() => withTimeout(setDoc(docRef, mainData, { merge: true }), 5000));
-      return true;
-    }
-
     const cleanedData = cleanUndefined({
       ...lista,
       totalItens: totalItensCount,
@@ -646,6 +694,12 @@ async function performFirestoreSave(lista: ColetaLista): Promise<boolean> {
     });
 
     await retryWithBackoff(() => withTimeout(setDoc(docRef, cleanedData, { merge: true }), 5000));
+
+    // Also sync to subcollection asynchronously if items present
+    if (lista.itens && lista.itens.length > 0) {
+      saveListaItemsBatch(lista.id, lista.itens).catch(err => console.warn('Background subcollection sync notice:', err));
+    }
+
     return true;
   } catch (error) {
     console.error('Erro ao sincronizar com Firestore (mantido localmente):', error);
@@ -706,21 +760,42 @@ export async function deleteLista(listaId: string): Promise<boolean> {
 }
 
 export async function getListaById(listaId: string): Promise<ColetaLista | null> {
-  if (ramListasMap.has(listaId)) {
-    return ramListasMap.get(listaId)!;
-  }
+  const cached = ramListasMap.get(listaId);
 
   try {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
     const snap = await retryWithBackoff(() => withTimeout(getDoc(docRef), 4000));
     if (snap.exists()) {
-      const data = { ...snap.data(), id: snap.id } as ColetaLista;
-      ramListasMap.set(listaId, data);
-      return data;
+      const remoteData = { ...snap.data(), id: snap.id } as ColetaLista;
+      let remoteItens = Array.isArray(remoteData.itens) ? remoteData.itens : [];
+
+      if (cached && Array.isArray(cached.itens) && cached.itens.length > remoteItens.length) {
+        const remoteCodeSet = new Set(remoteItens.map(i => i.codigo));
+        const missing = cached.itens.filter(i => !remoteCodeSet.has(i.codigo));
+        remoteItens = [...remoteItens, ...missing];
+      }
+
+      if ((remoteData.totalItens || 0) > remoteItens.length) {
+        const subItems = await fetchSubcollectionItens(listaId);
+        if (subItems.length > 0) {
+          const codeSet = new Set(remoteItens.map(i => i.codigo));
+          const newSub = subItems.filter(i => !codeSet.has(i.codigo));
+          remoteItens = [...remoteItens, ...newSub];
+        }
+      }
+
+      const finalLista: ColetaLista = {
+        ...remoteData,
+        itens: remoteItens,
+        totalItens: Math.max(remoteData.totalItens || 0, remoteItens.length)
+      };
+
+      ramListasMap.set(listaId, finalLista);
+      return finalLista;
     }
-    return null;
   } catch (error) {
     console.error('Erro ao buscar lista por ID:', error);
-    return null;
   }
+
+  return cached || null;
 }

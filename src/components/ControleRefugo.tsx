@@ -195,7 +195,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
       const operatorName = currentUser?.username || localStorage.getItem('operanteNome') || 'Operador';
       
       setLastScanResult({ status: 'success', message });
-      const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found', foundBy: operatorName }, ...scannedItems];
+      const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date().toISOString() as any, status: 'found', foundBy: operatorName }, ...scannedItems];
       setScannedItems(newScans);
       saveRefugoScans(newScans);
       
@@ -210,7 +210,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
       }
     } else {
       setLastScanResult({ status: 'error', message: `Não encontrado: ${cleanInput}` });
-      const newScans: ScannedItem[] = [{ id: cleanInput, rota: '', scannedAt: new Date(), status: 'not_found' }, ...scannedItems];
+      const newScans: ScannedItem[] = [{ id: cleanInput, rota: '', scannedAt: new Date().toISOString() as any, status: 'not_found' }, ...scannedItems];
       setScannedItems(newScans);
       saveRefugoScans(newScans);
     }
