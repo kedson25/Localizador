@@ -137,6 +137,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Gaveta/Modal para mudar motivo do ID clicado
   const [itemParaMudarMotivo, setItemParaMudarMotivo] = useState<ColetaItem | null>(null);
 
+  // Snapshot de itens para verificar no momento da abertura do modal
+  const [itensVerificarSnap, setItensVerificarSnap] = useState<ColetaItem[]>([]);
+
   // Seleção e Alteração em Massa de Motivos
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [motivoEmMassaEscolha, setMotivoEmMassaEscolha] = useState<string>('');
@@ -445,11 +448,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleAbrirVerificar = () => {
     if (!listaAtiva) return;
     const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const itensPendentes = listToVerify.filter(i => !i.validado);
+    
+    if (itensPendentes.length === 0) {
+      alert("Não há IDs pendentes para verificar no momento.");
+      return;
+    }
+
+    setItensVerificarSnap(itensPendentes);
+
     const mapInicial: Record<string, 'valido' | 'verificado' | 'em_rota'> = {};
-    listToVerify.forEach(item => {
-      if (modoIndividual || !item.validado) {
-        mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
-      }
+    itensPendentes.forEach(item => {
+      mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
     });
     setVerificarMap(mapInicial);
     setVerificarModo('10');
@@ -495,8 +505,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     playShortBeep();
 
-    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
-    const matchedItem = listToVerify.find(i => {
+    const matchedItem = itensVerificarSnap.find(i => {
       if (i.codigo === cleanInput) return true;
       const iDigits = cleanDigits(i.codigo);
       return iDigits && cleanInputDigits && iDigits === cleanInputDigits;
@@ -581,8 +590,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleCopiarIdsVerificacao = () => {
     if (!listaAtiva) return;
-    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
-    const itensPendentes = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
+    const itensPendentes = itensVerificarSnap;
     if (itensPendentes.length === 0) {
       alert('Não há IDs pendentes para copiar.');
       return;
@@ -936,7 +944,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           scannedAt: new Date().toLocaleString('pt-BR'),
           responsavel: operanteNome,
           grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-          validado: true
+          validado: false
         };
 
         setItensModoIndividual(prev => [novoItemIndividual, ...prev]);
@@ -1199,13 +1207,69 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (modoIndividual) {
       const codigosSet = new Set(itensModoIndividual.map(i => i.codigo));
       const novosIndividuais: ColetaItem[] = [];
+      const total = cleanCodigos.length;
+      const BATCH_SIZE = 250;
 
-      cleanCodigos.forEach(cleanCod => {
-        if (codigosSet.has(cleanCod)) return;
-        codigosSet.add(cleanCod);
+      for (let i = 0; i < total; i += BATCH_SIZE) {
+        const chunk = cleanCodigos.slice(i, i + BATCH_SIZE);
+        
+        chunk.forEach(cleanCod => {
+          if (codigosSet.has(cleanCod)) return;
+          codigosSet.add(cleanCod);
 
+          const cleanCodDigits = cleanDigits(cleanCod);
+          const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+          const refugoMatch = refugoBaseRows.find(r => {
+            if (!r.id) return false;
+            const rId = r.id.trim().toUpperCase();
+            if (rId === cleanCod) return true;
+            if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+            const rDigits = cleanDigits(rId);
+            return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+          });
+          const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+            ? refugoMatch.rota.trim()
+            : 'Sem Rota';
+          const itemPrincipal = listaAtiva.itens.find(item => item.codigo === cleanCod || (cleanDigits(item.codigo) === cleanCodDigits && cleanCodDigits !== ''));
+          const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
+
+          novosIndividuais.push({
+            id: 'ind-lote-' + Date.now() + '-' + Math.floor(Math.random() * 100000),
+            codigo: cleanCod,
+            rota: rotaParaUsar,
+            saida: saidaCicloFinal,
+            motivo: motivoFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
+            responsavel: operanteNome,
+            validado: false
+          });
+        });
+
+        setImportProgress(Math.min(100, Math.round(((i + chunk.length) / total) * 100)));
+        await new Promise(r => setTimeout(r, 10)); // Yield para atualizar UI
+      }
+
+      setItensModoIndividual(prev => [...novosIndividuais, ...prev]);
+      setIsImporting(false);
+      setShowModalLote(false);
+      setLoteText('');
+      alert(`${novosIndividuais.length} IDs adicionados como pendentes na sessão individual!`);
+      return;
+    }
+
+    const novosItensMap = new Map<string, ColetaItem>();
+    listaAtiva.itens.forEach(i => novosItensMap.set(i.codigo, i));
+
+    const total = cleanCodigos.length;
+    const BATCH_SIZE = 250;
+
+    for (let i = 0; i < total; i += BATCH_SIZE) {
+      const chunk = cleanCodigos.slice(i, i + BATCH_SIZE);
+      
+      chunk.forEach(cleanCod => {
         const cleanCodDigits = cleanDigits(cleanCod);
         const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+
         const refugoMatch = refugoBaseRows.find(r => {
           if (!r.id) return false;
           const rId = r.id.trim().toUpperCase();
@@ -1217,76 +1281,37 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
           ? refugoMatch.rota.trim()
           : 'Sem Rota';
-        const itemPrincipal = listaAtiva.itens.find(i => i.codigo === cleanCod || (cleanDigits(i.codigo) === cleanCodDigits && cleanCodDigits !== ''));
-        const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
 
-        novosIndividuais.push({
-          id: 'ind-lote-' + Date.now() + '-' + Math.floor(Math.random() * 100000),
-          codigo: cleanCod,
-          rota: rotaParaUsar,
-          saida: saidaCicloFinal,
-          motivo: motivoFinal,
-          scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome,
-          validado: true
-        });
+        if (novosItensMap.has(cleanCod)) {
+          const item = novosItensMap.get(cleanCod)!;
+          novosItensMap.set(cleanCod, {
+            ...item,
+            saida: saidaCicloFinal,
+            motivo: motivoFinal,
+            rota: rotaItemFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
+            responsavel: operanteNome,
+            grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId,
+            syncStatus: 'pendente'
+          });
+        } else {
+          novosItensMap.set(cleanCod, {
+            id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000000),
+            codigo: cleanCod,
+            rota: rotaItemFinal,
+            saida: saidaCicloFinal,
+            motivo: motivoFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
+            responsavel: operanteNome,
+            grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
+            syncStatus: 'pendente'
+          });
+        }
       });
-
-      setItensModoIndividual(prev => [...novosIndividuais, ...prev]);
-      setIsImporting(false);
-      setShowModalLote(false);
-      setLoteText('');
-      alert(`${novosIndividuais.length} IDs adicionados e validados na sessão individual!`);
-      return;
+      
+      setImportProgress(Math.min(100, Math.round(((i + chunk.length) / total) * 100)));
+      await new Promise(r => setTimeout(r, 10)); // Yield para atualizar UI
     }
-
-    const novosItensMap = new Map<string, ColetaItem>();
-    listaAtiva.itens.forEach(i => novosItensMap.set(i.codigo, i));
-
-    const total = cleanCodigos.length;
-
-    cleanCodigos.forEach(cleanCod => {
-      const cleanCodDigits = cleanDigits(cleanCod);
-      const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
-
-      const refugoMatch = refugoBaseRows.find(r => {
-        if (!r.id) return false;
-        const rId = r.id.trim().toUpperCase();
-        if (rId === cleanCod) return true;
-        if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
-        const rDigits = cleanDigits(rId);
-        return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
-      });
-      const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
-        ? refugoMatch.rota.trim()
-        : 'Sem Rota';
-
-      if (novosItensMap.has(cleanCod)) {
-        const item = novosItensMap.get(cleanCod)!;
-        novosItensMap.set(cleanCod, {
-          ...item,
-          saida: saidaCicloFinal,
-          motivo: motivoFinal,
-          rota: rotaItemFinal,
-          scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome,
-          grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId,
-          syncStatus: 'pendente'
-        });
-      } else {
-        novosItensMap.set(cleanCod, {
-          id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000000),
-          codigo: cleanCod,
-          rota: rotaItemFinal,
-          saida: saidaCicloFinal,
-          motivo: motivoFinal,
-          scannedAt: new Date().toLocaleString('pt-BR'),
-          responsavel: operanteNome,
-          grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-          syncStatus: 'pendente'
-        });
-      }
-    });
 
     const novosItens = Array.from(novosItensMap.values());
 
@@ -3116,8 +3141,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </form>
 
               {(() => {
-                const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
-                const itensNaoValidados = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
+                const itensNaoValidados = itensVerificarSnap;
                 const totalItens = itensNaoValidados.length;
                 if (totalItens === 0) {
                   return (

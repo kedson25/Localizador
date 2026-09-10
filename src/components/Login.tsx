@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { Handshake, Eye, EyeOff } from 'lucide-react';
 import { loginUser, signupUser, User } from '../lib/auth';
 
 interface LoginProps {
@@ -32,6 +32,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setErrorMsg('');
     setIsLoading(true);
     
+    // We allow email or username in the "username" field for login
     const res = await loginUser(username.trim(), password);
     setIsLoading(false);
     
@@ -67,7 +68,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setIsLoading(false);
     
     if (res.success) {
-      setSuccessMsg('Cadastro realizado! Aguarde aprovação de um Administrador.');
+      setSuccessMsg('Cadastro realizado! Aguarde a aprovação de um Administrador.');
       setMode('login');
       setStep(1);
       setUsername('');
@@ -79,76 +80,77 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 font-sans">
-      <div className="bg-white rounded border border-slate-200 w-full max-w-[380px] overflow-hidden">
-        
-        <div className="bg-slate-50 border-b border-slate-200 py-5 flex items-center justify-center">
-          <div className="w-12 h-12 bg-white rounded border border-slate-200 flex items-center justify-center overflow-hidden">
+    <div className="min-h-screen bg-[#F0F2F5] flex items-center justify-center p-4">
+      <div className="bg-white rounded shadow-sm border border-gray-200 w-full max-w-[400px] overflow-hidden">
+        {/* Header */}
+        <div className="bg-[#F9F9F9] border-b border-gray-200 py-6 flex items-center justify-center">
+          <div className="w-16 h-16 bg-white rounded-full border border-gray-200 flex items-center justify-center relative overflow-hidden shadow-sm">
              <img 
                src="https://ok3static.oktacdn.com/fs/bco/1/fs01qr8d9ez620FXA1d8" 
                alt="Logo" 
-               className="w-10 h-10 object-contain"
+               className="w-12 h-12 object-contain"
                crossOrigin="anonymous"
              />
           </div>
         </div>
         
-        <div className="p-6">
-          <h2 className="text-sm font-bold text-slate-800 text-center uppercase tracking-wider mb-5">
-            {mode === 'login' ? 'Acesso ao Sistema' : 'Novo Usuário'}
+        {/* Body */}
+        <div className="p-8">
+          <h2 className="text-xl text-gray-700 text-center font-medium mb-6">
+            {mode === 'login' ? 'Login' : 'Criar Usuário'}
           </h2>
           
           {errorMsg && (
-            <div className="mb-4 p-2 bg-red-50 border border-red-200 text-red-700 text-xs text-center rounded font-medium">
+            <div className="mb-4 p-2 bg-red-50 border border-red-200 text-red-600 text-xs text-center rounded">
               {errorMsg}
             </div>
           )}
           
           {successMsg && (
-            <div className="mb-4 p-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs text-center rounded font-medium">
+            <div className="mb-4 p-2 bg-emerald-50 border border-emerald-200 text-emerald-600 text-xs text-center rounded">
               {successMsg}
             </div>
           )}
 
           {mode === 'login' ? (
             step === 1 ? (
-              <form onSubmit={handleNext} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Usuário ou E-mail</label>
+              <form onSubmit={handleNext} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[13px] text-gray-600 font-medium">Username ou E-mail</label>
                   <input 
                     type="text" 
                     value={username}
                     onChange={e => { setUsername(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
-                    className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-xs font-medium focus:border-[#3483FA] outline-none"
+                    className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
                     autoFocus
                   />
                 </div>
                 <button 
                   type="submit"
                   disabled={!username.trim()}
-                  className="w-full bg-[#3483FA] hover:bg-blue-600 disabled:bg-slate-300 text-white py-2 rounded text-xs font-bold transition-colors cursor-pointer"
+                  className="w-full bg-[#3B82F6] hover:bg-blue-600 disabled:bg-blue-300 text-white py-2.5 rounded text-sm font-medium transition-colors"
                 >
-                  Avançar
+                  Próximo
                 </button>
                 <div className="pt-2 text-center">
                   <button 
                     type="button" 
                     onClick={() => { setMode('signup'); setErrorMsg(''); setSuccessMsg(''); setUsername(''); setPassword(''); }}
-                    className="text-xs text-[#3483FA] hover:underline cursor-pointer"
+                    className="text-[12px] text-blue-600 hover:underline"
                   >
-                    Criar novo usuário
+                    Não tem uma conta? Criar usuário
                   </button>
                 </div>
               </form>
             ) : (
-              <form onSubmit={handleLogin} className="space-y-3">
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                     <label className="text-xs font-semibold text-slate-700">Senha</label>
+              <form onSubmit={handleLogin} className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                     <label className="text-[13px] text-gray-600 font-medium">Password</label>
                      <button 
                        type="button" 
                        onClick={() => { setStep(1); setErrorMsg(''); setSuccessMsg(''); }}
-                       className="text-[11px] text-[#3483FA] hover:underline cursor-pointer"
+                       className="text-[11px] text-blue-600 hover:underline"
                      >
                        Alterar usuário
                      </button>
@@ -158,70 +160,70 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                       type={showPassword ? "text" : "password"} 
                       value={password}
                       onChange={e => { setPassword(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
-                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 pr-9 text-xs font-medium focus:border-[#3483FA] outline-none"
+                      className="w-full bg-white border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
                       autoFocus
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
                     >
-                      {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
                 <button 
                   type="submit"
                   disabled={!password.trim() || isLoading}
-                  className="w-full bg-[#3483FA] hover:bg-blue-600 disabled:bg-slate-300 text-white py-2 rounded text-xs font-bold transition-colors cursor-pointer"
+                  className="w-full bg-[#3B82F6] hover:bg-blue-600 disabled:bg-blue-300 text-white py-2.5 rounded text-sm font-medium transition-colors flex items-center justify-center gap-2"
                 >
                   {isLoading ? 'Entrando...' : 'Entrar'}
                 </button>
               </form>
             )
           ) : (
-            <form onSubmit={handleSignup} className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Usuário</label>
+            <form onSubmit={handleSignup} className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <div className="space-y-1.5">
+                <label className="text-[13px] text-gray-600 font-medium">Novo Username</label>
                 <input 
                   type="text" 
                   value={username}
                   onChange={e => { setUsername(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
-                  className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-xs font-medium focus:border-[#3483FA] outline-none"
+                  className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
                   autoFocus
                 />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">E-mail</label>
+              <div className="space-y-1.5">
+                <label className="text-[13px] text-gray-600 font-medium">E-mail</label>
                 <input 
                   type="email" 
                   value={email}
                   onChange={e => { setEmail(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
-                  className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-xs font-medium focus:border-[#3483FA] outline-none"
+                  className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Senha</label>
+              <div className="space-y-1.5">
+                <label className="text-[13px] text-gray-600 font-medium">Nova Senha</label>
                 <div className="relative">
                   <input 
                     type={showPassword ? "text" : "password"} 
                     value={password}
                     onChange={e => { setPassword(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
-                    className="w-full bg-white border border-slate-300 rounded px-3 py-2 pr-9 text-xs font-medium focus:border-[#3483FA] outline-none"
+                    className="w-full bg-white border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
                   >
-                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
               <button 
                 type="submit"
                 disabled={!username.trim() || !password.trim() || !email.trim() || isLoading}
-                className="w-full bg-[#3483FA] hover:bg-blue-600 disabled:bg-slate-300 text-white py-2 rounded text-xs font-bold transition-colors cursor-pointer"
+                className="w-full bg-[#3B82F6] hover:bg-blue-600 disabled:bg-blue-300 text-white py-2.5 rounded text-sm font-medium transition-colors"
               >
                 {isLoading ? 'Criando...' : 'Criar Conta'}
               </button>
@@ -229,9 +231,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 <button 
                   type="button" 
                   onClick={() => { setMode('login'); setStep(1); setErrorMsg(''); setSuccessMsg(''); setUsername(''); setPassword(''); }}
-                  className="text-xs text-[#3483FA] hover:underline cursor-pointer"
+                  className="text-[12px] text-blue-600 hover:underline"
                 >
-                  Voltar para o login
+                  Já tem uma conta? Fazer login
                 </button>
               </div>
             </form>

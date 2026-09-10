@@ -1,11 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
+  MessageSquare,
   Copy,
   Check,
   Share2,
+  FileText,
   Upload,
   Trash2,
+  Layers,
   AlertCircle,
+  Clock,
+  Calendar,
+  Sparkles,
+  RefreshCw,
+  Sliders,
   CheckCircle2,
 } from 'lucide-react';
 import { CsvRow, ColetaLista } from '../types';
@@ -28,6 +36,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
   const [copied, setCopied] = useState<boolean>(false);
   const [useAllBase, setUseAllBase] = useState<boolean>(false);
 
+  // Date formatting (DD/MM/YYYY)
   const getTodayFormatted = () => {
     const today = new Date();
     const day = String(today.getDate()).padStart(2, '0');
@@ -36,17 +45,22 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     return `${day}/${month}/${year}`;
   };
 
+  // Time based greeting:
+  // Antes das 12h/13h (1h da tarde): "Bom dia, time! 👋"
+  // Das 12h/13h até as 18h: "Boa tarde, time! 👋"
+  // A partir das 18h: "Boa noite, time! 👋"
   const getDefaultGreeting = () => {
     const hour = new Date().getHours();
     if (hour >= 5 && hour < 12) {
-      return 'Bom dia, time!';
+      return 'Bom dia, time! 👋';
     } else if (hour >= 12 && hour < 18) {
-      return 'Boa tarde, time!';
+      return 'Boa tarde, time! 👋';
     } else {
-      return 'Boa noite, time!';
+      return 'Boa noite, time! 👋';
     }
   };
 
+  // Helper to extract clean cycle code (e.g., 'PM', 'SD', 'D0') removing words like 'Saida', 'Ciclo', etc.
   const extractCleanCycle = (val: string): string => {
     if (!val) return 'SD';
     let cleaned = val.replace(/^(ciclos?|sa[íi]da|origem)[:\s-]*/gi, '').trim();
@@ -54,10 +68,13 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     return cleaned.toUpperCase() || 'SD';
   };
 
-  const [greeting] = useState<string>(getDefaultGreeting());
-  const [reportDate] = useState<string>(getTodayFormatted());
+  const [greeting, setGreeting] = useState<string>(getDefaultGreeting());
+  const [reportDate, setReportDate] = useState<string>(getTodayFormatted());
   const [customCycle, setCustomCycle] = useState<string>('');
+  const [customFooterNote, setCustomFooterNote] = useState<string>('');
+  const [showSettings, setShowSettings] = useState<boolean>(false);
 
+  // Extract pasted IDs
   const parsedIds = useMemo(() => {
     if (!inputText.trim()) return [];
     const rawTokens = inputText.split(/[\n\r,;\t\s]+/);
@@ -65,6 +82,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     return uniqueTokens;
   }, [inputText]);
 
+  // Match IDs with the loaded CSV base
   const selectedLista = useMemo(() => listas.find(l => l.id === selectedListaId), [listas, selectedListaId]);
 
   const { matchedRows, notFoundIds, detectedSaidaList, motivosCount } = useMemo(() => {
@@ -81,7 +99,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
       });
 
       return {
-        matchedRows: selectedLista.itens as unknown as CsvRow[],
+        matchedRows: selectedLista.itens as unknown as CsvRow[], // Just for length counting
         notFoundIds: [],
         detectedSaidaList: Array.from(saidasSet),
         motivosCount: Array.from(motivosMap.entries())
@@ -121,6 +139,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
       };
     }
 
+    // Build lookup maps for fast matching
     const rowById = new Map<string, CsvRow>();
     const rowByCleanId = new Map<string, CsvRow>();
 
@@ -146,6 +165,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
       let match = rowById.get(term) || (cleanTerm ? rowByCleanId.get(cleanTerm) : undefined);
 
       if (!match) {
+        // Fallback search
         match = rows.find(
           (r) =>
             r.id === term ||
@@ -156,6 +176,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
       }
 
       if (match) {
+        // Avoid duplicate counting in stats if same ID provided twice
         if (!seenRowIndices.has(match.rowIndex)) {
           seenRowIndices.add(match.rowIndex);
           foundList.push(match);
@@ -181,6 +202,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     };
   }, [rows, parsedIds, useAllBase, selectedLista]);
 
+  // Set default cycle based on detected saidas if not manually modified
   useEffect(() => {
     if (!customCycle && detectedSaidaList.length > 0) {
       const first = detectedSaidaList[0];
@@ -195,19 +217,22 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     }
   }, [detectedSaidaList, rows]);
 
+  // Build the WhatsApp message text
   const generatedMessage = useMemo(() => {
     const totalCount = matchedRows.length;
     const activeCycle = extractCleanCycle(customCycle || 'SD');
 
-    const defaultFooter = `Anexado o reporte com os pacotes adicionados ao ciclo ${activeCycle}.`;
+    const defaultFooter = `📎 Anexado o reporte com os pacotes desconteinerizados adicionados ao ciclo ${activeCycle}.`;
+    const finalFooter = customFooterNote.trim() ? customFooterNote.trim() : defaultFooter;
 
+    // Format motivos lines
     let motivosText = '';
     if (motivosCount.length > 0) {
       motivosText = motivosCount
         .map((m) => `* ${m.name}: ${m.count} ${m.count === 1 ? 'pacote' : 'pacotes'}`)
         .join('\n');
     } else {
-      motivosText = '* Sem motivos identificados';
+      motivosText = '* (Nenhum motivo identificado nos IDs)';
     }
 
     const lines = [
@@ -215,25 +240,25 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
       '',
       'Segue o reporte da lista de inventário de hoje.',
       '',
-      `Lista total: ${totalCount} ${totalCount === 1 ? 'pacote' : 'pacotes'}`,
+      `Lista total:  ${totalCount} ${totalCount === 1 ? 'pacote' : 'pacotes'}`,
       '',
-      `Ciclo ${activeCycle} (${reportDate})`,
+      `Origem agregada no Ciclo ${activeCycle}  (${reportDate})`,
       '',
       motivosText,
       '',
-      defaultFooter,
+      finalFooter,
     ];
 
     return lines.join('\n');
-  }, [greeting, matchedRows.length, customCycle, reportDate, motivosCount]);
+  }, [greeting, matchedRows.length, customCycle, reportDate, motivosCount, customFooterNote]);
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(generatedMessage);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => setCopied(false), 2500);
     } catch (err) {
-      console.error('Falha ao copiar:', err);
+      console.error('Falha ao copiar texto:', err);
     }
   };
 
@@ -276,20 +301,21 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
   };
 
   return (
-    <div className="space-y-4 font-sans text-slate-800">
+    <div className="space-y-4">
+      {/* Main Grid: Input List vs WhatsApp Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        
+        {/* Left Column: ID Input & Stats (5 cols) */}
         <div className="lg:col-span-5 space-y-3">
-          <div className="bg-white border border-slate-200 rounded p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                Parâmetros do Reporte
+          <div className="bg-white border border-gray-300 rounded-lg p-4 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
+                Lista de IDs para o Reporte
               </label>
 
               <div className="flex items-center gap-1.5">
-                <label className="cursor-pointer inline-flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold transition-colors border border-slate-300">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Arquivo</span>
+                <label className="cursor-pointer inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 rounded text-[11px] font-bold transition-colors shadow-2xs">
+                  <Upload className="w-3 h-3 text-amber-700" />
+                  <span>Carregar arquivo</span>
                   <input
                     type="file"
                     accept=".csv,.txt,.tsv"
@@ -304,9 +330,10 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                       setInputText('');
                       setUseAllBase(false);
                     }}
-                    className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-[11px] font-medium transition-colors"
+                    title="Limpar texto colado"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-3 h-3 text-gray-500" />
                     <span>Limpar</span>
                   </button>
                 )}
@@ -315,8 +342,8 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                  Selecionar Lista
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
+                  Calcular a partir de uma Lista do Sistema
                 </label>
                 <select
                   value={selectedListaId}
@@ -327,12 +354,12 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                       setInputText('');
                     }
                   }}
-                  className="w-full bg-white border border-slate-300 rounded p-2 text-xs font-bold text-slate-900 outline-none"
+                  className="w-full bg-white border border-gray-300 rounded p-2 text-xs font-bold text-gray-900 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 >
-                  <option value="">-- Nenhuma (Cole os IDs abaixo) --</option>
+                  <option value="">-- Nenhuma (Usar Colar IDs ou Base CSV) --</option>
                   {listas.map((lista) => (
                     <option key={lista.id} value={lista.id}>
-                      {lista.nome} ({lista.data})
+                      {lista.nome} (Criada em: {lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
                     </option>
                   ))}
                 </select>
@@ -340,17 +367,22 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
 
               {!selectedListaId && (
                 <>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-1">
                     <button
                       type="button"
                       onClick={() => setUseAllBase(false)}
-                      className={`py-1.5 px-2 rounded border font-bold text-xs cursor-pointer ${
+                      className={`py-1.5 px-2 rounded border font-semibold flex items-center justify-center gap-1.5 transition-colors ${
                         !useAllBase
-                          ? 'bg-slate-100 border-slate-400 text-slate-900'
-                          : 'bg-white border-slate-200 text-slate-500'
+                          ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-2xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
                       }`}
                     >
-                      Colar IDs Específicos
+                      <span>Colar Lista Específica</span>
+                      {parsedIds.length > 0 && !useAllBase && (
+                        <span className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                          {parsedIds.length}
+                        </span>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -358,126 +390,195 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                         setUseAllBase(true);
                         setInputText('');
                       }}
-                      className={`py-1.5 px-2 rounded border font-bold text-xs cursor-pointer ${
+                      className={`py-1.5 px-2 rounded border font-semibold flex items-center justify-center gap-1.5 transition-colors ${
                         useAllBase
-                          ? 'bg-slate-100 border-slate-400 text-slate-900'
-                          : 'bg-white border-slate-200 text-slate-500'
+                          ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-2xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
                       }`}
                     >
-                      Toda a Base ({rows.length})
+                      <span>Toda a Base CSV</span>
+                      <span className="bg-gray-700 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                        {rows.length}
+                      </span>
                     </button>
                   </div>
 
-                  {!useAllBase && (
-                    <textarea
-                      rows={6}
-                      value={inputText}
-                      onChange={(e) => setInputText(e.target.value)}
-                      placeholder="Cole os IDs aqui..."
-                      className="w-full bg-white border border-slate-300 rounded p-2.5 font-mono text-xs text-slate-900 outline-none"
-                    />
+                  {!useAllBase ? (
+                    <div className="relative">
+                      <textarea
+                        rows={8}
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
+                        placeholder={`Cole aqui os IDs a serem reportados (um por linha ou separados por vírgula)...&#10;Exemplo:&#10;47712645205&#10;47712645206&#10;47712645207`}
+                        className="w-full bg-white border border-gray-300 rounded p-2.5 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 resize-y"
+                      />
+                    </div>
+                  ) : (
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
+                      <p className="font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                        Utilizando todos os {rows.length} registros da base CSV carregada.
+                      </p>
+                      <p className="text-[11px] text-emerald-800">
+                        Os totais e contagens de motivos abaixo refletem a base completa atualizada.
+                      </p>
+                    </div>
                   )}
                 </>
               )}
 
-              {(selectedLista || useAllBase) && (
-                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-800 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-slate-600" />
-                  <span>
-                    Usando {selectedLista ? selectedLista.itens.length : rows.length} registros para o cálculo.
-                  </span>
+              {selectedListaId && selectedLista && (
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                    Utilizando os {selectedLista.itens.length} registros da lista selecionada.
+                  </p>
+                  <p className="text-[11px] text-emerald-800">
+                    Calculando motivos e saídas diretamente dos dados coletados na lista.
+                  </p>
                 </div>
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-2 pt-1 font-mono text-center">
-              <div className="border border-slate-200 rounded p-2 bg-slate-50">
-                <span className="block text-[10px] text-slate-500 font-sans font-bold uppercase">Informados</span>
-                <span className="text-sm font-bold text-slate-900">
+            {/* Quick Match Statistics Cards */}
+            <div className="grid grid-cols-3 gap-2 pt-1 text-center font-mono">
+              <div className="bg-gray-50 border border-gray-200 rounded p-2">
+                <span className="block text-[10px] text-gray-500 font-sans font-bold uppercase">Informados</span>
+                <span className="text-sm font-black text-gray-900">
                   {selectedLista ? selectedLista.itens.length : (useAllBase ? rows.length : parsedIds.length)}
                 </span>
               </div>
 
-              <div className="border border-slate-200 rounded p-2 bg-slate-50">
-                <span className="block text-[10px] text-slate-500 font-sans font-bold uppercase">Encontrados</span>
-                <span className="text-sm font-bold text-slate-900">{matchedRows.length}</span>
+              <div className="bg-emerald-50 border border-emerald-200 rounded p-2">
+                <span className="block text-[10px] text-emerald-700 font-sans font-bold uppercase">Encontrados</span>
+                <span className="text-sm font-black text-emerald-900">{matchedRows.length}</span>
               </div>
 
-              <div className="border border-slate-200 rounded p-2 bg-slate-50">
-                <span className="block text-[10px] text-slate-500 font-sans font-bold uppercase">Não Encontrados</span>
-                <span className={`text-sm font-bold ${notFoundIds.length > 0 ? 'text-red-600' : 'text-slate-600'}`}>
+              <div className={`border rounded p-2 ${
+                notFoundIds.length > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'
+              }`}>
+                <span className="block text-[10px] text-gray-500 font-sans font-bold uppercase">Não Achados</span>
+                <span className={`text-sm font-black ${notFoundIds.length > 0 ? 'text-red-700' : 'text-gray-600'}`}>
                   {notFoundIds.length}
                 </span>
               </div>
             </div>
 
+            {/* Not Found IDs Warning Box */}
             {notFoundIds.length > 0 && !useAllBase && (
-              <div className="border border-red-200 bg-red-50 rounded p-2.5 text-xs text-red-800 space-y-1">
-                <div className="font-bold flex items-center gap-1">
-                  <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-                  {notFoundIds.length} IDs não constam na base:
+              <div className="bg-red-50 border border-red-200 rounded p-2.5 text-xs text-red-900 space-y-1.5">
+                <div className="flex items-center justify-between font-bold text-red-800">
+                  <span className="flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                    {notFoundIds.length} ID(s) não constam na base CSV:
+                  </span>
                 </div>
-                <div className="max-h-20 overflow-y-auto font-mono text-[11px] text-red-700">
-                  {notFoundIds.join(', ')}
+                <div className="max-h-24 overflow-y-auto font-mono text-[11px] bg-white p-1.5 rounded border border-red-200 text-red-700 break-all space-y-0.5">
+                  {notFoundIds.map((id, idx) => (
+                    <div key={idx}>• {id}</div>
+                  ))}
                 </div>
               </div>
             )}
           </div>
 
-          <div className="bg-white border border-slate-200 rounded p-3 space-y-2">
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Motivos Calculados
+          {/* Motivos Calculation Table */}
+          <div className="bg-white border border-gray-300 rounded-lg p-3 shadow-xs space-y-2">
+            <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide flex items-center justify-between">
+              <span>Cálculo dos Motivos Detectados</span>
+              <span className="text-[11px] font-mono font-normal text-gray-500">
+                {motivosCount.length} motivos
+              </span>
             </h3>
 
             {motivosCount.length === 0 ? (
-              <p className="text-xs text-slate-400 py-2 text-center">
-                Sem motivos para exibir.
+              <p className="text-xs text-gray-400 italic py-2 text-center">
+                Cole IDs ou carregue dados para visualizar o cálculo dos motivos.
               </p>
             ) : (
-              <div className="space-y-1 max-h-48 overflow-y-auto font-mono text-xs">
-                {motivosCount.map((m) => (
-                  <div key={m.name} className="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-200 rounded">
-                    <span className="font-semibold text-slate-800">{m.name}</span>
-                    <span className="font-bold text-slate-900">{m.count} pcts</span>
-                  </div>
-                ))}
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {motivosCount.map((m) => {
+                  const percent = matchedRows.length > 0 ? Math.round((m.count / matchedRows.length) * 100) : 0;
+                  return (
+                    <div
+                      key={m.name}
+                      className="flex items-center justify-between p-1.5 bg-gray-50 border border-gray-200 rounded text-xs"
+                    >
+                      <span className="font-medium text-gray-800 truncate max-w-[200px]" title={m.name}>
+                        {m.name}
+                      </span>
+                      <div className="flex items-center gap-2 font-mono">
+                        <span className="text-[11px] text-gray-500">{percent}%</span>
+                        <span className="bg-emerald-100 text-emerald-950 font-bold px-2 py-0.5 rounded text-xs border border-emerald-300">
+                          {m.count} {m.count === 1 ? 'pct' : 'pcts'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
 
+        {/* Right Column: WhatsApp Message Output (7 cols) */}
         <div className="lg:col-span-7 space-y-3">
-          <div className="bg-white border border-slate-200 rounded p-4 space-y-3">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                Texto para Envio
-              </h3>
+          <div className="bg-white border border-gray-300 rounded-lg p-4 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                  Mensagem Formatada para WhatsApp
+                </h3>
+                <p className="text-[11px] text-gray-500">
+                  Pronto para copiar e colar diretamente no chat do grupo.
+                </p>
+              </div>
 
+              {/* Action Buttons */}
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleCopy}
-                  className="px-3 py-1.5 bg-[#3483FA] hover:bg-blue-600 text-white rounded text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-bold transition-all shadow-xs ${
+                    copied
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  }`}
                 >
-                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   <span>{copied ? 'Copiado!' : 'Copiar Texto'}</span>
                 </button>
 
                 <button
                   onClick={handleShareWhatsapp}
-                  className="px-3 py-1.5 bg-slate-900 hover:bg-black text-white rounded text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#25D366] hover:bg-[#20bd5a] text-gray-950 font-bold rounded-md text-xs transition-colors shadow-xs"
+                  title="Abrir diretamente no WhatsApp Web"
                 >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>Enviar WhatsApp</span>
+                  <Share2 className="w-4 h-4" />
+                  <span>Enviar no WhatsApp</span>
                 </button>
               </div>
             </div>
 
-            <div className="bg-slate-50 p-4 rounded border border-slate-200 font-mono text-xs leading-relaxed whitespace-pre-wrap select-all">
-              {generatedMessage}
+            {/* WhatsApp Simulation Chat Bubble */}
+            <div className="bg-[#EFEAE2] p-4 rounded-lg border border-gray-300/80 shadow-inner relative min-h-[300px]">
+              {/* WhatsApp stylized message bubble */}
+              <div className="max-w-xl bg-white rounded-lg rounded-tl-xs p-3.5 shadow-sm border border-gray-200/80 space-y-2 relative text-gray-800 text-xs sm:text-sm font-sans leading-relaxed">
+                {/* Bubble tail triangle */}
+                <div className="absolute top-0 -left-2 w-0 h-0 border-t-8 border-t-white border-l-8 border-l-transparent"></div>
+
+                <div className="whitespace-pre-wrap font-sans select-all leading-normal">
+                  {generatedMessage}
+                </div>
+
+                <div className="flex items-center justify-end gap-1 text-[10px] text-gray-400 font-mono pt-1">
+                  <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  <span className="text-emerald-500 font-bold">✓✓</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );
