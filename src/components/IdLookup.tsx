@@ -7,6 +7,20 @@ import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
 
 const naturalOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
+function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function listaDateKey(value: string): string {
+  const normalized = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
+  const match = normalized.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : normalized;
+}
+
 interface IdLookupProps {
   rows: CsvRow[];
   onNavigateToUpload: () => void;
@@ -27,6 +41,10 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [showGruposModal, setShowGruposModal] = useState(false);
   const [page, setPage] = useState(0);
+  const listasDeGruposDoDia = useMemo(() => {
+    const today = localDateKey();
+    return listas.filter(lista => listaDateKey(lista.data) === today && lista.tipo === 'grupos' && lista.grupos?.length);
+  }, [listas]);
 
   useEffect(() => {
     const unsubscribe = listenToListas((data) => setListas(data));
@@ -678,13 +696,13 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             </div>
 
             <div className="overflow-y-auto pr-1 space-y-4">
-              {listas.filter(l => l.tipo === 'grupos' && l.grupos && l.grupos.length > 0).length === 0 ? (
+              {listasDeGruposDoDia.length === 0 ? (
                 <div className="p-8 text-center bg-gray-50 rounded-xl border border-dashed border-gray-300">
                   <Layers className="w-8 h-8 text-gray-300 mx-auto mb-3" />
-                  <p className="text-gray-500 text-sm font-medium">Nenhuma Lista com Grupos encontrada.</p>
+                  <p className="text-gray-500 text-sm font-medium">Nenhuma lista de grupos encontrada para hoje.</p>
                 </div>
               ) : (
-                listas.filter(l => l.tipo === 'grupos' && l.grupos && l.grupos.length > 0).map(lista => (
+                listasDeGruposDoDia.map(lista => (
                   <div key={lista.id} className="border border-gray-200 rounded-xl overflow-hidden">
                     <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
                       <span className="font-bold text-sm text-gray-800">{lista.nome}</span>

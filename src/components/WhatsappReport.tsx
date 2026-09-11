@@ -24,6 +24,20 @@ interface WhatsappReportProps {
   rows: CsvRow[];
 }
 
+function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function listaDateKey(value: string): string {
+  const normalized = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
+  const match = normalized.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : normalized;
+}
+
 export function WhatsappReport({ rows }: WhatsappReportProps) {
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [selectedListaId, setSelectedListaId] = useState<string>('');
@@ -90,6 +104,14 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
 
   // Match IDs with the loaded CSV base
   const selectedLista = useMemo(() => listas.find(l => l.id === selectedListaId), [listas, selectedListaId]);
+  const listasDoDia = useMemo(() => {
+    const today = localDateKey();
+    return listas.filter(lista => listaDateKey(lista.data) === today);
+  }, [listas]);
+  const listasForaDoDia = useMemo(() => {
+    const today = localDateKey();
+    return listas.filter(lista => listaDateKey(lista.data) !== today);
+  }, [listas]);
 
   const { rowById, rowByCleanId } = useMemo(() => {
     const rowById = new Map<string, CsvRow>();
@@ -366,11 +388,24 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                   className="w-full bg-white border border-gray-300 rounded p-2 text-xs font-bold text-gray-900 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 >
                   <option value="">-- Nenhuma (Usar Colar IDs ou Base CSV) --</option>
-                  {listas.map((lista) => (
-                    <option key={lista.id} value={lista.id}>
-                      {lista.nome} (Criada em: {lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
-                    </option>
-                  ))}
+                  {listasDoDia.length > 0 && (
+                    <optgroup label="Lista atual (hoje)">
+                      {listasDoDia.map((lista) => (
+                        <option key={lista.id} value={lista.id}>
+                          {lista.nome} (Criada em: {lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {listasForaDoDia.length > 0 && (
+                    <optgroup label="Outras listas">
+                      {listasForaDoDia.map((lista) => (
+                        <option key={lista.id} value={lista.id}>
+                          {lista.nome} (Criada em: {lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 
