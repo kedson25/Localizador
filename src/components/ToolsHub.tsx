@@ -80,7 +80,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
   ];
 
   const backlogTools = allBacklogTools.filter(tool => 
-    currentUser?.isAdmin || tool.id === 'listas' || currentUser?.allowedGroups?.includes(tool.id)
+    currentUser?.isAdmin || currentUser?.allowedGroups?.includes(tool.id)
   );
 
   // Allow uploading if the user has permission to upload
@@ -94,7 +94,6 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
       tag: 'Auditoria & Leitura',
       description: 'Carregue a planilha de faltantes. Utilize o leitor de código de barras físico para bipar os pacotes localizados.',
       icon: Barcode,
-  ListTodo,
       iconColor: 'text-[#3483FA]',
       badgeBg: 'bg-blue-50 text-[#3483FA] border-blue-200',
     }

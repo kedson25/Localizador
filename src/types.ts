@@ -49,7 +49,6 @@ export interface ColetaItem {
   responsavel?: string;
   grupoId?: string;
   validado?: boolean;
-  syncStatus?: 'pendente' | 'sincronizando' | 'sincronizado';
 }
 
 export interface ColetaGrupo {
@@ -70,7 +69,7 @@ export interface ColetaLista {
   status: 'em_andamento' | 'finalizada';
   saidaPadrao: string;
   motivoPadrao: string;
-  itens: ColetaItem[];
+  itens?: ColetaItem[];
   totalItens?: number;
   porcentagemAcerto?: number;
   fechamentoGaiola?: string;

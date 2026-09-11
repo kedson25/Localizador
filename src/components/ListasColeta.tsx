@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Papa from 'papaparse';
 import { 
   Barcode, 
@@ -44,6 +44,7 @@ import {
   listenToRefugo,
   listenToListas,
   saveLista,
+  saveListaItemsBatch,
   validateAndCleanIds,
   deleteLista as deleteListaFirestore
 } from '../lib/firebase';
@@ -72,48 +73,6 @@ const MOTIVOS_DISPONIVEIS = [
   'Roteirizado',
   'Aguardando coleta'
 ];
-
-const ITEMS_PER_PAGE = 100;
-const EMPTY_ITEMS: ColetaItem[] = [];
-const cleanDigits = (value: string) => (value || '').replace(/\D/g, '');
-const itemCodeKey = (value: string) => {
-  const normalized = (value || '').trim().toUpperCase().replace(/M$/, '');
-  return cleanDigits(normalized) || normalized;
-};
-
-// Appending keeps existing indexes stable while a session contains new and repeated IDs.
-export function mergeIndividualItems(currentItems: ColetaItem[], sessionItems: ColetaItem[], operator: string) {
-  const items = [...currentItems];
-  const indexes = new Map(items.map((item, index) => [itemCodeKey(item.codigo), index]));
-  let addedCount = 0;
-  let updatedCount = 0;
-  for (const sessionItem of sessionItems) {
-    const key = itemCodeKey(sessionItem.codigo);
-    const index = indexes.get(key);
-    const existing = index === undefined ? undefined : items[index];
-    const updated: ColetaItem = {
-      ...(existing || sessionItem),
-      id: existing?.id || sessionItem.id || `item_${encodeURIComponent(key)}`,
-      validado: sessionItem.validado ?? true,
-      responsavel: operator,
-      scannedAt: sessionItem.scannedAt || new Date().toLocaleString('pt-BR'),
-      saida: sessionItem.saida || existing?.saida || '',
-      motivo: sessionItem.motivo || existing?.motivo || '',
-      rota: sessionItem.rota && sessionItem.rota !== 'Sem Rota'
-        ? sessionItem.rota : (existing?.rota || sessionItem.rota || 'Sem Rota'),
-      syncStatus: 'pendente'
-    };
-    if (index !== undefined) {
-      items[index] = updated;
-      updatedCount++;
-    } else {
-      indexes.set(key, items.length);
-      items.push(updated);
-      addedCount++;
-    }
-  }
-  return { items: [...items.slice(currentItems.length), ...items.slice(0, currentItems.length)], addedCount, updatedCount };
-}
 
 let audioCtx: AudioContext | null = null;
 const playShortBeep = () => {
@@ -151,10 +110,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string, code: string } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const deferredSearchTerm = useDeferredValue(searchTerm);
-  const [itemsPage, setItemsPage] = useState(0);
-  const [storageError, setStorageError] = useState<string | null>(null);
-  const [listasLoaded, setListasLoaded] = useState(false);
   const [dashboardSearchTerm, setDashboardSearchTerm] = useState('');
   const [dashboardDateFilter, setDashboardDateFilter] = useState(() => {
     const d = new Date();
@@ -174,9 +129,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   // Gaveta/Modal para mudar motivo do ID clicado
   const [itemParaMudarMotivo, setItemParaMudarMotivo] = useState<ColetaItem | null>(null);
-
-  // Snapshot de itens para verificar no momento da abertura do modal
-  const [itensVerificarSnap, setItensVerificarSnap] = useState<ColetaItem[]>([]);
 
   // Seleção e Alteração em Massa de Motivos
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -237,29 +189,41 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
 
-  const persistLista = async (lista: ColetaLista, immediate = false): Promise<boolean> => {
-    try {
-      const saved = await saveLista(lista, immediate);
-      if (!saved) throw new Error('Falha no armazenamento local');
-      setStorageError(null);
-      return true;
-    } catch (error) {
-      console.error('Erro ao guardar alterações da lista:', error);
-      setStorageError('Não foi possível salvar as alterações neste dispositivo. Mantenha esta tela aberta e tente salvar novamente.');
-      return false;
-    }
-  };
+  const getModoIndKey = useCallback((listaId: string, username: string) => {
+    return `coleta_modo_ind_${listaId}_${username}`;
+  }, []);
 
-  // A sessão individual permanece apenas na memória até ser unificada no Firestore.
+  // Auto-salvar sessão do Modo Individual no LocalStorage sempre que for alterada
+  useEffect(() => {
+    if (listaAtiva && modoIndividual) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        localStorage.setItem(key, JSON.stringify(itensModoIndividual));
+      } catch (e) {
+        console.warn('Erro ao salvar sessão individual localmente:', e);
+      }
+    }
+  }, [itensModoIndividual, modoIndividual, listaAtiva?.id, operanteNome, getModoIndKey]);
+
+  // Restaurar automaticamente a sessão do Modo Individual se existir para esta lista
   useEffect(() => {
     if (listaAtiva) {
-      setItensModoIndividual([]);
-      setModoIndividual(false);
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItensModoIndividual(parsed);
+            setModoIndividual(true);
+          }
+        }
+      } catch (e) {}
     } else {
       setModoIndividual(false);
       setItensModoIndividual([]);
     }
-  }, [listaAtiva?.id]);
+  }, [listaAtiva?.id, operanteNome, getModoIndKey]);
 
   // Buscar usuários registrados no sistema
   useEffect(() => {
@@ -280,7 +244,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   useEffect(() => {
     const unsubListas = listenToListas((listasServer) => {
       setListas(listasServer);
-      setListasLoaded(true);
     });
 
     // Carregar base de refugo se existir com cache em memória para evitar re-parse pesado
@@ -292,10 +255,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         lastRefugoTextRef.current = data.rawText;
 
         Papa.parse(data.rawText, {
-          worker: true,
           skipEmptyLines: true,
           complete: (results) => {
-            if (lastRefugoTextRef.current !== data.rawText) return;
             const parsedRows: RefugoRow[] = (results.data as any[]).map((row: any) => {
               const values = Array.isArray(row) ? row : Object.values(row);
               const idRaw = String(values[0] || '').trim().toUpperCase();
@@ -362,32 +323,39 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     navigate(`/listas/${id}`);
   };
 
-  // Obter rota oficial baseada estritamente no arquivo de refugo atual
-  const refugoByCode = useMemo(() => {
-    const index = new Map<string, RefugoRow>();
-    for (const row of refugoBaseRows) {
-      const key = itemCodeKey(row.id);
-      if (key && !index.has(key)) index.set(key, row);
-    }
-    return index;
-  }, [refugoBaseRows]);
+  const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
 
+  // Obter rota oficial baseada estritamente no arquivo de refugo atual
   const getRotaItem = useCallback((item: { codigo: string; rota?: string }): string => {
-    const match = refugoByCode.get(itemCodeKey(item.codigo));
-    if (match?.rota && match.rota.trim() !== '' && match.rota.toLowerCase() !== 'sem rota' && match.rota !== '-') {
-      return match.rota.trim();
+    if (refugoBaseRows && refugoBaseRows.length > 0) {
+      const cleanCod = (item.codigo || '').trim().toUpperCase();
+      const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+      const cleanCodDigits = cleanDigits(cleanCod);
+
+      const match = refugoBaseRows.find(r => {
+        if (!r.id) return false;
+        const rId = r.id.trim().toUpperCase();
+        if (rId === cleanCod) return true;
+        if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+        const rDigits = cleanDigits(rId);
+        return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+      });
+
+      if (match && match.rota && match.rota.trim() !== '' && match.rota.toLowerCase() !== 'sem rota' && match.rota !== '-') {
+        return match.rota.trim();
+      }
     }
     return (item.rota && item.rota.trim() !== '' && item.rota.toLowerCase() !== 'sem rota' && item.rota !== '-')
       ? item.rota.trim()
       : 'Sem Rota';
-  }, [refugoByCode]);
+  }, [refugoBaseRows]);
 
   // Sincronizar automaticamente as rotas dos itens da lista ativa com o arquivo de refugo atual
   useEffect(() => {
-    if (!listaAtiva || !refugoBaseRows || refugoBaseRows.length === 0) return;
+    if (!listaAtiva || !refugoBaseRows || refugoBaseRows.length === 0 || !Array.isArray(listaAtiva.itens)) return;
 
     let hasChanges = false;
-    const novosItens = listaAtiva.itens.map(item => {
+    const novosItens = (listaAtiva.itens || []).map(item => {
       const rotaAtualizada = getRotaItem(item);
       if (rotaAtualizada !== 'Sem Rota' && item.rota !== rotaAtualizada) {
         hasChanges = true;
@@ -400,26 +368,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const updatedLista = { ...listaAtiva, itens: novosItens };
       activeItensRef.current = novosItens;
       setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-      void persistLista(updatedLista);
+      saveLista(updatedLista).catch(err => console.error('Erro ao sincronizar rotas do refugo:', err));
     }
   }, [refugoBaseRows, listaAtiva?.id, getRotaItem]);
 
   // Abrir Modal de Verificação de IDs do Ciclo
   const handleAbrirVerificar = () => {
     if (!listaAtiva) return;
-    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
-    const itensPendentes = listToVerify.filter(i => !i.validado);
-    
-    if (itensPendentes.length === 0) {
-      alert("Não há IDs pendentes para verificar no momento.");
-      return;
-    }
-
-    setItensVerificarSnap(itensPendentes);
-
+    const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
     const mapInicial: Record<string, 'valido' | 'verificado' | 'em_rota'> = {};
-    itensPendentes.forEach(item => {
-      mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
+    listToVerify.forEach(item => {
+      if (modoIndividual || !item.validado) {
+        mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
+      }
     });
     setVerificarMap(mapInicial);
     setVerificarModo('10');
@@ -465,7 +426,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     playShortBeep();
 
-    const matchedItem = itensVerificarSnap.find(i => {
+    const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || []);
+    const matchedItem = listToVerify.find(i => {
       if (i.codigo === cleanInput) return true;
       const iDigits = cleanDigits(i.codigo);
       return iDigits && cleanInputDigits && iDigits === cleanInputDigits;
@@ -506,7 +468,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const rawIds = verificarLoteText.split(/[\n\t,;]+/).map(i => i.trim()).filter(Boolean);
     let processados = 0;
 
-    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || []);
 
     const itensAtualizados = listToVerify.map(item => {
       if (item.validado) return item;
@@ -538,7 +500,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setItensModoIndividual(itensAtualizados);
     } else {
       const updatedLista = { ...listaAtiva, itens: itensAtualizados };
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
     
     setShowVerificarLoteModal(false);
@@ -550,7 +512,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleCopiarIdsVerificacao = () => {
     if (!listaAtiva) return;
-    const itensPendentes = itensVerificarSnap;
+    const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
+    const itensPendentes = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
     if (itensPendentes.length === 0) {
       alert('Não há IDs pendentes para copiar.');
       return;
@@ -565,7 +528,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleCopiarIdsComMotivoESaida = () => {
     if (!listaAtiva) return;
-    const itensParaCopiar = filteredItems.length > 0 ? filteredItems : listaAtiva.itens;
+    const itensParaCopiar = filteredItems.length > 0 ? filteredItems : (listaAtiva.itens || []);
     if (itensParaCopiar.length === 0) {
       alert('Não há itens para copiar.');
       return;
@@ -585,12 +548,28 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleBaixarListaSoIds = () => {
     if (!listaAtiva) return;
-    const itensParaExportar = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const itensParaExportar = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
     exportarApenasIdsCSV(listaAtiva, itensParaExportar, modoIndividual ? 'IDs_Individual' : 'IDs');
   };
 
   const handleEntrarModoIndividual = () => {
     setModoIndividual(true);
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItensModoIndividual(parsed);
+            setTimeout(() => {
+              inputRef.current?.focus();
+            }, 100);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
     setItensModoIndividual([]);
     setTimeout(() => {
       inputRef.current?.focus();
@@ -603,27 +582,80 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return;
     }
 
-    const itensParaUsar = Array.isArray(itensCustom)
+    const itensParaUsar = (Array.isArray(itensCustom) && itensCustom.length > 0)
       ? itensCustom
       : itensModoIndividual;
 
     if (itensParaUsar.length === 0) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
       setModoIndividual(false);
-      setItensModoIndividual([]);
       return;
     }
 
     setIsSavingUnify(true);
 
     try {
-      const { items: updatedMainItens, addedCount: countNovos, updatedCount: countAtualizados } =
-        mergeIndividualItems(activeItensRef.current, itensParaUsar, operanteNome);
+      const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+        ? activeItensRef.current
+        : (listaAtiva.itens || []);
+
+      const updatedMainItens = [...currentItens];
+
+      const codeToIndexMap = new Map<string, number>();
+      updatedMainItens.forEach((item, index) => {
+        codeToIndexMap.set(item.codigo, index);
+        const digits = cleanDigits(item.codigo);
+        if (digits) codeToIndexMap.set(digits, index);
+      });
+
+      let countNovos = 0;
+      let countAtualizados = 0;
+
+      itensParaUsar.forEach(itemInd => {
+        const cleanCod = itemInd.codigo;
+        const cleanCodDigits = cleanDigits(cleanCod);
+
+        const existingIndex = codeToIndexMap.has(cleanCod)
+          ? codeToIndexMap.get(cleanCod)!
+          : (cleanCodDigits && codeToIndexMap.has(cleanCodDigits) ? codeToIndexMap.get(cleanCodDigits)! : -1);
+
+        if (existingIndex !== -1 && existingIndex < updatedMainItens.length) {
+          updatedMainItens[existingIndex] = {
+            ...updatedMainItens[existingIndex],
+            validado: itemInd.validado !== undefined ? itemInd.validado : true,
+            responsavel: operanteNome,
+            scannedAt: itemInd.scannedAt || new Date().toLocaleString('pt-BR'),
+            saida: itemInd.saida || updatedMainItens[existingIndex].saida,
+            motivo: itemInd.motivo || updatedMainItens[existingIndex].motivo,
+            rota: (itemInd.rota && itemInd.rota !== 'Sem Rota') ? itemInd.rota : updatedMainItens[existingIndex].rota
+          };
+          countAtualizados++;
+        } else {
+          const novoItem: ColetaItem = {
+            ...itemInd,
+            id: itemInd.id || ('ind-uni-' + Date.now() + '-' + Math.floor(Math.random() * 100000)),
+            validado: itemInd.validado !== undefined ? itemInd.validado : true,
+            responsavel: operanteNome,
+            scannedAt: itemInd.scannedAt || new Date().toLocaleString('pt-BR')
+          };
+          // Inserir no TOPO da lista principal
+          updatedMainItens.unshift(novoItem);
+          codeToIndexMap.set(cleanCod, 0);
+          if (cleanCodDigits) codeToIndexMap.set(cleanCodDigits, 0);
+          countNovos++;
+        }
+      });
 
       activeItensRef.current = updatedMainItens;
       const updatedLista = { ...listaAtiva, itens: updatedMainItens };
       setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
 
-      if (!await persistLista(updatedLista, true)) return;
+      await saveLista(updatedLista, true);
+
+      // Limpar sessão individual salva após unificar
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
 
       alert(`${itensParaUsar.length} IDs da sessão individual foram unificados na lista principal com sucesso! (${countAtualizados} validados, ${countNovos} novos)`);
       setModoIndividual(false);
@@ -642,6 +674,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         return;
       }
     }
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
+    }
     setModoIndividual(false);
     setItensModoIndividual([]);
   };
@@ -653,7 +689,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleConcluirVerificacao = async () => {
     if (!listaAtiva) return;
 
-    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
 
     const itensMantidos = listToVerify.filter(i => verificarMap[i.id] !== 'em_rota');
     
@@ -672,7 +708,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       activeItensRef.current = itensAtualizados;
       const updatedLista = { ...listaAtiva, itens: itensAtualizados };
       setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
       setShowVerificarModal(false);
     }
   };
@@ -689,7 +725,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return;
     }
 
-    const currentItens = activeItensRef.current;
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : (listaAtiva.itens || []);
 
     const novosItens = currentItens.map(i => {
       if (i.id === itemId) {
@@ -701,7 +739,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     activeItensRef.current = novosItens;
     const updatedLista = { ...listaAtiva, itens: novosItens };
     setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
 
@@ -748,10 +786,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         itens: []
       };
 
-      if (!await persistLista(novaLista)) {
-        setIsLoadingLista(false);
-        return;
-      }
+      await saveLista(novaLista);
       setOpeningListaId(novaLista.id);
       setShowModalNovaLista(false);
       navigate(`/listas/${novaLista.id}`);
@@ -764,7 +799,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Bipar ID na tela de coleta
   const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bipInput.trim() || !listaAtiva || isLocked) return;
+    if (!bipInput.trim() || !listaAtiva) return;
 
     let processedInput = bipInput.trim();
     processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
@@ -781,14 +816,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
 
     const cleanInput = processedInput.toUpperCase();
-    if (!cleanInput) return;
     const cleanInputDigits = cleanDigits(cleanInput);
 
     // Beep curto de 50ms
     playShortBeep();
 
     // Tentar localizar se existe na base de refugo para puxar a rota exata
-    const rotaItemFinal = getRotaItem({ codigo: cleanInput });
+    const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
+    const refugoMatch = refugoBaseRows.find(r => {
+      if (!r.id) return false;
+      const rId = r.id.trim().toUpperCase();
+      if (rId === cleanInput) return true;
+      if (rId.replace(/m$/i, '') === cleanInputWithoutM) return true;
+      const rDigits = cleanDigits(rId);
+      return Boolean(rDigits && cleanInputDigits && rDigits === cleanInputDigits);
+    });
+
+    const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+      ? refugoMatch.rota.trim()
+      : 'Sem Rota';
 
     // Usar obrigatoriamente a saída do ciclo configurada
     const saidaItemFinal = listaAtiva.saidaPadrao || selectedSaida || 'Ciclo 2 - Saída PM';
@@ -806,7 +852,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           message: `ID já bipado e validado nesta sessão individual!`
         });
       } else {
-        const itemPrincipal = listaAtiva.itens.find(
+        const itemPrincipal = (listaAtiva.itens || []).find(
           item => item.codigo === cleanInput || (cleanDigits(item.codigo) === cleanInputDigits && cleanInputDigits !== '')
         );
 
@@ -821,7 +867,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           scannedAt: new Date().toLocaleString('pt-BR'),
           responsavel: operanteNome,
           grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-          validado: false
+          validado: true
         };
 
         setItensModoIndividual(prev => [novoItemIndividual, ...prev]);
@@ -838,7 +884,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
 
     // Usar activeItensRef.current para prevenir race-conditions em bips rápidos
-    const currentItens = activeItensRef.current;
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : (listaAtiva.itens || []);
 
     // Verificar se o item já existe nesta lista
     const idx = currentItens.findIndex(
@@ -852,12 +900,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       novosItens[idx] = {
         ...novosItens[idx],
         saida: saidaItemFinal,
-        motivo: selectedMotivo || novosItens[idx].motivo,
-        rota: rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : novosItens[idx].rota,
+        motivo: selectedMotivo,
+        rota: rotaItemFinal,
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
-        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId,
-        syncStatus: 'pendente'
+        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId
       };
       setLastScanResult({
         status: 'success',
@@ -867,7 +914,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     } else {
       // Adicionar novo ID na lista
       const novoItem: ColetaItem = {
-        id: `item_${encodeURIComponent(itemCodeKey(cleanInput))}`,
+        id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
         codigo: cleanInput,
         rota: rotaItemFinal,
         saida: saidaItemFinal, // Mesma saída do ciclo da lista
@@ -875,8 +922,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
         grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-        validado: false,
-        syncStatus: 'pendente'
+        validado: false
       };
       novosItens = [novoItem, ...novosItens];
       setLastScanResult({
@@ -886,19 +932,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       });
     }
 
-    // A tela responde imediatamente; saveLista confirma a gravação local durável.
+    // Salvar no cache em memória imediatamente
     activeItensRef.current = novosItens;
 
     const updatedLista = { ...listaAtiva, itens: novosItens };
     setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+    saveLista(updatedLista).catch(err => console.error('Erro ao salvar no banco:', err));
 
     setBipInput('');
-    setItemsPage(0);
     inputRef.current?.focus();
-    if (!await persistLista(updatedLista)) {
-      setBipInput(previous => previous || cleanInput);
-      setLastScanResult({ status: 'error', code: cleanInput, message: 'O ID está na tela, mas não foi salvo. Tente salvar novamente.' });
-    }
   };
 
   // Alterar motivo do item selecionado na gaveta
@@ -913,7 +955,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         return item;
       }));
     } else {
-      const novosItens = listaAtiva.itens.map(item => {
+      const novosItens = (listaAtiva.itens || []).map(item => {
         if (item.id === itemParaMudarMotivo.id) {
           return { ...item, motivo: novoMotivoEscolha };
         }
@@ -921,7 +963,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       });
 
       const updatedLista = { ...listaAtiva, itens: novosItens };
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
 
     setItemParaMudarMotivo(null);
@@ -944,7 +986,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Selecionar/Desmarcar todos os visíveis
   const handleToggleSelectAll = (visibleItems: ColetaItem[]) => {
     const visibleIds = visibleItems.map(i => i.id);
-    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIdSet.has(id));
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.includes(id));
 
     if (allVisibleSelected) {
       setSelectedItemIds(prev => prev.filter(id => !visibleIds.includes(id)));
@@ -983,21 +1025,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     if (modoIndividual) {
       setItensModoIndividual(prev => prev.map(item => {
-        if (selectedItemIdSet.has(item.id)) {
+        if (selectedItemIds.includes(item.id)) {
           return { ...item, motivo: novoMotivoEscolha };
         }
         return item;
       }));
     } else {
-      const novosItens = listaAtiva.itens.map(item => {
-        if (selectedItemIdSet.has(item.id)) {
+      const novosItens = (listaAtiva.itens || []).map(item => {
+        if (selectedItemIds.includes(item.id)) {
           return { ...item, motivo: novoMotivoEscolha };
         }
         return item;
       });
 
       const updatedLista = { ...listaAtiva, itens: novosItens };
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
 
     setSelectedItemIds([]);
@@ -1008,13 +1050,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
     if (window.confirm(`Confirma a exclusão de ${selectedItemIds.length} item(ns) selecionado(s)?`)) {
       if (modoIndividual) {
-        setItensModoIndividual(prev => prev.filter(i => !selectedItemIdSet.has(i.id)));
+        setItensModoIndividual(prev => prev.filter(i => !selectedItemIds.includes(i.id)));
       } else {
-        const novosItens = listaAtiva.itens.filter(i => !selectedItemIdSet.has(i.id));
+        const novosItens = (listaAtiva.itens || []).filter(i => !selectedItemIds.includes(i.id));
         activeItensRef.current = novosItens;
         const updatedLista = { ...listaAtiva, itens: novosItens };
         setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-        if (!await persistLista(updatedLista)) return;
+        await saveLista(updatedLista);
       }
       setSelectedItemIds([]);
     }
@@ -1033,19 +1075,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       grupos: [...(listaAtiva.grupos || []), novoGrupo],
       grupoAtivoId: novoGrupo.id
     };
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
   const handleSetGrupoAtivo = async (grupoId: string) => {
     if (!listaAtiva) return;
     const updatedLista = { ...listaAtiva, grupoAtivoId: grupoId };
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
   const handleExcluirGrupo = async (grupoId: string) => {
     if (!listaAtiva) return;
     const novosGrupos = (listaAtiva.grupos || []).filter(g => g.id !== grupoId);
-    const novosItens = listaAtiva.itens.map(i => i.grupoId === grupoId ? { ...i, grupoId: undefined } : i);
+    const novosItens = (listaAtiva.itens || []).map(i => i.grupoId === grupoId ? { ...i, grupoId: undefined } : i);
     const novoGrupoAtivoId = listaAtiva.grupoAtivoId === grupoId ? (novosGrupos[0]?.id || '') : listaAtiva.grupoAtivoId;
 
     const updatedLista = {
@@ -1054,85 +1096,135 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       grupoAtivoId: novoGrupoAtivoId,
       itens: novosItens
     };
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
   const handleAdicionarLote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loteText.trim() || !listaAtiva || isImporting) return;
 
-    const cleanCodigos = validateAndCleanIds(loteText.split(/[\n\t,;]+/));
+    const rawCodigos = loteText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    if (rawCodigos.length === 0) return;
+
+    // Deduplicate and validate input IDs upfront
+    const cleanCodigos = validateAndCleanIds(rawCodigos);
     if (cleanCodigos.length === 0) return;
+
     setIsImporting(true);
     setImportProgress(0);
-    setImportStatusText('Processando IDs...');
+    setImportStatusText('Iniciando processamento do lote...');
 
-    try {
-      const saidaCicloFinal = listaAtiva.saidaPadrao || selectedSaida || 'Ciclo 2 - Saída PM';
-      const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
-      const mainByCode = new Map<string, ColetaItem>(activeItensRef.current.map(item => [itemCodeKey(item.codigo), item]));
-      const existingIndividualCodes = new Set(itensModoIndividual.map(item => itemCodeKey(item.codigo)));
-      const changedItems = new Map<string, ColetaItem>();
-      const scannedAt = new Date().toLocaleString('pt-BR');
+    const saidaCicloFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
+    const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
 
-      for (let offset = 0; offset < cleanCodigos.length; offset += 250) {
-        const chunk = cleanCodigos.slice(offset, offset + 250);
-        for (const codigo of chunk) {
-          const key = itemCodeKey(codigo);
-          if (modoIndividual && existingIndividualCodes.has(key)) continue;
-          existingIndividualCodes.add(key);
-          const existing = mainByCode.get(key);
-          changedItems.set(key, {
-            ...(modoIndividual ? {} : existing),
-            id: modoIndividual ? 'ind_' + encodeURIComponent(key) : (existing?.id || 'item_' + encodeURIComponent(key)),
-            codigo: existing?.codigo || codigo,
-            rota: getRotaItem({ codigo, rota: existing?.rota }),
-            saida: saidaCicloFinal,
-            motivo: motivoFinal,
-            scannedAt,
-            responsavel: operanteNome,
-            grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : existing?.grupoId,
-            validado: modoIndividual ? false : (existing?.validado ?? false),
-            ...(modoIndividual ? {} : { syncStatus: 'pendente' as const })
-          });
-        }
-        setImportProgress(Math.round(((offset + chunk.length) / cleanCodigos.length) * 100));
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
+    if (modoIndividual) {
+      const codigosSet = new Set(itensModoIndividual.map(i => i.codigo));
+      const novosIndividuais: ColetaItem[] = [];
 
-      if (modoIndividual) {
-        setItensModoIndividual(previous => {
-          const existingKeys = new Set(previous.map(item => itemCodeKey(item.codigo)));
-          return [...Array.from(changedItems.values()).filter(item => !existingKeys.has(itemCodeKey(item.codigo))), ...previous];
+      cleanCodigos.forEach(cleanCod => {
+        if (codigosSet.has(cleanCod)) return;
+        codigosSet.add(cleanCod);
+
+        const cleanCodDigits = cleanDigits(cleanCod);
+        const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+        const refugoMatch = refugoBaseRows.find(r => {
+          if (!r.id) return false;
+          const rId = r.id.trim().toUpperCase();
+          if (rId === cleanCod) return true;
+          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+          const rDigits = cleanDigits(rId);
+          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+        });
+        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+          ? refugoMatch.rota.trim()
+          : 'Sem Rota';
+        const itemPrincipal = (listaAtiva.itens || []).find(i => i.codigo === cleanCod || (cleanDigits(i.codigo) === cleanCodDigits && cleanCodDigits !== ''));
+        const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
+
+        novosIndividuais.push({
+          id: 'ind-lote-' + Date.now() + '-' + Math.floor(Math.random() * 100000),
+          codigo: cleanCod,
+          rota: rotaParaUsar,
+          saida: saidaCicloFinal,
+          motivo: motivoFinal,
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          validado: true
+        });
+      });
+
+      setItensModoIndividual(prev => [...novosIndividuais, ...prev]);
+      setIsImporting(false);
+      setShowModalLote(false);
+      setLoteText('');
+      alert(`${novosIndividuais.length} IDs adicionados e validados na sessão individual!`);
+      return;
+    }
+
+    const novosItensMap = new Map<string, ColetaItem>();
+    (listaAtiva.itens || []).forEach(i => novosItensMap.set(i.codigo, i));
+
+    const total = cleanCodigos.length;
+
+    cleanCodigos.forEach(cleanCod => {
+      const cleanCodDigits = cleanDigits(cleanCod);
+      const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+
+      const refugoMatch = refugoBaseRows.find(r => {
+        if (!r.id) return false;
+        const rId = r.id.trim().toUpperCase();
+        if (rId === cleanCod) return true;
+        if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+        const rDigits = cleanDigits(rId);
+        return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+      });
+      const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+        ? refugoMatch.rota.trim()
+        : 'Sem Rota';
+
+      if (novosItensMap.has(cleanCod)) {
+        const item = novosItensMap.get(cleanCod)!;
+        novosItensMap.set(cleanCod, {
+          ...item,
+          saida: saidaCicloFinal,
+          motivo: motivoFinal,
+          rota: rotaItemFinal,
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId
         });
       } else {
-        // Use the latest items after yielding so scans received during import are retained.
-        const currentItems = activeItensRef.current;
-        const existingKeys = new Set(currentItems.map(item => itemCodeKey(item.codigo)));
-        const newItems = Array.from(changedItems.values()).filter(item => !existingKeys.has(itemCodeKey(item.codigo)));
-        const itens = [...newItems, ...currentItems.map(item => changedItems.get(itemCodeKey(item.codigo)) || item)];
-        activeItensRef.current = itens;
-        const updatedLista = { ...listaAtiva, itens };
-        setListas(previous => previous.map(lista => lista.id === updatedLista.id ? { ...lista, itens } : lista));
-        setImportStatusText('Salvando IDs neste dispositivo...');
-        if (!await persistLista(updatedLista)) return;
+        novosItensMap.set(cleanCod, {
+          id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000000),
+          codigo: cleanCod,
+          rota: rotaItemFinal,
+          saida: saidaCicloFinal,
+          motivo: motivoFinal,
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
+        });
       }
-      setItemsPage(0);
-      setLoteText('');
-      setShowModalLote(false);
-    } catch (error) {
-      console.error('Erro ao importar IDs:', error);
-      setStorageError('Não foi possível concluir a importação. O texto do lote foi mantido para tentar novamente.');
-    } finally {
-      setIsImporting(false);
-    }
+    });
+
+    const novosItens = Array.from(novosItensMap.values());
+
+    // Native Firestore WriteBatch in sequential chunks of 300 with real-time UI progress updates
+    await saveListaItemsBatch(listaAtiva.id, novosItens, (processed, totalCount, percent) => {
+      setImportProgress(percent);
+      setImportStatusText(`Processando e enviando lote: ${processed} de ${totalCount} IDs (${percent}%)`);
+    });
+
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista, true);
+
+    setIsImporting(false);
+    setLoteText('');
+    setShowModalLote(false);
   };
 
   const handleExcluirLista = async (listaId: string) => {
-    if (!await deleteListaFirestore(listaId)) {
-      setStorageError('Não foi possível salvar a exclusão da lista. Tente novamente.');
-      return;
-    }
+    await deleteListaFirestore(listaId);
     if (activeListaId === listaId) {
       navigate('/listas');
     }
@@ -1144,7 +1236,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (lista) {
       const updatedLista: ColetaLista = { ...lista, status: 'em_andamento' };
       setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
   };
 
@@ -1153,16 +1245,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (lista) {
       const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
       setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
 
-      if (lista.itens.length > 0) {
+      if (lista.itens && lista.itens.length > 0) {
         const cleanIdOnly = (code: string) => {
           if (!code) return '';
           return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
         };
 
         // CSV contendo estritamente só com os IDs e mais nada
-        const rowsCsv = lista.itens.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
+        const rowsCsv = (lista.itens || []).map(item => cleanIdOnly(item.codigo)).filter(Boolean);
         const csvContent = rowsCsv.join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -1183,11 +1275,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (modoIndividual) {
       setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
     } else {
-      const novosItens = listaAtiva.itens.filter(i => i.id !== itemId);
+      const novosItens = (listaAtiva.itens || []).filter(i => i.id !== itemId);
       activeItensRef.current = novosItens;
       const updatedLista = { ...listaAtiva, itens: novosItens };
       setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
   };
 
@@ -1198,7 +1290,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const exportarApenasIdsCSV = (lista: ColetaLista, itensCustom?: ColetaItem[], sufixoNome?: string) => {
-    const itens = itensCustom || lista.itens;
+    const itens = itensCustom || (lista.itens || []);
     if (itens.length === 0) {
       alert('Não há itens para exportar.');
       return;
@@ -1222,57 +1314,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     exportarApenasIdsCSV(lista);
   };
 
-  const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || EMPTY_ITEMS);
-  const totalColetados = listToVerify.length;
-  const bipsPorOperador = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of listToVerify) {
-      const operator = item.responsavel || listaAtiva?.responsavel || 'Operador';
-      counts.set(operator, (counts.get(operator) || 0) + 1);
-    }
-    if (!counts.has(operanteNome)) counts.set(operanteNome, 0);
-    if (listaAtiva?.responsavel && !counts.has(listaAtiva.responsavel)) counts.set(listaAtiva.responsavel, 0);
-    return Array.from(counts, ([nome, total]) => ({ nome, total, isVoce: nome === operanteNome }))
-      .sort((a, b) => b.total - a.total);
-  }, [listToVerify, listaAtiva?.responsavel, operanteNome]);
-
-  const usuariosSistemaOnline = registeredUsers.length > 0 ? registeredUsers : [
-    { id: 'usr-1', username: operanteNome, email: '', isAdmin: true, isApproved: true, allowedGroups: [] }
-  ];
-  const selectedItemIdSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
-  const filteredItems = useMemo(() => {
-    const term = deferredSearchTerm.trim().toLowerCase();
-    const groupNames = new Map<string, string>((listaAtiva?.grupos || []).map(group => [group.id, group.nome.toLowerCase()]));
-    return listToVerify.filter(item => {
-      if (modoIndividual && modoIndFiltroStatus === 'validados' && !item.validado) return false;
-      if (modoIndividual && modoIndFiltroStatus === 'pendentes' && item.validado) return false;
-      if (!term) return true;
-      return item.codigo.toLowerCase().includes(term) || getRotaItem(item).toLowerCase().includes(term) ||
-        (item.motivo || '').toLowerCase().includes(term) || (item.saida || '').toLowerCase().includes(term) ||
-        (item.responsavel || '').toLowerCase().includes(term) || (groupNames.get(item.grupoId) || '').includes(term);
-    });
-  }, [listToVerify, deferredSearchTerm, modoIndividual, modoIndFiltroStatus, listaAtiva?.grupos, getRotaItem]);
-  const totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
-  const currentItemsPage = Math.min(itemsPage, totalItemPages - 1);
-  const pageOffset = currentItemsPage * ITEMS_PER_PAGE;
-  const visibleItems = filteredItems.slice(pageOffset, pageOffset + ITEMS_PER_PAGE);
-
-  useEffect(() => {
-    setItemsPage(0);
-  }, [activeListaId, deferredSearchTerm, modoIndividual, modoIndFiltroStatus]);
-
-  const storageErrorBanner = storageError ? (
-    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-center justify-between gap-3">
-      <span>{storageError}</span>
-      {listaAtiva && (
-        <button type="button" onClick={() => void persistLista({ ...listaAtiva, itens: activeItensRef.current })}
-          className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-2 font-bold cursor-pointer">
-          Tentar salvar
-        </button>
-      )}
-    </div>
-  ) : null;
-
   // -------------------------------------------------------------
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
@@ -1280,13 +1321,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     return (
       <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
         <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
-          {listasLoaded ? <AlertCircle className="w-8 h-8 text-[#3483FA]" /> : <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />}
+          <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
         </div>
         <div className="text-center">
-          <h3 className="text-base font-bold text-[#333333]">{listasLoaded ? 'Lista ainda não disponível' : 'Carregando lista de coleta...'}</h3>
-          <p className="text-xs text-gray-500 mt-1">{listasLoaded ? 'A lista pode ter sido excluída ou ainda não estar disponível neste dispositivo.' : 'Sincronizando dados em tempo real'}</p>
+          <h3 className="text-base font-bold text-[#333333]">Carregando lista de coleta...</h3>
+          <p className="text-xs text-gray-500 mt-1">Sincronizando dados em tempo real</p>
         </div>
-        <button onClick={() => navigate('/listas')} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold cursor-pointer">Voltar para listas</button>
       </div>
     );
   }
@@ -1294,7 +1334,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   if (!listaAtiva) {
     const totalListas = listas.length;
     const listasAtivas = listas.filter(l => l.status === 'em_andamento').length;
-    const totalItensColetados = listas.reduce((acc, l) => acc + l.itens.length, 0);
+    const totalItensColetados = listas.reduce((acc, l) => acc + (l.itens?.length || l.totalItens || 0), 0);
 
     const handleSetTodayFilter = () => {
       const today = new Date();
@@ -1354,7 +1394,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         (l.saidaPadrao && l.saidaPadrao.toLowerCase().includes(term)) ||
         (l.motivoPadrao && l.motivoPadrao.toLowerCase().includes(term)) ||
         (l.data && l.data.toLowerCase().includes(term)) ||
-        l.itens.some(i => 
+        (l.itens || []).some(i => 
           i.codigo.toLowerCase().includes(term) || 
           (i.motivo && i.motivo.toLowerCase().includes(term)) || 
           (i.saida && i.saida.toLowerCase().includes(term))
@@ -1376,7 +1416,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     return (
       <div className="w-full space-y-6 pb-12">
-        {storageErrorBanner}
         {/* Header Principal */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -1602,7 +1641,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         {lista.responsavel}
                       </td>
                       <td className="py-3.5 px-4 font-mono font-bold text-[#3483FA] text-sm">
-                        {lista.itens.length} pacotes
+                        {lista.itens?.length || lista.totalItens || 0} pacotes
                       </td>
                       <td className="py-3.5 px-4 text-center">
                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
@@ -1859,9 +1898,74 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     return 'bg-blue-50 text-blue-700 border-blue-200';
   };
 
+  const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
+  const totalColetados = listToVerify.length;
+
+  // Saídas presentes apenas nos IDs que realmente foram inseridos/bipados
+  const saídasPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.saida).filter(Boolean)));
+  const contagemSaidas = saídasPresentes.reduce((acc, s: string) => {
+    acc[s] = listToVerify.filter(i => i.saida === s).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Motivos presentes apenas nos IDs que realmente foram inseridos/bipados
+  const motivosPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.motivo).filter(Boolean)));
+  const contagemMotivos = motivosPresentes.reduce((acc, m: string) => {
+    acc[m] = listToVerify.filter(i => i.motivo === m).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Contagem de bips por operador na lista ativa (reflete em tempo real para todos)
+  const contagemBips: Record<string, number> = {};
+  listToVerify.forEach(item => {
+    const op = item.responsavel || listaAtiva.responsavel || 'Operador';
+    contagemBips[op] = (contagemBips[op] || 0) + 1;
+  });
+  if (operanteNome && contagemBips[operanteNome] === undefined) {
+    contagemBips[operanteNome] = 0;
+  }
+  if (listaAtiva.responsavel && contagemBips[listaAtiva.responsavel] === undefined) {
+    contagemBips[listaAtiva.responsavel] = 0;
+  }
+  const bipsPorOperador = Object.entries(contagemBips)
+    .map(([nome, total]) => ({
+      nome,
+      total,
+      isVoce: nome === operanteNome
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  // Lista de Usuários do Sistema para "Quem está na tela de lista online"
+  const usuariosSistemaOnline = registeredUsers.length > 0 ? registeredUsers : [
+    { id: 'usr-1', username: operanteNome, email: '', isAdmin: true, isApproved: true, allowedGroups: [] }
+  ];
+
+  const meusItensCount = listToVerify.filter(i => (i.responsavel || listaAtiva.responsavel) === operanteNome).length;
+
+  const itemsFiltradosBase = modoIndividual 
+    ? itensModoIndividual.filter(i => {
+        if (modoIndFiltroStatus === 'validados') return i.validado !== false;
+        if (modoIndFiltroStatus === 'pendentes') return i.validado === false;
+        return true;
+      })
+    : (listaAtiva.itens || []);
+
+  const filteredItems = itemsFiltradosBase.filter(item => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase();
+    const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
+    const nomeGrupo = grupo ? grupo.nome.toLowerCase() : '';
+    const rotaCalculada = getRotaItem(item).toLowerCase();
+    return item.codigo.toLowerCase().includes(term) || 
+           rotaCalculada.includes(term) || 
+           item.motivo.toLowerCase().includes(term) || 
+           (item.saida && item.saida.toLowerCase().includes(term)) ||
+           (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
+           nomeGrupo.includes(term);
+  });
+
   return (
     <div className="w-full space-y-4 pb-12">
-      {storageErrorBanner}
       {/* Botão de Voltar para Listas */}
       <div className="flex items-center gap-3 mb-2 flex-wrap">
         <button
@@ -1887,12 +1991,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         {listaAtiva && (currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) && (
           <button
             onClick={() => setShowTransferirModal(true)}
-            className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 rounded text-[10px] font-bold uppercase transition-colors shadow-sm cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 rounded text-[10px] font-bold uppercase transition-colors ml-auto shadow-sm cursor-pointer"
           >
             <Users className="w-3 h-3" /> Transferir Admin
           </button>
         )}
-
       </div>
 
       {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
@@ -1935,7 +2038,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <div className="flex flex-col sm:flex-row gap-3 overflow-x-auto pb-2 snap-x w-full">
                   {listaAtiva.grupos.map((grupo) => {
                     const isAtivo = listaAtiva.grupoAtivoId === grupo.id;
-                    const qtdPacotes = listaAtiva.itens.filter(i => i.grupoId === grupo.id).length;
+                    const qtdPacotes = (listaAtiva.itens || []).filter(i => i.grupoId === grupo.id).length;
                     
                     return (
                       <div 
@@ -2175,7 +2278,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1"
                       >
                         <CheckCheck className="w-3 h-3 text-gray-600" />
-                        {filteredItems.length > 0 && filteredItems.every(i => selectedItemIdSet.has(i.id))
+                        {filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))
                           ? 'Desmarcar Todos'
                           : 'Selecionar Todos'}
                       </button>
@@ -2268,7 +2371,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1"
                   >
                     <CheckCheck className="w-3 h-3 text-gray-600" />
-                    {filteredItems.length > 0 && filteredItems.every(i => selectedItemIdSet.has(i.id))
+                    {filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))
                       ? 'Desmarcar Todos'
                       : 'Selecionar Todos'}
                   </button>
@@ -2355,28 +2458,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             )}
 
             {filteredItems.length > 0 ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600" aria-label="Paginação dos IDs">
-                  <span>Exibindo {pageOffset + 1}–{Math.min(pageOffset + ITEMS_PER_PAGE, filteredItems.length)} de {filteredItems.length} IDs</span>
-                  {totalItemPages > 1 && (
-                    <div className="flex items-center gap-2">
-                      <button type="button" disabled={currentItemsPage === 0} onClick={() => setItemsPage(currentItemsPage - 1)}
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40 cursor-pointer">Anterior</button>
-                      <span>Página {currentItemsPage + 1} de {totalItemPages}</span>
-                      <button type="button" disabled={currentItemsPage + 1 >= totalItemPages} onClick={() => setItemsPage(currentItemsPage + 1)}
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40 cursor-pointer">Próxima</button>
-                    </div>
-                  )}
-                </div>
-                <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
+              <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
                 <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse">
                   <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                     <tr>
                       <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
                         <input
                           type="checkbox"
-                          checked={visibleItems.length > 0 && visibleItems.every(i => selectedItemIdSet.has(i.id))}
-                          onChange={() => handleToggleSelectAll(visibleItems)}
+                          checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))}
+                          onChange={() => handleToggleSelectAll(filteredItems)}
                           className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                           title="Selecionar/Desmarcar Todos os visíveis"
                         />
@@ -2396,13 +2486,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 font-sans">
-                    {visibleItems.map((item, idx) => {
-                      const isSelected = selectedItemIdSet.has(item.id);
+                    {filteredItems.map((item, idx) => {
+                      const isSelected = selectedItemIds.includes(item.id);
                       const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
                       const itemRota = getRotaItem(item);
                       const hasRota = itemRota && itemRota.trim() !== '' && itemRota.toLowerCase() !== 'sem rota' && itemRota !== '-';
                       return (
-                        <React.Fragment key={item.id}>
+                        <React.Fragment key={`frag-${item.id}-${idx}`}>
                         <tr 
                           className={`transition-all border-b border-gray-200 group ${
                             isSelected 
@@ -2418,7 +2508,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                               className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                             />
                           </td>
-                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - pageOffset - idx}</td>
+                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
                             className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
@@ -2449,43 +2539,30 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </td>
                           )}
 
-                          {/* COLUNA DE STATUS DE VALIDAÇÃO E SINCRONIZAÇÃO */}
+                          {/* COLUNA DE STATUS DE VALIDAÇÃO - TEM COR */}
                           <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
-                            <div className="flex items-center justify-center gap-1 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => handleToggleItemValidado(item.id)}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
-                                  item.validado
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
-                                    : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                                }`}
-                                title="Clique para alternar entre Validado e Pendente"
-                              >
-                                {item.validado ? (
-                                  <>
-                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                    <span>Validado</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <AlertCircle className="w-3 h-3 text-amber-600" />
-                                    <span>Pendente</span>
-                                  </>
-                                )}
-                              </button>
-
-                              {item.syncStatus === 'pendente' && (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200" title="Item gravado no cliente, pendente de envio para o banco">
-                                  <Clock className="w-2.5 h-2.5 text-amber-600" /> Sync Pend.
-                                </span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleItemValidado(item.id)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
+                                item.validado
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                                  : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                              }`}
+                              title="Clique para alternar entre Validado e Pendente"
+                            >
+                              {item.validado ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Validado</span>
+                                </>
+                              ) : (
+                                <>
+                                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                                  <span>Pendente</span>
+                                </>
                               )}
-                              {item.syncStatus === 'sincronizando' && (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 border border-blue-200" title="Sincronizando com o Firebase...">
-                                  <Loader2 className="w-2.5 h-2.5 text-[#3483FA] animate-spin" /> Syncing
-                                </span>
-                              )}
-                            </div>
+                            </button>
                           </td>
 
                           {/* COLUNA BIPADO POR - NEUTRA SEM COR */}
@@ -2632,13 +2709,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     })}
                   </tbody>
                 </table>
-                </div>
               </div>
             ) : (
               <div className="py-12 text-center text-gray-400">
                 <Barcode className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                <p className="font-bold text-gray-600 text-sm">{listToVerify.length > 0 ? 'Nenhum ID encontrado com este filtro' : 'Nenhum ID nesta lista ainda'}</p>
-                <p className="text-xs text-gray-400 mt-1">{listToVerify.length > 0 ? 'Ajuste a busca para consultar os demais IDs.' : 'Bipe pacotes para dar entrada nesta lista.'}</p>
+                <p className="font-bold text-gray-600 text-sm">Nenhum ID nesta lista ainda</p>
+                <p className="text-xs text-gray-400 mt-1">Bipe pacotes para dar entrada nesta lista.</p>
               </div>
             )}
           </div>
@@ -2919,7 +2995,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </form>
 
               {(() => {
-                const itensNaoValidados = itensVerificarSnap;
+                const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
+                const itensNaoValidados = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
                 const totalItens = itensNaoValidados.length;
                 if (totalItens === 0) {
                   return (
@@ -3301,7 +3378,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   const newAdmin = selectEl?.value;
                   if (newAdmin) {
                     const updatedLista = { ...listaAtiva, responsavel: newAdmin };
-                    if (!await persistLista(updatedLista)) return;
+                    await saveLista(updatedLista);
                     setShowTransferirModal(false);
                   }
                 }}
@@ -3353,7 +3430,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <div className="pt-3 border-t border-red-200">
                     <p className="text-[10px] uppercase font-black text-red-500 tracking-wider">Lista Selecionada:</p>
                     <p className="text-base font-black text-red-700">{listaParaExcluir.nome}</p>
-                    <p className="text-xs font-bold text-red-600/70">{listaParaExcluir.data} • {listaParaExcluir.itens.length} itens</p>
+                    <p className="text-xs font-bold text-red-600/70">{listaParaExcluir.data} • {listaParaExcluir.itens?.length || listaParaExcluir.totalItens || 0} itens</p>
                   </div>
                 </div>
 
@@ -3439,7 +3516,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <div className="pt-3 border-t border-emerald-200">
                     <p className="text-[10px] uppercase font-black text-emerald-600 tracking-wider">Lista Selecionada:</p>
                     <p className="text-base font-black text-emerald-800">{listaParaFinalizar.nome}</p>
-                    <p className="text-xs font-bold text-emerald-700/70">{listaParaFinalizar.data} • {listaParaFinalizar.itens.length} itens coletados</p>
+                    <p className="text-xs font-bold text-emerald-700/70">{listaParaFinalizar.data} • {listaParaFinalizar.itens?.length || listaParaFinalizar.totalItens || 0} itens coletados</p>
                   </div>
                 </div>
 

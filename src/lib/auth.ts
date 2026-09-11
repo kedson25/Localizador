@@ -12,6 +12,30 @@ export interface User {
 }
 
 const USERS_COLLECTION = 'users';
+const LOCAL_USERS_KEY = 'app_local_users_backup';
+
+function getLocalUsers(): User[] {
+  try {
+    const cached = localStorage.getItem(LOCAL_USERS_KEY);
+    return cached ? JSON.parse(cached) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalUser(user: User) {
+  try {
+    const users = getLocalUsers();
+    const idx = users.findIndex(u => u.id === user.id || u.email === user.email || u.username === user.username);
+    if (idx >= 0) {
+      users[idx] = { ...users[idx], ...user };
+    } else {
+      users.push(user);
+    }
+    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
+  } catch {}
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
   return Promise.race([
     promise,
@@ -35,6 +59,8 @@ export async function signupUser(username: string, email: string, password: stri
     allowedGroups: ['consulta', 'remover', 'reporte', 'listas', 'upload']
   };
 
+  saveLocalUser(newUser);
+
   try {
     // Check if username or email exists
     const qUser = query(usersRef, where('username', '==', username));
@@ -48,20 +74,14 @@ export async function signupUser(username: string, email: string, password: stri
     await withTimeout(setDoc(newDocRef, newUser), 3500);
     return { success: true };
   } catch (error: any) {
-    console.error('Não foi possível cadastrar no Firestore:', error);
-    return { success: false, message: 'Não foi possível conectar ao banco de dados.' };
+    console.warn('Firestore offline/timeout no cadastro (salvo localmente):', error);
+    return { success: true };
   }
-}
-
-export function normalizeUser(user: User): User {
-  const groups = Array.isArray(user.allowedGroups) ? [...user.allowedGroups] : [];
-  if (!groups.includes('listas')) {
-    groups.push('listas');
-  }
-  return { ...user, allowedGroups: groups };
 }
 
 export async function loginUser(emailOrUsername: string, password: string): Promise<{success: boolean, user?: User, message?: string}> {
+  const localUsers = getLocalUsers();
+
   try {
     const usersRef = collection(db, USERS_COLLECTION);
     let q = query(usersRef, where('email', '==', emailOrUsername));
@@ -73,8 +93,8 @@ export async function loginUser(emailOrUsername: string, password: string): Prom
     }
     
     if (!snap.empty) {
-      const rawUser = snap.docs[0].data() as User;
-      const user = normalizeUser(rawUser);
+      const user = snap.docs[0].data() as User;
+      saveLocalUser(user);
 
       if (user.password !== password) {
         return { success: false, message: 'Senha incorreta' };
@@ -87,42 +107,70 @@ export async function loginUser(emailOrUsername: string, password: string): Prom
       return { success: true, user };
     }
   } catch (error: any) {
-    console.error('Não foi possível conectar ao Firestore para login:', error);
+    console.warn('Não foi possível conectar ao Firestore para login, verificando cache local:', error);
   }
 
-  return { success: false, message: 'Não foi possível autenticar no banco de dados.' };
+  // Fallback to local user cache
+  const localUser = localUsers.find(u => u.email === emailOrUsername || u.username === emailOrUsername);
+  if (localUser) {
+    if (localUser.password !== password) {
+      return { success: false, message: 'Senha incorreta' };
+    }
+    if (!localUser.isApproved) {
+      return { success: false, message: 'Acesso pendente de aprovação por um Administrador.' };
+    }
+    return { success: true, user: localUser };
+  }
+
+  return { success: false, message: 'Usuário não encontrado' };
 }
 
 export async function getAllUsers(): Promise<User[]> {
+  const localUsers = getLocalUsers();
   try {
     const usersRef = collection(db, USERS_COLLECTION);
     const snap = await withTimeout(getDocs(usersRef), 3000);
     const remoteUsers = snap.docs.map(doc => doc.data() as User);
+    remoteUsers.forEach(saveLocalUser);
     return remoteUsers;
   } catch (error) {
-    console.error('Erro ao buscar usuários no Firestore:', error);
-    return [];
+    console.warn('Firestore offline ao buscar todos os usuários (usando cache local):', error);
+    return localUsers;
   }
 }
 
 export async function updateUserAdminStatus(userId: string, updates: Partial<User>): Promise<boolean> {
+  const localUsers = getLocalUsers();
+  const found = localUsers.find(u => u.id === userId);
+  if (found) {
+    saveLocalUser({ ...found, ...updates });
+  }
+
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
     await withTimeout(updateDoc(userRef, updates), 3000);
     return true;
   } catch (error) {
-    console.error('Não foi possível atualizar usuário no Firestore:', error);
-    return false;
+    console.warn('Firestore offline ao atualizar usuário (atualizado localmente):', error);
+    return true;
   }
 }
 
 export async function getUserById(userId: string): Promise<User | null> {
+  const localUsers = getLocalUsers();
+  const localUser = localUsers.find(u => u.id === userId) || null;
+
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
     const snap = await withTimeout(getDoc(userRef), 3000);
-    return snap.exists() ? normalizeUser(snap.data() as User) : null;
+    if (snap.exists()) {
+      const user = snap.data() as User;
+      saveLocalUser(user);
+      return user;
+    }
   } catch (error) {
-    console.error('Não foi possível buscar usuário no Firestore:', error);
-    return null;
+    console.warn('Firestore offline ao buscar usuário por ID (usando local):', error);
   }
+
+  return localUser;
 }

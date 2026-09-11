@@ -46,13 +46,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     return listenToListas(setListas);
   }, []);
 
-  const [inputText, setInputText] = useState<string>(() => {
-    return localStorage.getItem('app_whatsapp_input') || '';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('app_whatsapp_input', inputText);
-  }, [inputText]);
+  const [inputText, setInputText] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [useAllBase, setUseAllBase] = useState<boolean>(false);
 
@@ -113,30 +107,13 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     return listas.filter(lista => listaDateKey(lista.data) !== today);
   }, [listas]);
 
-  const { rowById, rowByCleanId } = useMemo(() => {
-    const rowById = new Map<string, CsvRow>();
-    const rowByCleanId = new Map<string, CsvRow>();
-
-    rows.forEach((r) => {
-      if (r.id) rowById.set(r.id.trim(), r);
-      if (r.originalId) rowById.set(r.originalId.trim(), r);
-      if (r.cleanId) rowByCleanId.set(r.cleanId, r);
-      if (r.concat) {
-        rowById.set(r.concat.trim(), r);
-        const concatClean = cleanDigits(r.concat);
-        if (concatClean) rowByCleanId.set(concatClean, r);
-      }
-    });
-
-    return { rowById, rowByCleanId };
-  }, [rows]);
-
   const { matchedRows, notFoundIds, detectedSaidaList, motivosCount } = useMemo(() => {
     if (selectedLista) {
       const motivosMap = new Map<string, number>();
       const saidasSet = new Set<string>();
+      const itensSafe = Array.isArray(selectedLista.itens) ? selectedLista.itens : [];
 
-      selectedLista.itens.forEach((i) => {
+      itensSafe.forEach((i) => {
         const mot = (i.motivo || 'Sem Motivo').trim();
         motivosMap.set(mot, (motivosMap.get(mot) || 0) + 1);
 
@@ -145,7 +122,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
       });
 
       return {
-        matchedRows: selectedLista.itens as unknown as CsvRow[], // Just for length counting
+        matchedRows: itensSafe as unknown as CsvRow[], // Just for length counting
         notFoundIds: [],
         detectedSaidaList: Array.from(saidasSet),
         motivosCount: Array.from(motivosMap.entries())
@@ -184,6 +161,21 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
         motivosCount: [],
       };
     }
+
+    // Build lookup maps for fast matching
+    const rowById = new Map<string, CsvRow>();
+    const rowByCleanId = new Map<string, CsvRow>();
+
+    rows.forEach((r) => {
+      if (r.id) rowById.set(r.id.trim(), r);
+      if (r.originalId) rowById.set(r.originalId.trim(), r);
+      if (r.cleanId) rowByCleanId.set(r.cleanId, r);
+      if (r.concat) {
+        rowById.set(r.concat.trim(), r);
+        const concatClean = cleanDigits(r.concat);
+        if (concatClean) rowByCleanId.set(concatClean, r);
+      }
+    });
 
     const foundList: CsvRow[] = [];
     const notFoundList: string[] = [];
@@ -231,7 +223,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count),
     };
-  }, [rows, rowById, rowByCleanId, parsedIds, useAllBase, selectedLista]);
+  }, [rows, parsedIds, useAllBase, selectedLista]);
 
   // Set default cycle based on detected saidas if not manually modified
   useEffect(() => {
@@ -475,7 +467,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                 <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
                   <p className="font-bold flex items-center gap-1.5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                    Utilizando os {selectedLista.itens.length} registros da lista selecionada.
+                    Utilizando os {selectedLista.itens?.length || selectedLista.totalItens || 0} registros da lista selecionada.
                   </p>
                   <p className="text-[11px] text-emerald-800">
                     Calculando motivos e saídas diretamente dos dados coletados na lista.
@@ -489,7 +481,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
               <div className="bg-gray-50 border border-gray-200 rounded p-2">
                 <span className="block text-[10px] text-gray-500 font-sans font-bold uppercase">Informados</span>
                 <span className="text-sm font-black text-gray-900">
-                  {selectedLista ? selectedLista.itens.length : (useAllBase ? rows.length : parsedIds.length)}
+                  {selectedLista ? (selectedLista.itens?.length || selectedLista.totalItens || 0) : (useAllBase ? rows.length : parsedIds.length)}
                 </span>
               </div>
 

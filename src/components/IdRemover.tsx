@@ -1,10 +1,7 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Trash2, Copy, Check, Download, AlertCircle, X, Layers, FileCode, Filter } from 'lucide-react';
 import { CsvRow } from '../types';
 import { cleanDigits, parseCsvText } from '../utils/csvParser';
-import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
-
-const naturalOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 interface IdRemoverProps {
   rows: CsvRow[];
@@ -12,18 +9,11 @@ interface IdRemoverProps {
 }
 
 export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
-  const [removeText, setRemoveText] = useState<string>(() => {
-    return localStorage.getItem('app_idremover_input') || '';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('app_idremover_input', removeText);
-  }, [removeText]);
+  const [removeText, setRemoveText] = useState<string>('');
   const [pastedCsvText, setPastedCsvText] = useState<string>('');
   const [saidaFilter, setSaidaFilter] = useState<string>('');
   const [copiedIds, setCopiedIds] = useState<boolean>(false);
   const [copiedFullTable, setCopiedFullTable] = useState<boolean>(false);
-  const [page, setPage] = useState(0);
 
   // Derive source rows: if user pasted custom CSV text in this view, use it; otherwise use system loaded rows
   const effectiveSourceRows = useMemo(() => {
@@ -101,21 +91,17 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     }
 
     return [...list].sort((a, b) => {
-      const groupComparison = naturalOrder.compare(a.group || '', b.group || '');
+      const groupComparison = (a.group || '').localeCompare(b.group || '', undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      });
       if (groupComparison !== 0) return groupComparison;
 
       const idA = a.id || a.cleanId || '';
       const idB = b.id || b.cleanId || '';
-      return naturalOrder.compare(idA, idB);
+      return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [remainingRows, saidaFilter]);
-
-  useEffect(() => {
-    setPage(0);
-  }, [removeText, pastedCsvText, saidaFilter]);
-
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(displayedRows.length / RESULTS_PAGE_SIZE) - 1));
-  const pageRows = displayedRows.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE);
 
   // Group breakdown for displayed remaining rows in numeric order (1, 2, 3...)
   const displayedGroupCounts = useMemo(() => {
@@ -127,7 +113,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
 
     return Array.from(map.entries())
       .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => naturalOrder.compare(a.name, b.name));
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   }, [displayedRows]);
 
   // Quick Copy IDs
@@ -169,7 +155,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -369,9 +354,9 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 text-gray-800 text-[11px]">
-                {pageRows.map((row, idx) => (
-                  <tr key={`${row.id}-${row.rowIndex}-${idx}`} className="hover:bg-blue-50/50 transition-colors">
-                    <td className="py-1.5 px-3 text-gray-400 text-[10px]">{currentPage * RESULTS_PAGE_SIZE + idx + 1}</td>
+                {displayedRows.map((row, idx) => (
+                  <tr key={`${row.id}-${idx}`} className="hover:bg-blue-50/50 transition-colors">
+                    <td className="py-1.5 px-3 text-gray-400 text-[10px]">{idx + 1}</td>
                     <td className="py-1.5 px-3 font-bold text-gray-900 whitespace-nowrap">{row.id}</td>
                     <td className="py-1.5 px-3 whitespace-nowrap">
                       <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200">
@@ -387,7 +372,6 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
               </tbody>
             </table>
           </div>
-          <ResultPagination total={displayedRows.length} page={currentPage} onPageChange={setPage} />
         </div>
       )}
     </div>

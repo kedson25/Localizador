@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Layers, Hash } from 'lucide-react';
 import { GroupSummary } from '../types';
 
@@ -9,6 +9,12 @@ interface StatsSummaryProps {
 
 export const StatsSummary: React.FC<StatsSummaryProps> = ({ totalRows, groups }) => {
   if (totalRows === 0) return null;
+
+  const sortedGroups = useMemo(() => {
+    return [...groups].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    );
+  }, [groups]);
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

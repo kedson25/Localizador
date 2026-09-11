@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { CsvRow, GroupSummary } from './types';
@@ -14,8 +14,9 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
-import { getUserById, normalizeUser, User } from './lib/auth';
-import { saveToColetor, listenToColetor, clearColetor, startListasSync } from './lib/firebase';
+import { User } from './lib/auth';
+
+import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
 export default function App() {
   const location = useLocation();
@@ -29,67 +30,60 @@ export default function App() {
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const stored = sessionStorage.getItem('localizador_session_user');
-      return stored ? normalizeUser(JSON.parse(stored) as User) : null;
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(localStorage.getItem('currentUser') || 'null'); } catch { return null; }
   });
-  const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAuthenticated = !!currentUser;
-  const hasOperationalSession = isAuthenticated || location.pathname === '/refugo';
 
   useEffect(() => {
-    if (!hasOperationalSession) return;
-    const stopLists = startListasSync();
-    return () => { stopLists(); };
-  }, [hasOperationalSession]);
-
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    let active = true;
-    void getUserById(currentUser.id).then(user => {
-      if (!active) return;
-      if (!user || !user.isApproved) {
-        sessionStorage.removeItem('localizador_session_user');
-        setCurrentUser(null);
-        if (location.pathname !== '/login') navigate('/login', { replace: true });
-        return;
-      }
-      const safeUser = normalizeUser(user);
-      sessionStorage.setItem('localizador_session_user', JSON.stringify({ ...safeUser, password: undefined }));
-      setCurrentUser(safeUser);
-    });
-    return () => { active = false; };
-  }, [currentUser?.id]);
+    if (currentUser) {
+      const tabName = location.pathname.startsWith('/refugo') ? 'Refugo' :
+                      location.pathname.startsWith('/listas') ? 'Coleta (Listas)' :
+                      location.pathname.startsWith('/consulta') ? 'Consulta' :
+                      location.pathname.startsWith('/remover') ? 'Remover' :
+                      location.pathname.startsWith('/reporte') ? 'Reporte' :
+                      location.pathname.startsWith('/admin') ? 'Admin' : 'Hub / Início';
+      
+      try {
+        const activePresences = JSON.parse(localStorage.getItem('app_active_presences') || '{}');
+        activePresences[currentUser.id || currentUser.username] = {
+          username: currentUser.username,
+          tab: tabName,
+          lastActive: Date.now()
+        };
+        localStorage.setItem('app_active_presences', JSON.stringify(activePresences));
+      } catch {}
+    }
+  }, [location.pathname, currentUser]);
 
 
-  const showNotification = (message: string) => {
-    if (notificationTimer.current) clearTimeout(notificationTimer.current);
-    setNotification(message);
-    notificationTimer.current = setTimeout(() => { setNotification(null); notificationTimer.current = null; }, 4000);
+
+
+  const showNotification = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 4000);
   };
-  useEffect(() => () => { if (notificationTimer.current) clearTimeout(notificationTimer.current); }, []);
 
+  // On mount, load stored CSV from Firebase Firestore
   useEffect(() => {
-    if (!isAuthenticated) { setLoadingFirebase(false); return; }
-    setLoadingFirebase(true);
-    let lastRawText: string | undefined;
-    const loadingTimer = setTimeout(() => setLoadingFirebase(false), 10000);
-    const unsubscribe = listenToColetor(data => {
-      const text = data?.rawText || '';
-      if (text !== lastRawText) {
-        lastRawText = text;
-        setRawText(text);
-        const parsed = text ? parseCsvText(text) : { rows: [], groups: [], headers: [] };
-        setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
+    async function initFromFirebase() {
+      setLoadingFirebase(true);
+      try {
+        const savedData = await loadFromColetor();
+        if (savedData && savedData.rawText) {
+          setRawText(savedData.rawText);
+          const parsed = parseCsvText(savedData.rawText);
+          setRows(parsed.rows);
+          setGroups(parsed.groups);
+          setHeaders(parsed.headers);
+        }
+      } catch (err) {
+        console.error('Erro ao carregar dados:', err);
+      } finally {
+        setLoadingFirebase(false);
       }
-      setLoadingFirebase(false);
-      clearTimeout(loadingTimer);
-    }, () => { setLoadingFirebase(false); showNotification('Não foi possível sincronizar a base. Verifique a conexão.'); });
-    return () => { unsubscribe(); clearTimeout(loadingTimer); };
-  }, [isAuthenticated]);
+    }
+    initFromFirebase();
+  }, []);
 
   const handleParseAndSave = async (textToParse: string, fileName?: string) => {
     setRawText(textToParse);
@@ -98,23 +92,25 @@ export default function App() {
     setGroups(parsed.groups);
     setHeaders(parsed.headers);
 
-    try {
-      const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
-      if (saved) showNotification(`Dados processados e enviados para sincronização. (${parsed.rows.length} IDs)`);
-    } catch (error) {
-      showNotification(error instanceof Error ? error.message : 'Falha ao salvar os dados.');
+    // Save to Firebase
+    const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
+    if (saved) {
+      showNotification(`Dados processados e salvos com sucesso! (${parsed.rows.length} IDs)`);
+    } else {
+      showNotification('Processado localmente.');
     }
   };
 
   const handleClear = async () => {
-    try {
-      await clearColetor();
-      setRawText(''); setRows([]); setGroups([]); setHeaders([]);
-      navigate('/');
-      showNotification('Limpeza enviada para sincronização.');
-    } catch (error) {
-      showNotification(error instanceof Error ? error.message : 'Falha ao limpar os dados.');
-    }
+    setRawText('');
+    setRows([]);
+    setGroups([]);
+    setHeaders([]);
+    navigate('/');
+    
+    // Clear from Firebase
+    await clearColetor();
+    showNotification('Dados zerados com sucesso!');
   };
 
   const getPageTitle = () => {
@@ -150,7 +146,7 @@ export default function App() {
           </div>
         )}
 
-        {loadingFirebase && ['/consulta', '/remover', '/reporte'].includes(location.pathname) ? (
+        {loadingFirebase && location.pathname !== '/refugo' ? (
           <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
             <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
             <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>
@@ -201,22 +197,13 @@ export default function App() {
             {/* Public Routes */}
             <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
             <Route path="/login" element={
-              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => {
-                const safeUser = normalizeUser(user);
-                sessionStorage.setItem('localizador_session_user', JSON.stringify({ ...safeUser, password: undefined }));
-                setCurrentUser(safeUser);
-                navigate('/');
-              }} />
+              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
             } />
             
             {/* Protected Routes */}
             {isAuthenticated && (
               <>
-                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} onLogout={() => {
-                  sessionStorage.removeItem('localizador_session_user');
-                  setCurrentUser(null);
-                  navigate('/login');
-                }} />} />
+                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} />} />
                 
                 {currentUser?.isAdmin && (
                   <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
