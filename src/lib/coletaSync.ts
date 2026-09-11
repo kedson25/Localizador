@@ -50,7 +50,8 @@ function mergeRemoteItems(id: string, fromCache: boolean) {
   const current = base.get(id);
   if (!current || deletedLists.has(id)) return;
   const items = childItems.get(id) || new Map();
-  const merged = new Map((fromCache ? current.itens : []).map(item => [item.id, item]));
+  const legacy = legacyItems.get(id) || current.itens || [];
+  const merged = new Map(legacy.map(item => [item.id, item]));
   for (const item of items.values()) {
     if (item._deleted) merged.delete(item.id);
     else merged.set(item.id, { ...merged.get(item.id), ...item });
