@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { CsvRow, ColetaLista } from '../types';
 import { cleanDigits } from '../utils/csvParser';
-import { listenToListas } from '../lib/firebase';
+import { listenToListas } from '../lib/coletaSync';
 
 interface WhatsappReportProps {
   rows: CsvRow[];
@@ -40,10 +40,11 @@ function listaDateKey(value: string): string {
 
 export function WhatsappReport({ rows }: WhatsappReportProps) {
   const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [selectedListaId, setSelectedListaId] = useState<string>('');
 
   useEffect(() => {
-    return listenToListas(setListas);
+    return listenToListas(data => { setListas(data); setSyncError(null); }, error => { setListas([]); setSyncError(error.message); });
   }, []);
 
   const [inputText, setInputText] = useState<string>('');
@@ -325,6 +326,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
 
   return (
     <div className="space-y-4">
+      {syncError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{syncError}</div>}
       {/* Main Grid: Input List vs WhatsApp Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Left Column: ID Input & Stats (5 cols) */}

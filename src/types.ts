@@ -40,6 +40,11 @@ export interface RefugoRow {
 }
 
 export interface ColetaItem {
+  revision?: number;
+  firebase_uid?: string;
+  user_name?: string;
+  user_email?: string;
+  created_at?: string;
   id: string;
   codigo: string;
   rota: string;
@@ -58,6 +63,7 @@ export interface ColetaGrupo {
 }
 
 export interface ColetaLista {
+  revision?: number;
   id: string;
   nome: string;
   tipo?: 'comum' | 'grupos';

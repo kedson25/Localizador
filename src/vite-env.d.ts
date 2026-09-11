@@ -1,7 +1,6 @@
+/// <reference types="vite/client" />
 interface ImportMetaEnv {
-  readonly VITE_FIRESTORE_EMULATOR_HOST?: string;
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
+  readonly VITE_SUPABASE_URL: string;
+  readonly VITE_SUPABASE_PUBLISHABLE_KEY: string;
+  readonly VITE_FIREBASE_FUNCTIONS_REGION?: string;
 }

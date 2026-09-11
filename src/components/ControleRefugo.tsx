@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check } from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
-import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas } from '../lib/firebase';
+import { saveRefugo, clearRefugo, saveRefugoScan, clearRefugoScans, listenToRefugoScans, listenToRefugo } from '../services/operational.service';
+import { saveLista, listenToListas } from '../lib/coletaSync';
+import type { User } from '../lib/auth';
+import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
 
 interface ScannedItem {
   id: string;
@@ -16,7 +19,9 @@ let audioCtx: AudioContext | null = null;
 const playBeep = () => {
   try {
     if (!audioCtx) {
-      audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioCtx = new AudioContextClass();
     }
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -37,7 +42,7 @@ const playBeep = () => {
   }
 };
 
-export function ControleRefugo({ currentUser }: { currentUser?: any }) {
+export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [rows, setRows] = useState<RefugoRow[]>([]);
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
   const [bipInput, setBipInput] = useState('');
@@ -46,6 +51,16 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
   const [baseDate, setBaseDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const scanGeneration = useRef<string | null>(null);
+  const [page, setPage] = useState(0);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
+  const codeKey = (code: string) => code.replace(/\D/g, '') || code.trim().toUpperCase().replace(/M$/, '');
+  const rowByCode = useMemo(() => new Map(rows.map(row => [codeKey(row.id), row])), [rows]);
+  const scanByCode = useMemo(() => new Map(scannedItems.map(scan => [codeKey(scan.id), scan])), [scannedItems]);
+  const showError = (error: unknown) => setSyncError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação no servidor. Tente novamente.');
 
   // Modal / Popup States for Exporting to Lista Branca
   const [existingListas, setExistingListas] = useState<ColetaLista[]>([]);
@@ -57,179 +72,113 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
   const [exportMotivo, setExportMotivo] = useState('Brancas');
   const [exportTargetCodes, setExportTargetCodes] = useState<string[]>([]);
 
-  useEffect(() => {
-    // Listen to real-time refugo base
-    const unsubRefugo = listenToRefugo((data) => {
-      if (data && data.rawText) {
-        parseCSV(data.rawText, false);
-        if (data.updatedAt) {
-          const d = typeof data.updatedAt === 'string' ? new Date(data.updatedAt) : (data.updatedAt.toDate ? data.updatedAt.toDate() : new Date(data.updatedAt));
-          setBaseDate(d.toLocaleString('pt-BR'));
-        } else {
-          setBaseDate(null);
-        }
-      } else {
-        setRows([]);
-        setBaseDate(null);
-      }
-      setIsLoading(false);
-    });
-
-    // Listen to real-time scans
-    const unsubScans = listenToRefugoScans((scans) => {
-      // Fix dates since Firestore might not return Date objects directly
-      const parsedScans = scans.map(s => ({
-        ...s,
-        scannedAt: s.scannedAt ? (typeof s.scannedAt === 'string' ? new Date(s.scannedAt) : s.scannedAt) : new Date()
-      }));
-      setScannedItems(parsedScans);
-    });
-
-    // Listen to existing system listas
-    const unsubListas = listenToListas((listas) => {
-      setExistingListas(listas);
-    });
-
-    return () => {
-      unsubRefugo();
-      unsubScans();
-      unsubListas();
-    };
-  }, []);
-
-  const parseCSV = (text: string, saveToDb: boolean = true) => {
-    Papa.parse(text, {
-      skipEmptyLines: true,
-      complete: async (results) => {
-        const parsedRows: RefugoRow[] = results.data.map((row: any) => {
-          const values = Object.values(row);
-          const idRaw = String(values[0] || '').trim();
-          if (!idRaw) return null;
-          return {
-            id: idRaw.toUpperCase(),
-            rota: String(values[1] || 'Sem Rota').trim(),
-            rawFields: row,
-          };
-        }).filter(Boolean) as RefugoRow[];
-
-        setRows(parsedRows);
-
-        if (saveToDb) {
-          await saveRefugo(text, parsedRows.length);
-        }
-      },
+  const parseCSV = (text: string): RefugoRow[] => {
+    const result = Papa.parse<string[]>(text, { skipEmptyLines: true });
+    if (result.errors.some(error => error.type === 'Quotes')) throw new Error('O arquivo CSV contém aspas inválidas. Confira o arquivo.');
+    return result.data.flatMap(values => {
+      const id = String(values[0] || '').trim().toUpperCase();
+      if (!id || ['ID', 'CODIGO', 'CÓDIGO', 'PACOTE', 'TRACKING', 'ENVIO'].includes(id)) return [];
+      return [{ id, rota: String(values[1] || 'Sem Rota').trim(), rawFields: Object.fromEntries(values.map((value, index) => [String(index), value])) }];
     });
   };
 
-  const cleanDigits = (str: string) => str.replace(/\D/g, '');
+  useEffect(() => {
+    const unsubRefugo = listenToRefugo(data => {
+      try {
+        setRows(data?.rawText ? parseCSV(data.rawText) : []);
+        setBaseDate(data?.updatedAt ? new Date(data.updatedAt).toLocaleString('pt-BR') : null);
+      } catch (error) { setRows([]); showError(error); }
+      setIsLoading(false);
+    }, error => { setRows([]); setBaseDate(null); setIsLoading(false); showError(error); });
+    const unsubScans = listenToRefugoScans((scans, generation) => {
+      scanGeneration.current = generation;
+      setScannedItems(scans.map(scan => ({ ...scan, scannedAt: new Date(scan.scannedAt) })));
+    }, error => { scanGeneration.current = null; setScannedItems([]); showError(error); });
+    const unsubListas = listenToListas(setExistingListas, error => { setExistingListas([]); showError(error); });
+    return () => { unsubRefugo(); unsubScans(); unsubListas(); };
+  }, []);
+
+  const runOperation = async (operation: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await operation();
+      setSyncError(null);
+    } catch (error) { showError(error); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = event.target?.result as string;
-      
-      // Force clean scans before loading new base to avoid mixing
-      await clearRefugoScans();
-      setScannedItems([]);
-      setLastScanResult(null);
-
-      parseCSV(text, true);
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    if (!file) return;
+    await runOperation(async () => {
+      const text = await file.text();
+      const parsed = parseCSV(text);
+      await saveRefugo(text, parsed.length);
+      setLastScanResult(null);
+      setPage(0);
+    });
   };
 
   const clearData = async () => {
-    if (window.confirm("Deseja realmente limpar a base de faltantes? (Isso também apagará os itens bipados)")) {
+    if (!window.confirm('Deseja realmente limpar a base de faltantes? (Isso também apagará os itens bipados)')) return;
+    await runOperation(async () => {
       await clearRefugo();
-      await clearRefugoScans();
-      setRows([]);
-      setScannedItems([]);
       setLastScanResult(null);
-    }
+    });
   };
 
   const clearScans = async () => {
-    if (window.confirm("Deseja limpar apenas o histórico de pacotes bipados?")) {
+    if (!window.confirm('Deseja limpar apenas o histórico de pacotes bipados?')) return;
+    await runOperation(async () => {
       await clearRefugoScans();
-      setScannedItems([]);
       setLastScanResult(null);
-    }
+    });
   };
 
-  const handleBip = (e: React.FormEvent) => {
+  const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bipInput.trim()) return;
-
-    let processedInput = bipInput.trim();
-    
-    // Replace dirt patterns (dÇ4, dÇ⁴, d⁴, d4) with 4
-    processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
-    processedInput = processedInput.replace(/d[çc]?4/gi, '4');
-    
-    // Extract ID starting with 47 if there is one
-    const match47 = processedInput.match(/(47\d+)/);
-    if (match47) {
-      processedInput = match47[1];
-    } else {
-      // Fallback: just remove trailing 'm'
-      processedInput = processedInput.replace(/m$/i, '');
-    }
-
-    const cleanInput = processedInput.toUpperCase();
-    const cleanInputDigits = cleanDigits(cleanInput);
-    
-    // Check if already scanned
-    const alreadyScanned = scannedItems.find(item => item.id === cleanInput || (cleanInputDigits && cleanDigits(item.id) === cleanInputDigits));
-    
+    if (!bipInput.trim() || isLocked || busyRef.current) return;
+    const processed = bipInput.trim().replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4');
+    const cleanInput = (processed.match(/(47\d+)/)?.[1] || processed.replace(/m$/i, '')).toUpperCase();
+    const alreadyScanned = scanByCode.get(codeKey(cleanInput));
     if (alreadyScanned) {
-      if (alreadyScanned.status === 'found') {
-        setLastScanResult({ status: 'success', message: `O pacote já foi bipado anteriormente!` });
-        playBeep();
-      } else {
-        setLastScanResult({ status: 'error', message: `O pacote já foi bipado anteriormente!` });
-      }
+      setLastScanResult({ status: alreadyScanned.status === 'found' ? 'success' : 'error', message: 'O pacote já foi bipado anteriormente!' });
+      if (alreadyScanned.status === 'found') playBeep();
       setBipInput('');
       return;
     }
-
-    const foundRow = rows.find(r => {
-      if (r.id === cleanInput) return true;
-      const rDigits = cleanDigits(r.id);
-      return rDigits && cleanInputDigits && rDigits === cleanInputDigits;
-    });
-
-    if (foundRow) {
-      const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
-      const message = isHibrida ? `ROTA VÁLIDA: ${foundRow.rota} (HÍBRIDA)` : `ROTA VÁLIDA: ${foundRow.rota}`;
-      const operatorName = currentUser?.username || 'Operador';
-      
-      setLastScanResult({ status: 'success', message });
-      const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found', foundBy: operatorName }, ...scannedItems];
-      setScannedItems(newScans);
-      saveRefugoScans(newScans.map(scan => ({ ...scan, scannedAt: scan.scannedAt.toISOString() })));
-      
-      playBeep();
-
-      if (isHibrida && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const msg = new SpeechSynthesisUtterance("Rota Híbrida");
-        msg.lang = 'pt-BR';
-        msg.rate = 1.2;
-        window.speechSynthesis.speak(msg);
+    const generation = scanGeneration.current;
+    if (generation === null) { setSyncError('Aguarde a sincronização do histórico antes de bipar.'); return; }
+    const foundRow = rowByCode.get(codeKey(cleanInput));
+    await runOperation(async () => {
+      await saveRefugoScan({
+        id: foundRow?.id || cleanInput,
+        rota: foundRow?.rota || '',
+        scannedAt: new Date().toISOString(),
+        status: foundRow ? 'found' : 'not_found',
+        foundBy: currentUser?.username || ''
+      }, generation);
+      if (foundRow) {
+        const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
+        setLastScanResult({ status: 'success', message: `ROTA VÁLIDA: ${foundRow.rota}${isHibrida ? ' (HÍBRIDA)' : ''}` });
+        playBeep();
+        if (isHibrida && 'speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const message = new SpeechSynthesisUtterance('Rota Híbrida');
+          message.lang = 'pt-BR';
+          message.rate = 1.2;
+          window.speechSynthesis.speak(message);
+        }
+      } else {
+        setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}` });
       }
-    } else {
-      setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}` });
-      const newScans: ScannedItem[] = [{ id: cleanInput, rota: '', scannedAt: new Date(), status: 'not_found' }, ...scannedItems];
-      setScannedItems(newScans);
-      saveRefugoScans(newScans.map(scan => ({ ...scan, scannedAt: scan.scannedAt.toISOString() })));
-    }
-
-    setBipInput('');
-    inputRef.current?.focus();
+      setBipInput('');
+      setPage(0);
+      inputRef.current?.focus();
+    });
   };
 
   const foundItems = scannedItems.filter(s => s.status === 'found');
@@ -292,7 +241,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
   };
 
   const handleConfirmExport = async () => {
-    if (exportTargetCodes.length === 0) return;
+    if (exportTargetCodes.length === 0 || busyRef.current) return;
 
     const operatorName = currentUser?.username || 'Operador';
     const now = new Date();
@@ -309,6 +258,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
       validado: true
     }));
 
+    busyRef.current = true;
+    setBusy(true);
     try {
       if (exportDestinationType === 'new') {
         const novaLista: ColetaLista = {
@@ -358,9 +309,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
       setShowExportModal(false);
       alert(`✅ Exportação concluída com sucesso!\n\n${exportTargetCodes.length} pacote(s) exportado(s) para o sistema e o arquivo CSV foi baixado.`);
     } catch (err) {
-      console.error('Erro ao exportar para Lista Branca:', err);
-      alert('Erro ao salvar no sistema.');
-    }
+      showError(err);
+    } finally { busyRef.current = false; setBusy(false); }
   };
 
   const foundCount = scannedItems.filter(s => s.status === 'found').length;
@@ -382,6 +332,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
+      {syncError && <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{syncError}</div>}
       {rows.length === 0 ? (
         <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-12 flex flex-col items-center justify-center text-center mt-4">
           <div className="w-16 h-16 bg-[#E3F2FD] rounded-2xl flex items-center justify-center mb-4">
@@ -444,7 +395,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
                       onBlur={() => {
                         if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
                       }}
-                      disabled={isLocked}
+                      disabled={isLocked || busy}
                       className={`block w-full pl-16 pr-6 py-8 border-2 rounded-xl text-3xl font-mono font-bold transition-all ${
                         isLocked 
                           ? 'bg-gray-50 border-gray-200 text-gray-400 placeholder-gray-300 cursor-not-allowed'
@@ -458,7 +409,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
                     {isLocked ? 'Desbloqueie para voltar a ler pacotes.' : 'O campo submete automaticamente após a leitura do bipe (Enter).'}
                   </p>
                 </div>
-                <button type="submit" className="hidden" disabled={isLocked}>Verificar</button>
+                <button type="submit" className="hidden" disabled={isLocked || busy}>Verificar</button>
               </form>
 
               {lastScanResult && (
@@ -547,10 +498,11 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
               </div>
             </div>
             
+            <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
             <div className="overflow-y-auto flex-1 pr-2 space-y-2">
               {scannedItems.length > 0 ? (
-                scannedItems.map((item, idx) => (
-                  <div key={`scan-${idx}`} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${item.status === 'found' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                scannedItems.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE).map((item) => (
+                  <div key={item.id} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${item.status === 'found' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
                     <div className="flex items-center gap-2">
                       {item.status === 'found' ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-500" />
@@ -771,6 +723,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
               <button
                 type="button"
                 onClick={handleConfirmExport}
+                  disabled={busy}
                 className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <Check className="w-4 h-4" />
