@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { CsvRow, GroupSummary } from './types';
@@ -14,9 +14,8 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
-import { User, normalizeUser } from './lib/auth';
-
-import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
+import { User } from './lib/auth';
+import { saveToColetor, listenToColetor, clearColetor, startListasSync } from './lib/firebase';
 
 export default function App() {
   const location = useLocation();
@@ -29,64 +28,43 @@ export default function App() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('currentUser') || 'null');
-      return u ? normalizeUser(u) : null;
-    } catch { return null; }
-  });
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAuthenticated = !!currentUser;
+  const hasOperationalSession = isAuthenticated || location.pathname === '/refugo';
 
   useEffect(() => {
-    if (currentUser) {
-      const tabName = location.pathname.startsWith('/refugo') ? 'Refugo' :
-                      location.pathname.startsWith('/listas') ? 'Coleta (Listas)' :
-                      location.pathname.startsWith('/consulta') ? 'Consulta' :
-                      location.pathname.startsWith('/remover') ? 'Remover' :
-                      location.pathname.startsWith('/reporte') ? 'Reporte' :
-                      location.pathname.startsWith('/admin') ? 'Admin' : 'Hub / Início';
-      
-      try {
-        const activePresences = JSON.parse(localStorage.getItem('app_active_presences') || '{}');
-        activePresences[currentUser.id || currentUser.username] = {
-          username: currentUser.username,
-          tab: tabName,
-          lastActive: Date.now()
-        };
-        localStorage.setItem('app_active_presences', JSON.stringify(activePresences));
-      } catch {}
-    }
-  }, [location.pathname, currentUser]);
+    if (!hasOperationalSession) return;
+    const stopLists = startListasSync();
+    return () => { stopLists(); };
+  }, [hasOperationalSession]);
 
 
-
-
-  const showNotification = (msg: string) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
+  const showNotification = (message: string) => {
+    if (notificationTimer.current) clearTimeout(notificationTimer.current);
+    setNotification(message);
+    notificationTimer.current = setTimeout(() => { setNotification(null); notificationTimer.current = null; }, 4000);
   };
+  useEffect(() => () => { if (notificationTimer.current) clearTimeout(notificationTimer.current); }, []);
 
-  // On mount, load stored CSV from Firebase Firestore
   useEffect(() => {
-    async function initFromFirebase() {
-      setLoadingFirebase(true);
-      try {
-        const savedData = await loadFromColetor();
-        if (savedData && savedData.rawText) {
-          setRawText(savedData.rawText);
-          const parsed = parseCsvText(savedData.rawText);
-          setRows(parsed.rows);
-          setGroups(parsed.groups);
-          setHeaders(parsed.headers);
-        }
-      } catch (err) {
-        console.error('Erro ao carregar dados:', err);
-      } finally {
-        setLoadingFirebase(false);
+    if (!isAuthenticated) { setLoadingFirebase(false); return; }
+    setLoadingFirebase(true);
+    let lastRawText: string | undefined;
+    const loadingTimer = setTimeout(() => setLoadingFirebase(false), 10000);
+    const unsubscribe = listenToColetor(data => {
+      const text = data?.rawText || '';
+      if (text !== lastRawText) {
+        lastRawText = text;
+        setRawText(text);
+        const parsed = text ? parseCsvText(text) : { rows: [], groups: [], headers: [] };
+        setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
       }
-    }
-    initFromFirebase();
-  }, []);
+      setLoadingFirebase(false);
+      clearTimeout(loadingTimer);
+    }, () => { setLoadingFirebase(false); showNotification('Não foi possível sincronizar a base. Verifique a conexão.'); });
+    return () => { unsubscribe(); clearTimeout(loadingTimer); };
+  }, [isAuthenticated]);
 
   const handleParseAndSave = async (textToParse: string, fileName?: string) => {
     setRawText(textToParse);
@@ -95,25 +73,23 @@ export default function App() {
     setGroups(parsed.groups);
     setHeaders(parsed.headers);
 
-    // Save to Firebase
-    const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
-    if (saved) {
-      showNotification(`Dados processados e salvos com sucesso! (${parsed.rows.length} IDs)`);
-    } else {
-      showNotification('Processado localmente.');
+    try {
+      const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
+      if (saved) showNotification(`Dados processados e enviados para sincronização. (${parsed.rows.length} IDs)`);
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'Falha ao salvar os dados.');
     }
   };
 
   const handleClear = async () => {
-    setRawText('');
-    setRows([]);
-    setGroups([]);
-    setHeaders([]);
-    navigate('/');
-    
-    // Clear from Firebase
-    await clearColetor();
-    showNotification('Dados zerados com sucesso!');
+    try {
+      await clearColetor();
+      setRawText(''); setRows([]); setGroups([]); setHeaders([]);
+      navigate('/');
+      showNotification('Limpeza enviada para sincronização.');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'Falha ao limpar os dados.');
+    }
   };
 
   const getPageTitle = () => {
@@ -149,7 +125,7 @@ export default function App() {
           </div>
         )}
 
-        {loadingFirebase && location.pathname !== '/refugo' ? (
+        {loadingFirebase && ['/consulta', '/remover', '/reporte'].includes(location.pathname) ? (
           <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
             <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
             <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>
@@ -200,13 +176,13 @@ export default function App() {
             {/* Public Routes */}
             <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
             <Route path="/login" element={
-              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
+              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); navigate('/'); }} />
             } />
             
             {/* Protected Routes */}
             {isAuthenticated && (
               <>
-                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} />} />
+                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} onLogout={() => { setCurrentUser(null); navigate('/login'); }} />} />
                 
                 {currentUser?.isAdmin && (
                   <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
@@ -224,8 +200,12 @@ export default function App() {
                   <Route path="/reporte" element={<WhatsappReport rows={rows} />} />
                 )}
 
-                <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
-                <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
+                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
+                  <>
+                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                    <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
+                  </>
+                )}
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
                   <Route path="/upload" element={<CsvUploader onLoadText={(text) => { handleParseAndSave(text); navigate('/'); }} currentTotalRows={rows.length} />} />

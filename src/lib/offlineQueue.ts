@@ -1,4 +1,5 @@
 import type { ColetaItem } from '../types';
+import type { FirestoreTransport, FirestoreWrite, FirestoreWriteCondition } from './firestoreTransport';
 
 export interface OutboxBipEntry {
   uniqueKey: string;
@@ -49,6 +50,25 @@ let notificationPending = false;
 let notificationRequested = false;
 let syncPromise: Promise<void> | null = null;
 let lastPassFailed = false;
+let firestoreTransport: FirestoreTransport | undefined;
+let firestoreWriteChain: Promise<unknown> = Promise.resolve();
+
+export function configureSyncTransport(transport: FirestoreTransport): void {
+  firestoreTransport = transport;
+}
+
+export function enqueueWrite(writes: FirestoreWrite[], condition?: FirestoreWriteCondition): Promise<boolean> {
+  const write = firestoreWriteChain.catch(() => false).then(async () => {
+    if (!firestoreTransport) throw new Error('Transporte do Firestore ainda não foi inicializado.');
+    return firestoreTransport(writes, condition);
+  });
+  firestoreWriteChain = write;
+  return write;
+}
+
+export function retryPendingWrites(): Promise<void> {
+  return firestoreWriteChain.then(() => undefined);
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || 'Erro desconhecido');
@@ -378,7 +398,7 @@ export function processOutboxSync(syncBatchToFirebase: SyncBatch, onItemsSynced?
 
 // One global runner in App survives route changes. Work starts after a committed
 // enqueue, at startup, and on reconnect; retries use one cancellable timeout.
-export function startOutboxSync(syncBatchToFirebase: SyncBatch, onItemsSynced?: OnItemsSynced): () => void {
+export function startOutboxSync(syncBatchToFirebase: SyncBatch = async () => true, onItemsSynced?: OnItemsSynced): () => void {
   let disposed = false;
   let running = false;
   let requested = false;

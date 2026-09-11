@@ -205,12 +205,12 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
     if (foundRow) {
       const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
       const message = isHibrida ? `ROTA VÁLIDA: ${foundRow.rota} (HÍBRIDA)` : `ROTA VÁLIDA: ${foundRow.rota}`;
-      const operatorName = currentUser?.username || localStorage.getItem('operanteNome') || 'Operador';
+      const operatorName = currentUser?.username || 'Operador';
       
       setLastScanResult({ status: 'success', message });
       const newScans: ScannedItem[] = [{ id: foundRow.id, rota: foundRow.rota, scannedAt: new Date(), status: 'found', foundBy: operatorName }, ...scannedItems];
       setScannedItems(newScans);
-      saveRefugoScans(newScans);
+      saveRefugoScans(newScans.map(scan => ({ ...scan, scannedAt: scan.scannedAt.toISOString() })));
       
       playBeep();
 
@@ -225,7 +225,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
       setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}` });
       const newScans: ScannedItem[] = [{ id: cleanInput, rota: '', scannedAt: new Date(), status: 'not_found' }, ...scannedItems];
       setScannedItems(newScans);
-      saveRefugoScans(newScans);
+      saveRefugoScans(newScans.map(scan => ({ ...scan, scannedAt: scan.scannedAt.toISOString() })));
     }
 
     setBipInput('');
@@ -294,7 +294,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
   const handleConfirmExport = async () => {
     if (exportTargetCodes.length === 0) return;
 
-    const operatorName = currentUser?.username || localStorage.getItem('operanteNome') || 'Operador';
+    const operatorName = currentUser?.username || 'Operador';
     const now = new Date();
     const todayBR = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
 

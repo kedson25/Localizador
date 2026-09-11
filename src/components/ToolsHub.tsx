@@ -21,6 +21,7 @@ interface ToolsHubProps {
   groups: GroupSummary[];
   onClear: () => void;
   currentUser?: User | null;
+  onLogout?: () => void;
 }
 
 export const ToolsHub: React.FC<ToolsHubProps> = ({
@@ -28,6 +29,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
   groups,
   onClear,
   currentUser,
+  onLogout,
 }) => {
   const navigate = useNavigate();
   const [isBacklogOpen, setIsBacklogOpen] = useState(false);
@@ -105,7 +107,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
           <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-gray-800 rounded-md text-sm font-bold shadow-xs">
             <span>{currentUser?.username || 'Usuário'}</span>
             <button 
-              onClick={() => { localStorage.removeItem('currentUser'); window.location.reload(); }}
+              onClick={onLogout}
               className="ml-2 text-[10px] text-red-600 hover:underline uppercase cursor-pointer"
             >
               Sair
