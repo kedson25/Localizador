@@ -14,7 +14,7 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
-import { User } from './lib/auth';
+import { getUserById, normalizeUser, User } from './lib/auth';
 import { saveToColetor, listenToColetor, clearColetor, startListasSync } from './lib/firebase';
 
 export default function App() {
@@ -28,7 +28,14 @@ export default function App() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const stored = sessionStorage.getItem('localizador_session_user');
+      return stored ? normalizeUser(JSON.parse(stored) as User) : null;
+    } catch {
+      return null;
+    }
+  });
   const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAuthenticated = !!currentUser;
   const hasOperationalSession = isAuthenticated || location.pathname === '/refugo';
@@ -38,6 +45,24 @@ export default function App() {
     const stopLists = startListasSync();
     return () => { stopLists(); };
   }, [hasOperationalSession]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let active = true;
+    void getUserById(currentUser.id).then(user => {
+      if (!active) return;
+      if (!user || !user.isApproved) {
+        sessionStorage.removeItem('localizador_session_user');
+        setCurrentUser(null);
+        if (location.pathname !== '/login') navigate('/login', { replace: true });
+        return;
+      }
+      const safeUser = normalizeUser(user);
+      sessionStorage.setItem('localizador_session_user', JSON.stringify({ ...safeUser, password: undefined }));
+      setCurrentUser(safeUser);
+    });
+    return () => { active = false; };
+  }, [currentUser?.id]);
 
 
   const showNotification = (message: string) => {
@@ -176,13 +201,22 @@ export default function App() {
             {/* Public Routes */}
             <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
             <Route path="/login" element={
-              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); navigate('/'); }} />
+              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => {
+                const safeUser = normalizeUser(user);
+                sessionStorage.setItem('localizador_session_user', JSON.stringify({ ...safeUser, password: undefined }));
+                setCurrentUser(safeUser);
+                navigate('/');
+              }} />
             } />
             
             {/* Protected Routes */}
             {isAuthenticated && (
               <>
-                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} onLogout={() => { setCurrentUser(null); navigate('/login'); }} />} />
+                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} onLogout={() => {
+                  sessionStorage.removeItem('localizador_session_user');
+                  setCurrentUser(null);
+                  navigate('/login');
+                }} />} />
                 
                 {currentUser?.isAdmin && (
                   <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
