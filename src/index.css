@@ -29,3 +29,10 @@
 .admin-presentation .rounded-lg { border-radius: 0.5rem !important; }
 .admin-presentation .rounded-md { border-radius: 0.375rem !important; }
 .admin-presentation .rounded-full { border-radius: 9999px !important; }
+
+.listas-coleta *,
+.listas-coleta *::before,
+.listas-coleta *::after {
+  animation: none !important;
+  transition: none !important;
+}

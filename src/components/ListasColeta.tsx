@@ -36,7 +36,6 @@ import {
   Save,
   Calendar
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { listenToRefugo, validateAndCleanIds } from '../services/operational.service';
 import {
@@ -694,7 +693,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         setImportStatusText('Nenhuma validação nova para gravar');
       }
 
-      await new Promise(resolve => setTimeout(resolve, 250));
       setShowVerificarLoteModal(false);
       setVerificarLoteText('');
       setShowVerificarModal(false); // Fecha o modal principal
@@ -1258,7 +1256,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         );
         pinConfirmedLista(confirmed);
       }
-      await new Promise(resolve => setTimeout(resolve, 250));
       setItemsPage(0);
       setLoteText('');
       setShowModalLote(false);
@@ -1509,7 +1506,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }).sort(compareListasNewestFirst);
 
     return (
-      <div className="w-full space-y-6 pb-12">
+      <div className="listas-coleta w-full space-y-6 pb-12">
         {storageErrorBanner}
         {/* Header Principal */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2760,9 +2757,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         <div className="space-y-6">
           
           {/* Card Bip Scanner (AGORA NA DIREITA PERTO DAS MÉTRICAS) */}
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
+          <div
             className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA] min-w-0"
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
@@ -2835,12 +2830,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </div>
               )}
             </div>
-          </motion.div>
+          </div>
 
           {/* Painel 1: Quantidades e Métricas (APENAS O QUE EXISTE NOS IDS) */}
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
+          <div
             className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md space-y-5"
           >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -2883,13 +2876,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </button>
               </div>
             </div>
-          </motion.div>
+          </div>
 
           {/* Painel: Quem está na tela de lista e quantos bips teve (reflete em tempo real para todos) */}
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.05 }}
+          <div
             className="bg-white border border-gray-200 rounded-2xl p-5 shadow-md space-y-4"
           >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -2967,7 +2957,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 })
               )}
             </div>
-          </motion.div>
+          </div>
 
         </div>
 
@@ -3455,21 +3445,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       )}
 
       {/* GAVETA DE CONFIRMAÇÃO DE EXCLUSÃO DE LISTA */}
-      <AnimatePresence>
+      <>
         {listaParaExcluir && (
           <div className="fixed inset-0 z-[60] flex justify-end overflow-hidden">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
+            <div
               exit={{ opacity: 0 }}
               onClick={() => setListaParaExcluir(null)}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
-            <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            <div
               className="relative w-full max-w-sm bg-white shadow-2xl h-full flex flex-col"
             >
               <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-red-50/50">
@@ -3535,27 +3519,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   CANCELAR
                 </button>
               </div>
-            </motion.div>
+            </div>
           </div>
         )}
-      </AnimatePresence>
+      </>
 
       {/* POPUP DE CONFIRMAÇÃO DE FINALIZAÇÃO DE LISTA */}
-      <AnimatePresence>
+      <>
         {listaParaFinalizar && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
+            <div
               exit={{ opacity: 0 }}
               onClick={() => setListaParaFinalizar(null)}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+            <div
               className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden z-10"
             >
               <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-emerald-50/50">
@@ -3621,10 +3599,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   SIM, FINALIZAR E BAIXAR
                 </button>
               </div>
-            </motion.div>
+            </div>
           </div>
         )}
-      </AnimatePresence>
+      </>
 
       {/* Skeleton ao abrir ou criar lista */}
       {isLoadingLista && <SkeletonOverlay label={loadingMessage} />}
