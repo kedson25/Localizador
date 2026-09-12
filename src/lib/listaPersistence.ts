@@ -29,7 +29,7 @@ export interface ListaMutation {
 
 const metadataKeys = ['nome', 'tipo', 'grupos', 'grupoAtivoId', 'rota', 'data',
   'responsavel', 'status', 'saidaPadrao', 'motivoPadrao', 'porcentagemAcerto',
-  'fechamentoGaiola', 'itensFaltaram'] as const;
+  'fechamentoGaiola', 'itensFaltaram', 'pacotesSemRotaEmFluxo', 'rotasEncontradas'] as const;
 
 export function snapshotLista(lista: ColetaLista): ColetaLista {
   return { ...lista, [baseline]: lista } as Snapshot;

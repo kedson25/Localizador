@@ -375,6 +375,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const totalValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => i.validado).length || 0), 0);
   const totalNaoValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => !i.validado).length || 0), 0);
   const totalFaltantesGeral = listasFinalizadas.reduce((acc, l) => acc + (l.itensFaltaram || 0), 0);
+  const totalBrancasEmFluxo = filteredListas.reduce((acc, l) => acc + (l.pacotesSemRotaEmFluxo || 0), 0);
+  const totalRotasEncontradas = filteredListas.reduce((acc, l) => acc + (l.rotasEncontradas || 0), 0);
   const mediaAcertoGeral = listasFinalizadas.length > 0 
     ? (listasFinalizadas.reduce((acc, l) => acc + (l.porcentagemAcerto ?? 100), 0) / listasFinalizadas.length).toFixed(1)
     : '0.0';
@@ -657,6 +659,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                 <div className="text-3xl font-black tabular-nums">{mediaAcertoGeral}%</div>
                 <p className="mt-1 text-xs text-slate-400">Baseada nas listas finalizadas</p>
               </div>
+              <div className="bg-slate-950 p-5">
+                <div className="mb-3 flex items-center justify-between text-rose-300">
+                  <span className="text-[11px] font-black uppercase tracking-widest">Pacotes sem rotas colocados em fluxo</span>
+                  <AlertCircle className="h-4 w-4" />
+                </div>
+                <div className="text-3xl font-black tabular-nums">{totalBrancasEmFluxo.toLocaleString('pt-BR')}</div>
+                <p className="mt-1 text-xs text-slate-400">Brancas encaminhadas no período</p>
+              </div>
+              <div className="bg-slate-950 p-5">
+                <div className="mb-3 flex items-center justify-between text-cyan-300">
+                  <span className="text-[11px] font-black uppercase tracking-widest">Rotas encontradas</span>
+                  <Target className="h-4 w-4" />
+                </div>
+                <div className="text-3xl font-black tabular-nums">{totalRotasEncontradas.toLocaleString('pt-BR')}</div>
+                <p className="mt-1 text-xs text-slate-400">Pacotes localizados no Controle Refugo</p>
+              </div>
             </div>
           </section>
 
@@ -761,6 +779,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <th className="py-3 px-4 text-center">Acerto (%)</th>
                     <th className="py-3 px-4 text-center">Gaiola</th>
                     <th className="py-3 px-4 text-center">Faltaram</th>
+                    <th className="py-3 px-4 text-center">Pacotes sem rotas colocados em fluxo</th>
+                    <th className="py-3 px-4 text-center">Rotas encontradas</th>
                     <th className="py-3 px-4 text-center">Ações</th>
                   </tr>
                 </thead>
@@ -829,6 +849,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                       </td>
                       <td className="py-3.5 px-4 text-center font-bold text-red-600">
                         {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-bold text-rose-700">
+                        {(lista.pacotesSemRotaEmFluxo || 0).toLocaleString('pt-BR')}
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-bold text-cyan-700">
+                        {(lista.rotasEncontradas || 0).toLocaleString('pt-BR')}
                       </td>
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">

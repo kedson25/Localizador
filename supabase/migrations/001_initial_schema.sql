@@ -254,7 +254,8 @@ begin
   end if;
   if exists(select 1 from jsonb_object_keys(v_metadata) k where k not in
     ('nome','tipo','grupos','grupoAtivoId','rota','data','responsavel','status','saidaPadrao',
-     'motivoPadrao','porcentagemAcerto','fechamentoGaiola','itensFaltaram')) then
+    'motivoPadrao','porcentagemAcerto','fechamentoGaiola','itensFaltaram',
+    'pacotesSemRotaEmFluxo','rotasEncontradas')) then
     raise exception 'Campo de lista desconhecido.' using errcode = '22023';
   end if;
   if v_metadata ? 'status' and v_metadata->>'status' not in ('em_andamento', 'finalizada') then

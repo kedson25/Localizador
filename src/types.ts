@@ -83,6 +83,8 @@ export interface ColetaLista {
   porcentagemAcerto?: number;
   fechamentoGaiola?: string;
   itensFaltaram?: number;
+  pacotesSemRotaEmFluxo?: number;
+  rotasEncontradas?: number;
 }
 
 export type ActiveTab = 'tools' | 'lookup' | 'remove' | 'report' | 'upload' | 'refugo';

@@ -278,6 +278,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
           status: 'em_andamento',
           saidaPadrao: exportSaida,
           motivoPadrao: exportMotivo,
+          pacotesSemRotaEmFluxo: exportTargetCodes.length,
+          rotasEncontradas: foundCount,
           itens: newColetaItens
         };
         await saveLista(novaLista, true);
@@ -294,6 +296,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
         const updatedLista: ColetaLista = {
           ...targetList,
+          pacotesSemRotaEmFluxo: (targetList.pacotesSemRotaEmFluxo || 0) + uniqueNewItems.length,
+          rotasEncontradas: (targetList.rotasEncontradas || 0) + foundCount,
           itens: [...(targetList.itens || []), ...uniqueNewItems]
         };
 
