@@ -1119,7 +1119,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <p className="text-xs text-gray-500 mt-1 flex items-center gap-3 font-medium">
                       <span>Data: <strong className="text-gray-700">{selectedListaForReport.data}</strong></span>
                       <span>•</span>
-                      <span>Saída: <strong className="text-gray-700">{selectedListaForReport.saida}</strong></span>
+                      <span>Saída: <strong className="text-gray-700">{selectedListaForReport.saidaPadrao}</strong></span>
                       <span>•</span>
                       <span>Responsável: <strong className="text-gray-700">{selectedListaForReport.responsavel || 'Operador'}</strong></span>
                     </p>
