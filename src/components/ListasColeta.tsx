@@ -232,6 +232,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const activeItensRef = useRef<ColetaItem[]>([]);
   const pendingBipsRef = useRef(new Map<string, ColetaItem>());
   const pendingBipsUntilRef = useRef(0);
+  const pendingRemovalsRef = useRef(new Set<string>());
+  const pendingRemovalsUntilRef = useRef(0);
   const activeListaIdRef = useRef(activeListaId);
   activeListaIdRef.current = activeListaId;
   const lastRefugoTextRef = useRef<string>('');
@@ -265,6 +267,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setIsLocked(false);
     pendingBipsRef.current.clear();
     pendingBipsUntilRef.current = 0;
+    pendingRemovalsRef.current.clear();
+    pendingRemovalsUntilRef.current = 0;
   }, [activeListaId]);
 
   // Buscar usuários registrados no sistema
@@ -287,17 +291,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const unsubListas = listenToListas((listasServer) => {
       const activeId = activeListaIdRef.current;
       const pending = Date.now() < pendingBipsUntilRef.current ? pendingBipsRef.current : new Map<string, ColetaItem>();
+      const pendingRemovals = Date.now() < pendingRemovalsUntilRef.current ? pendingRemovalsRef.current : new Set<string>();
       if (!pending.size) {
         pendingBipsRef.current.clear();
         pendingBipsUntilRef.current = 0;
       }
       const merged = listasServer.map(lista => {
-        if (lista.id !== activeId || !pending.size) return lista;
+        if (lista.id !== activeId) return lista;
         const serverItems = new Map(lista.itens.map(item => [item.id, item]));
+        pendingRemovals.forEach(id => serverItems.delete(id));
         pending.forEach(item => serverItems.set(item.id, item));
         const pendingIds = new Set(pending.keys());
-        return { ...lista, itens: [...pending.values(), ...[...serverItems.values()].filter(item => !pendingIds.has(item.id))] };
+        return pending.size || pendingRemovals.size
+          ? { ...lista, itens: [...pending.values(), ...[...serverItems.values()].filter(item => !pendingIds.has(item.id))] }
+          : lista;
       });
+      const serverActive = listasServer.find(lista => lista.id === activeId);
+      if (serverActive && pendingRemovals.size) {
+        pendingRemovals.forEach(id => { if (!serverActive.itens.some(item => item.id === id)) pendingRemovals.delete(id); });
+        if (!pendingRemovals.size) pendingRemovalsUntilRef.current = 0;
+      }
       activeItensRef.current = merged.find(lista => lista.id === activeId)?.itens || [];
       setListas(merged);
       setListasLoaded(true);
@@ -1008,6 +1021,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       } else {
         const selectedIds = [...selectedItemIds];
         const novosItens = listaAtiva.itens.filter(i => !selectedItemIdSet.has(i.id));
+        selectedIds.forEach(id => pendingRemovalsRef.current.add(id));
+        pendingRemovalsUntilRef.current = Date.now() + 30000;
         setListas(previous => previous.map(lista => lista.id === listaAtiva.id ? { ...lista, itens: novosItens } : lista));
         activeItensRef.current = novosItens;
         try {
