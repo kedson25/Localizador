@@ -153,6 +153,19 @@ export async function deleteLista(listaId: string): Promise<boolean> {
   if (!lista) throw new DataError('conflict', 'Esta lista já foi excluída.');
   return submit({ id: crypto.randomUUID(), listaId, metadata: {}, upserts: [], removedIds: [], deleted: true, expectedRevision: lista.revision });
 }
+export async function deleteListaItems(listaId: string, itemIds: string[]): Promise<boolean> {
+  const ids = [...new Set(itemIds)];
+  for (let offset = 0; offset < ids.length; offset += 250) {
+    const latest = await getListaById(listaId);
+    if (!latest) throw new DataError('conflict', 'Esta lista já foi excluída.');
+    const chunk = new Set(ids.slice(offset, offset + 250));
+    const updated = snapshotLista({ ...latest, itens: latest.itens.filter(item => !chunk.has(item.id)) });
+    const mutation = diffLista(updated);
+    if (mutation.removedIds.length) await submit(mutation);
+  }
+  live.refresh(listaId);
+  return true;
+}
 export async function flushSaveLista(_listaId: string): Promise<boolean> { await writeChain; return true; }
 export async function saveListaItems(listaId: string, items: ColetaItem[], removedIds: string[] = []): Promise<boolean> {
   const lista = await getListaById(listaId);

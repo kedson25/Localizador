@@ -39,7 +39,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { listenToRefugo, validateAndCleanIds } from '../services/operational.service';
-import { listenToListas, saveLista, deleteLista } from '../lib/coletaSync';
+import { listenToListas, saveLista, deleteLista, deleteListaItems } from '../lib/coletaSync';
 import { promoteIndividualSession } from '../lib/individualSession';
 import { useIndividualDraft } from './useIndividualDraft';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
@@ -1006,9 +1006,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       if (modoIndividual) {
         if (!await setItensModoIndividual(prev => prev.filter(i => !selectedItemIdSet.has(i.id)))) return;
       } else {
+        const selectedIds = [...selectedItemIds];
         const novosItens = listaAtiva.itens.filter(i => !selectedItemIdSet.has(i.id));
-        const updatedLista = { ...listaAtiva, itens: novosItens };
-        if (!await persistLista(updatedLista)) return;
+        setListas(previous => previous.map(lista => lista.id === listaAtiva.id ? { ...lista, itens: novosItens } : lista));
+        activeItensRef.current = novosItens;
+        try {
+          await deleteListaItems(listaAtiva.id, selectedIds);
+        } catch (error) {
+          setStorageError(error instanceof Error ? error.message : 'Não foi possível excluir todos os IDs.');
+          return;
+        }
       }
       setSelectedItemIds([]);
     }
