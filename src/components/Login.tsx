@@ -113,7 +113,15 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             </div>
           )}
 
-          {mode === 'login' ? (
+          {isLoading ? (
+            <div role="status" aria-live="polite" className="space-y-4">
+              <span className="sr-only">Validando acesso...</span>
+              <div className="skeleton-shimmer h-3 w-20" />
+              <div className="skeleton-shimmer h-10 w-full" />
+              <div className="skeleton-shimmer h-10 w-full" />
+              <div className="skeleton-shimmer mx-auto h-3 w-36" />
+            </div>
+          ) : mode === 'login' ? (
             step === 1 ? (
               <form onSubmit={handleNext} className="space-y-4">
                 <div className="space-y-1.5">

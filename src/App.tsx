@@ -14,9 +14,18 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
+import { PageSkeleton, type PageSkeletonVariant } from './components/PageSkeleton';
 import { logoutUser, subscribeAuthSession, User } from './lib/auth';
 import { saveToColetor, listenToColetor, clearColetor } from './services/operational.service';
 import { startListasSync } from './lib/coletaSync';
+
+function skeletonVariantForPath(pathname: string): PageSkeletonVariant {
+  if (pathname === '/') return 'hub';
+  if (pathname === '/admin' || pathname === '/listas') return 'dashboard';
+  if (pathname.startsWith('/listas/') || pathname === '/refugo') return 'detail';
+  if (pathname === '/upload' || pathname === '/login') return 'form';
+  return 'table';
+}
 
 export default function App() {
   const location = useLocation();
@@ -28,6 +37,7 @@ export default function App() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState<boolean>(true);
+  const [loadedColetorUserId, setLoadedColetorUserId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,8 +74,13 @@ export default function App() {
   useEffect(() => () => { if (notificationTimer.current) clearTimeout(notificationTimer.current); }, []);
 
   useEffect(() => {
-    if (!canReadColetor) { setLoadingData(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]); return; }
+    if (!canReadColetor) {
+      setLoadingData(authLoading); setLoadedColetorUserId(null);
+      setRawText(''); setRows([]); setGroups([]); setHeaders([]); return;
+    }
     setLoadingData(true);
+    setLoadedColetorUserId(null);
+    const loadingUserId = currentUser?.id || null;
     let lastRawText: string | undefined;
     const unsubscribe = listenToColetor(data => {
       const text = data?.rawText || '';
@@ -76,16 +91,18 @@ export default function App() {
         setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
       }
       setLoadingData(false);
+      setLoadedColetorUserId(loadingUserId);
     }, () => {
       setLoadingData(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]);
+      setLoadedColetorUserId(loadingUserId);
       showNotification('Não foi possível sincronizar a base. Verifique a conexão.');
     });
     return () => { unsubscribe(); };
-  }, [canReadColetor, currentUser?.id]);
+  }, [canReadColetor, currentUser?.id, authLoading]);
 
   const handleParseAndSave = async (textToParse: string, fileName?: string) => {
-    const parsed = parseCsvText(textToParse);
     try {
+      const parsed = parseCsvText(textToParse);
       const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
       if (saved) {
         setRawText(textToParse); setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
@@ -141,32 +158,9 @@ export default function App() {
           </div>
         )}
 
-        {authLoading ? <div className="p-8 text-center text-gray-500">Restaurando sessão...</div> : loadingData && ['/consulta', '/remover', '/reporte'].includes(location.pathname) ? (
-          <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
-            <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
-            <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>
-            
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-gray-100 rounded-lg animate-pulse"></div>
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 w-1/4 bg-gray-200 rounded animate-pulse"></div>
-                  <div className="h-3 w-2/3 bg-gray-100 rounded animate-pulse"></div>
-                </div>
-              </div>
-              <div className="mt-6 space-y-4 border-t border-gray-50 pt-4">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="flex items-center gap-4">
-                    <div className="w-8 h-8 bg-gray-100 rounded-md animate-pulse"></div>
-                    <div className="flex-1 space-y-2">
-                      <div className="h-3 w-1/3 bg-gray-200 rounded animate-pulse"></div>
-                      <div className="h-2 w-1/2 bg-gray-100 rounded animate-pulse"></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+        {authLoading || (canReadColetor && (loadingData || loadedColetorUserId !== currentUser?.id)
+          && ['/', '/consulta', '/remover', '/reporte', '/upload'].includes(location.pathname)) ? (
+          <PageSkeleton variant={skeletonVariantForPath(location.pathname)} className="mx-auto max-w-7xl" />
         ) : (
           <>
             {isAuthenticated && location.pathname !== '/' && location.pathname !== '/login' && !location.pathname.startsWith('/listas/') && (
@@ -226,7 +220,7 @@ export default function App() {
                 <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
-                  <Route path="/upload" element={<CsvUploader onLoadText={(text) => { void handleParseAndSave(text); }} currentTotalRows={rows.length} />} />
+                  <Route path="/upload" element={<CsvUploader onLoadText={handleParseAndSave} currentTotalRows={rows.length} />} />
                 )}
               </>
             )}

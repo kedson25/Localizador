@@ -4,13 +4,14 @@ import {
   Shield, ShieldAlert, CheckCircle, XCircle, Users, Activity, Settings2, 
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
   AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check,
-  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw, Presentation, Printer,
+  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw,
   TrendingUp, Target, Trophy
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { listenToListas, saveLista } from '../lib/coletaSync';
 import { compareListasNewestFirst } from '../lib/listaOrder';
 import { ColetaLista } from '../types';
+import { PageSkeleton } from './PageSkeleton';
 
 const TABS = [
   { id: 'consulta', label: 'Buscar grupos' },
@@ -101,6 +102,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [users, setUsers] = useState<User[]>([]);
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listasReady, setListasReady] = useState(false);
   const [isVerifiedAdmin, setIsVerifiedAdmin] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -121,9 +123,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [copiedItemId, setCopiedItemId] = useState<string | null>(null);
 
   useEffect(() => {
+    setListasReady(false);
     verifyAndFetch();
-    const unsubListas = listenToListas(setListas, error => {
+    const unsubListas = listenToListas(data => {
+      setListas(data);
+      setListasReady(true);
+    }, error => {
       setListas([]);
+      setListasReady(true);
       setOperationError(error.message);
     });
     return () => {
@@ -287,8 +294,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     });
   };
 
-  if (loading) {
-    return <div className="p-8 text-center text-gray-500">Verificando permissões...</div>;
+  if (loading || !listasReady) {
+    return <PageSkeleton variant="dashboard" />;
   }
   
   if (!isVerifiedAdmin) {
@@ -362,26 +369,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     return true;
   }).sort(compareListasNewestFirst);
 
-  // Texto legível descrevendo o período de cálculo ativo
-  const getFilterDescription = () => {
-    if (!startDate && !endDate) {
-      return 'Exibindo acumulado geral de todas as datas de coleta registradas';
-    }
-    if (startDate && endDate && startDate === endDate) {
-      return `Métricas operacionais para o dia ${startDate.split('-').reverse().join('/')}`;
-    }
-    if (startDate && endDate) {
-      return `Métricas operacionais no período de ${startDate.split('-').reverse().join('/')} até ${endDate.split('-').reverse().join('/')}`;
-    }
-    if (startDate) {
-      return `Métricas operacionais a partir de ${startDate.split('-').reverse().join('/')}`;
-    }
-    if (endDate) {
-      return `Métricas operacionais até ${endDate.split('-').reverse().join('/')}`;
-    }
-    return '';
-  };
-
   // Cálculos de métricas operacionais filtradas pelo Período de Cálculo
   const listasFinalizadas = filteredListas.filter(l => l.status === 'finalizada');
   const totalItensColetados = filteredListas.reduce((acc, l) => acc + (l.itens?.length || 0), 0);
@@ -420,7 +407,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
         </div>
       )}
       {/* NAVEGAÇÃO DE ABAS DO PAINEL ADMIN */}
-      <div className="admin-no-print flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
@@ -470,7 +457,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       {adminTab === 'metricas' && (
         <div className="space-y-6 animate-in fade-in">
           {/* SELETOR DE PERÍODO & DATA DE CÁLCULO */}
-          <div className="admin-no-print bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
+          <div className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-gray-100 pb-4">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 bg-blue-50 text-[#3483FA] rounded-xl border border-blue-100">
@@ -485,9 +472,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                       </span>
                     )}
                   </h3>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {getFilterDescription()}
-                  </p>
                 </div>
               </div>
 
@@ -634,31 +618,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* VISÃO EXECUTIVA PARA APRESENTAÇÕES E REUNIÕES */}
+          {/* VISÃO GERAL */}
           <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 text-white shadow-xl">
-            <div className="flex flex-col gap-5 border-b border-white/10 p-6 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex items-start gap-4">
-                <div className="rounded-xl border border-blue-400/30 bg-blue-500/15 p-3 text-blue-300">
-                  <Presentation className="h-6 w-6" />
-                </div>
-                <div>
-                  <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <h2 className="text-xl font-black tracking-tight">Visão executiva da operação</h2>
-                    <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-300">
-                      Atualização em tempo real
-                    </span>
-                  </div>
-                  <p className="max-w-2xl text-sm text-slate-300">{getFilterDescription()}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="admin-no-print inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-white/20"
-              >
-                <Printer className="h-4 w-4" />
-                Imprimir ou salvar em PDF
-              </button>
+            <div className="border-b border-white/10 p-6">
+              <h2 className="text-xl font-black tracking-tight">Visão geral</h2>
             </div>
 
             <div className="grid grid-cols-1 gap-px bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
@@ -781,9 +744,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                 <Package className="w-6 h-6 text-[#3483FA]" />
                 <div>
                   <h2 className="text-lg font-bold text-gray-800">Listas de Coleta do Período</h2>
-                  <p className="text-xs text-gray-500">
-                    {getFilterDescription()}
-                  </p>
                 </div>
               </div>
             </div>
@@ -801,7 +761,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <th className="py-3 px-4 text-center">Acerto (%)</th>
                     <th className="py-3 px-4 text-center">Gaiola</th>
                     <th className="py-3 px-4 text-center">Faltaram</th>
-                    <th className="admin-no-print py-3 px-4 text-center">Ações</th>
+                    <th className="py-3 px-4 text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -870,7 +830,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                       <td className="py-3.5 px-4 text-center font-bold text-red-600">
                         {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
                       </td>
-                      <td className="admin-no-print py-3.5 px-4 text-center">
+                      <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
                             type="button"
@@ -907,7 +867,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                   {filteredListas.length === 0 && (
                     <tr>
                       <td colSpan={10} className="py-12 text-center text-gray-400 font-medium">
-                        Nenhuma lista de coleta encontrada para o período selecionado. ({getFilterDescription()})
+                        Nenhuma lista de coleta encontrada para o período selecionado.
                       </td>
                     </tr>
                   )}

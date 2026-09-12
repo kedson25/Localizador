@@ -4,6 +4,7 @@ import { CsvRow, LookupMatch, ColetaLista, ColetaItem } from '../types';
 import { cleanDigits } from '../utils/csvParser';
 import { listenToListas } from '../lib/coletaSync';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
+import { PageSkeleton } from './PageSkeleton';
 
 const naturalOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
@@ -33,6 +34,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [copiedDetailId, setCopiedDetailId] = useState<string | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [listasReady, setListasReady] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [showGruposModal, setShowGruposModal] = useState(false);
   const [page, setPage] = useState(0);
@@ -42,7 +44,9 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   }, [listas]);
 
   useEffect(() => {
-    const unsubscribe = listenToListas(data => { setListas(data); setSyncError(null); }, error => { setListas([]); setSyncError(error.message); });
+    const unsubscribe = listenToListas(data => { setListas(data); setListasReady(true); setSyncError(null); }, error => {
+      setListas([]); setListasReady(true); setSyncError(error.message);
+    });
     return () => unsubscribe();
   }, []);
 
@@ -311,6 +315,8 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  if (!listasReady) return <PageSkeleton variant="table" />;
 
   return (
     <div className="space-y-4">

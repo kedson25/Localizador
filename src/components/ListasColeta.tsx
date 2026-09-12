@@ -52,6 +52,7 @@ import {
 import { compareListasNewestFirst } from '../lib/listaOrder';
 import { promoteIndividualSession } from '../lib/individualSession';
 import { useIndividualDraft } from './useIndividualDraft';
+import { PageSkeleton, SkeletonOverlay } from './PageSkeleton';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
 
@@ -163,6 +164,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const params = useParams();
   const navigate = useNavigate();
   const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [listasReady, setListasReady] = useState(false);
+  const [usersReady, setUsersReady] = useState(false);
   const activeListaId = params.id || null;
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   
@@ -178,6 +181,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [dashboardStatusFilter, setDashboardStatusFilter] = useState<'todas' | 'em_andamento' | 'finalizada'>('todas');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [refugoBaseRows, setRefugoBaseRows] = useState<RefugoRow[]>([]);
+  const [refugoReady, setRefugoReady] = useState(false);
 
   // Configurações do scanner na tela de coleta
   const [selectedSaida, setSelectedSaida] = useState('Ciclo 2 - Saída PM');
@@ -310,6 +314,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         }
       } catch (e) {
         console.error("Erro ao buscar usuários do sistema:", e);
+      } finally {
+        setUsersReady(true);
       }
     }
     fetchSystemUsers();
@@ -369,7 +375,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       }
       activeItensRef.current = merged.find(lista => lista.id === activeId)?.itens || [];
       setListas(merged);
+      setListasReady(true);
     }, error => {
+      setListasReady(true);
       setStorageError(error.message);
     });
 
@@ -377,6 +385,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const unsubRefugo = listenToRefugo((data) => {
       if (data && data.rawText) {
         if (data.rawText === lastRefugoTextRef.current) {
+          setRefugoReady(true);
           return; // Já está processado em memória RAM!
         }
         lastRefugoTextRef.current = data.rawText;
@@ -400,15 +409,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               };
             }).filter(Boolean) as RefugoRow[];
             setRefugoBaseRows(parsedRows);
+            setRefugoReady(true);
           }
         });
       } else {
         lastRefugoTextRef.current = '';
         setRefugoBaseRows([]);
+        setRefugoReady(true);
       }
     }, error => {
       lastRefugoTextRef.current = '';
       setRefugoBaseRows([]);
+      setRefugoReady(true);
       setStorageError(error.message);
     });
 
@@ -1399,16 +1411,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // -------------------------------------------------------------
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
+  if (!listasReady || !refugoReady || !usersReady) {
+    return <PageSkeleton variant={activeListaId ? 'detail' : 'dashboard'} />;
+  }
+
   if (activeListaId && !listaAtiva) {
     const checkingLista = missingListaId !== activeListaId;
+    if (checkingLista) return <PageSkeleton variant="detail" />;
     return (
       <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
         <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
-          {checkingLista ? <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" /> : <AlertCircle className="w-8 h-8 text-[#3483FA]" />}
+          <AlertCircle className="w-8 h-8 text-[#3483FA]" />
         </div>
         <div className="text-center">
-          <h3 className="text-base font-bold text-[#333333]">{checkingLista ? 'Carregando lista de coleta...' : listaLookupError ? 'Não foi possível carregar a lista' : 'Lista não encontrada'}</h3>
-          <p className="text-xs text-gray-500 mt-1">{checkingLista ? 'Consultando esta lista diretamente no Supabase...' : listaLookupError || 'A lista foi excluída ou sua conta não tem acesso a ela.'}</p>
+          <h3 className="text-base font-bold text-[#333333]">{listaLookupError ? 'Não foi possível carregar a lista' : 'Lista não encontrada'}</h3>
+          <p className="text-xs text-gray-500 mt-1">{listaLookupError || 'A lista foi excluída ou sua conta não tem acesso a ela.'}</p>
         </div>
         <button onClick={() => navigate('/listas')} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold cursor-pointer">Voltar para listas</button>
       </div>
@@ -1921,20 +1938,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </div>
         )}
 
-        {/* Overlay com Círculo Giratório ao abrir ou criar lista */}
-        {isLoadingLista && (
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-[9999] animate-in fade-in duration-150">
-            <div className="bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 flex flex-col items-center gap-4 max-w-xs w-full text-center">
-              <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
-              </div>
-              <div>
-                <h4 className="text-base font-bold text-[#333333]">{loadingMessage}</h4>
-                <p className="text-xs text-gray-500 mt-1">Aguarde um instante...</p>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Skeleton ao abrir ou criar lista */}
+        {isLoadingLista && <SkeletonOverlay label={loadingMessage} />}
       </div>
     );
   }
@@ -3616,20 +3621,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         )}
       </AnimatePresence>
 
-      {/* Overlay com Círculo Giratório ao abrir ou criar lista */}
-      {isLoadingLista && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-[9999] animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 flex flex-col items-center gap-4 max-w-xs w-full text-center">
-            <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
-              <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
-            </div>
-            <div>
-              <h4 className="text-base font-bold text-[#333333]">{loadingMessage}</h4>
-              <p className="text-xs text-gray-500 mt-1">Aguarde um instante...</p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Skeleton ao abrir ou criar lista */}
+      {isLoadingLista && <SkeletonOverlay label={loadingMessage} />}
       </div>
   );
 };

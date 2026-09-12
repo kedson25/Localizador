@@ -19,6 +19,7 @@ import {
 import { CsvRow, ColetaLista } from '../types';
 import { cleanDigits } from '../utils/csvParser';
 import { listenToListas } from '../lib/coletaSync';
+import { PageSkeleton } from './PageSkeleton';
 
 interface WhatsappReportProps {
   rows: CsvRow[];
@@ -40,11 +41,14 @@ function listaDateKey(value: string): string {
 
 export function WhatsappReport({ rows }: WhatsappReportProps) {
   const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [listasReady, setListasReady] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [selectedListaId, setSelectedListaId] = useState<string>('');
 
   useEffect(() => {
-    return listenToListas(data => { setListas(data); setSyncError(null); }, error => { setListas([]); setSyncError(error.message); });
+    return listenToListas(data => { setListas(data); setListasReady(true); setSyncError(null); }, error => {
+      setListas([]); setListasReady(true); setSyncError(error.message);
+    });
   }, []);
 
   const [inputText, setInputText] = useState<string>('');
@@ -323,6 +327,8 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  if (!listasReady) return <PageSkeleton variant="table" />;
 
   return (
     <div className="space-y-4">

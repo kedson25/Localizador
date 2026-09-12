@@ -6,6 +6,7 @@ import { saveRefugo, clearRefugo, saveRefugoScan, clearRefugoScans, listenToRefu
 import { saveLista, listenToListas } from '../lib/coletaSync';
 import type { User } from '../lib/auth';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
+import { PageSkeleton } from './PageSkeleton';
 
 interface ScannedItem {
   id: string;
@@ -50,6 +51,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
   const [baseDate, setBaseDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [scansReady, setScansReady] = useState(false);
+  const [listasReady, setListasReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -93,8 +96,11 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     const unsubScans = listenToRefugoScans((scans, generation) => {
       scanGeneration.current = generation;
       setScannedItems(scans.map(scan => ({ ...scan, scannedAt: new Date(scan.scannedAt) })));
-    }, error => { scanGeneration.current = null; setScannedItems([]); showError(error); });
-    const unsubListas = listenToListas(setExistingListas, error => { setExistingListas([]); showError(error); });
+      setScansReady(true);
+    }, error => { scanGeneration.current = null; setScannedItems([]); setScansReady(true); showError(error); });
+    const unsubListas = listenToListas(data => { setExistingListas(data); setListasReady(true); }, error => {
+      setExistingListas([]); setListasReady(true); showError(error);
+    });
     return () => { unsubRefugo(); unsubScans(); unsubListas(); };
   }, []);
 
@@ -317,17 +323,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const notFoundCount = scannedItems.filter(s => s.status === 'not_found').length;
   const semRotaCount = notFoundCount || rows.filter(r => !r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA').length;
 
-  if (isLoading) {
-    return (
-      <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12 mt-2">
-        <div className="bg-white border border-gray-200 rounded-2xl p-12 flex flex-col items-center justify-center text-center shadow-sm">
-          <div className="w-16 h-16 bg-gray-100 rounded-2xl animate-pulse mb-4"></div>
-          <div className="h-6 w-48 bg-gray-200 rounded animate-pulse mb-4"></div>
-          <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-6"></div>
-          <div className="h-12 w-40 bg-gray-200 rounded-xl animate-pulse"></div>
-        </div>
-      </div>
-    );
+  if (isLoading || !scansReady || !listasReady) {
+    return <PageSkeleton variant="detail" className="mx-auto max-w-7xl pb-12" />;
   }
 
   return (
