@@ -1,7 +1,7 @@
 import type { ColetaItem, ColetaLista } from '../types';
 import { supabase } from './supabase';
 import { asJson, type ItemRow, type ListaRow } from './database.types';
-import { diffLista, snapshotLista, type ListaMutation } from './listaPersistence';
+import { applyListaMutation, diffLista, snapshotLista, type ListaMutation } from './listaPersistence';
 import { databaseOperation, DataError } from '../services/errors';
 import { createLiveQuery } from '../services/realtime.service';
 import { flushOfflineMutations, onOfflineRetry, queueOfflineMutation } from './offlineQueue';
@@ -98,6 +98,21 @@ async function sendMutation(mutation: QueuedListaMutation): Promise<void> {
   if (!saved) throw new DataError('database', 'O servidor não confirmou a alteração.');
 }
 
+async function sendWithConflictRecovery(mutation: QueuedListaMutation): Promise<void> {
+  try {
+    await sendMutation(mutation);
+  } catch (error) {
+    if (!(error instanceof DataError) || error.kind !== 'conflict' || mutation.create || mutation.deleted) throw error;
+    const latest = await getListaById(mutation.listaId);
+    if (!latest) throw error;
+    const rebased = applyListaMutation(snapshotLista(latest), mutation);
+    if (!rebased) throw error;
+    const retry = diffLista(rebased);
+    if (!Object.keys(retry.metadata).length && !retry.upserts.length && !retry.removedIds.length) return;
+    await sendMutation(retry);
+  }
+}
+
 function replayQueuedMutations() {
   void flushOfflineMutations<QueuedListaMutation>('listas', async mutation => {
     await sendMutation(mutation);
@@ -110,7 +125,7 @@ if (typeof window !== 'undefined') onOfflineRetry(replayQueuedMutations);
 async function submit(mutation: ListaMutation): Promise<boolean> {
   const write = writeChain.catch(() => undefined).then(async () => {
     try {
-      await sendMutation(mutation);
+      await sendWithConflictRecovery(mutation);
       return true;
     } catch (error) {
       if (error instanceof DataError && error.kind === 'network') {
