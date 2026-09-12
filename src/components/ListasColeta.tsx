@@ -224,7 +224,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const individualDraft = useIndividualDraft(individualSession, setStorageError);
   const { items: itensModoIndividual, setItems: setItensModoIndividual } = individualDraft;
   const [isSavingLista, setIsSavingLista] = useState(false);
-  const savingListaRef = useRef(false);
+  const savingListaCountRef = useRef(0);
   const [modoIndFiltroStatus, setModoIndFiltroStatus] = useState<'todos' | 'validados' | 'pendentes'>('todos');
   const [isSavingUnify, setIsSavingUnify] = useState(false);
 
@@ -242,11 +242,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const leitorTravado = isLocked || listaAtiva?.status === 'finalizada';
 
   const persistLista = async (lista: ColetaLista, immediate = false): Promise<boolean> => {
-    if (savingListaRef.current) {
-      setStorageError('Aguarde a confirmação da alteração em andamento e tente novamente.');
-      return false;
-    }
-    savingListaRef.current = true;
+    savingListaCountRef.current += 1;
     setIsSavingLista(true);
     try {
       const saved = await saveLista(lista, immediate);
@@ -257,8 +253,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setStorageError(error instanceof Error ? error.message : 'Não foi possível salvar no servidor. Tente novamente.');
       return false;
     } finally {
-      savingListaRef.current = false;
-      setIsSavingLista(false);
+      savingListaCountRef.current -= 1;
+      setIsSavingLista(savingListaCountRef.current > 0);
     }
   };
 
@@ -370,7 +366,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   }, [listaAtiva, isLoadingLista]);
 
   useEffect(() => {
-    if (!listaAtiva || leitorTravado || isSavingLista || individualDraft.saving || isSavingUnify) return;
+    if (!listaAtiva || leitorTravado || individualDraft.saving || isSavingUnify) return;
     const focusScanner = () => inputRef.current?.focus();
     focusScanner();
     const timer = setTimeout(focusScanner, 150);
@@ -753,7 +749,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Bipar ID na tela de coleta
   const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bipInput.trim() || !listaAtiva || leitorTravado || savingListaRef.current || individualDraft.saving || isSavingUnify) return;
+    if (!bipInput.trim() || !listaAtiva || leitorTravado || individualDraft.saving || isSavingUnify) return;
 
     let processedInput = bipInput.trim();
     processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
@@ -869,10 +865,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
 
     const updatedLista = { ...listaAtiva, itens: novosItens };
-    if (!await persistLista(updatedLista)) {
-      setLastScanResult({ status: 'error', code: cleanInput, message: 'O servidor não confirmou o bip. Tente novamente.' });
-      return;
-    }
+    activeItensRef.current = novosItens;
+    setListas(previous => previous.map(lista => lista.id === updatedLista.id ? { ...lista, itens: novosItens } : lista));
+    void persistLista(updatedLista).then(saved => {
+      if (!saved) setLastScanResult({ status: 'error', code: cleanInput, message: 'O servidor não confirmou o bip. Tente novamente.' });
+    });
     setLastScanResult({ status: 'success', code: cleanInput, message: scanMessage });
     setBipInput('');
     setItemsPage(0);
@@ -2654,7 +2651,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   onBlur={() => {
                     if (!leitorTravado) setTimeout(() => inputRef.current?.focus(), 150);
                   }}
-                  disabled={leitorTravado || isSavingLista || individualDraft.saving || isSavingUnify || (modoIndividual && !individualDraft.ready)}
+                  disabled={leitorTravado || individualDraft.saving || isSavingUnify || (modoIndividual && !individualDraft.ready)}
                   className={`block w-full pl-11 pr-3 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
                     leitorTravado
                       ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
