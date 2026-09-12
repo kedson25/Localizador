@@ -1859,10 +1859,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       </div>
 
       {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start min-w-0">
         
         {/* COLUNA ESQUERDA (3 COLS) — TABELA DE IDS COMPLETA */}
-        <div className="xl:col-span-3 space-y-4">
+        <div className="xl:col-span-3 space-y-4 min-w-0">
           
           {/* PAINEL DE GRUPOS (Se tipo = grupos) */}
           {listaAtiva.tipo === 'grupos' && (
@@ -2614,7 +2614,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           <motion.div 
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA]"
+            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA] min-w-0"
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
               <div className="flex items-center gap-2">
@@ -2674,16 +2674,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </form>
 
             {/* Feedback Bip */}
-            {lastScanResult && (
-              <div className={`mt-3 px-3 py-2 rounded-lg border text-[10px] flex items-center gap-2 font-bold animate-in slide-in-from-top-1 ${
-                lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
-              }`}>
-                {lastScanResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 shrink-0" />}
-                <div className="truncate">
-                  <span className="font-mono">{lastScanResult.code}</span> — {lastScanResult.message}
+            <div className="mt-3 min-h-[34px]" aria-live="polite">
+              {lastScanResult && (
+                <div className={`h-[34px] px-3 py-2 rounded-lg border text-[10px] flex items-center gap-2 font-bold animate-in slide-in-from-top-1 ${
+                  lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
+                }`}>
+                  {lastScanResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 shrink-0" />}
+                  <div className="truncate">
+                    <span className="font-mono">{lastScanResult.code}</span> — {lastScanResult.message}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </motion.div>
 
           {/* Painel 1: Quantidades e Métricas (APENAS O QUE EXISTE NOS IDS) */}
