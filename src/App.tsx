@@ -17,7 +17,6 @@ import { AdminPanel } from './components/AdminPanel';
 import { logoutUser, subscribeAuthSession, User } from './lib/auth';
 import { saveToColetor, listenToColetor, clearColetor } from './services/operational.service';
 import { startListasSync } from './lib/coletaSync';
-import { SyncIndicator } from './components/SyncIndicator';
 
 export default function App() {
   const location = useLocation();
@@ -138,7 +137,6 @@ export default function App() {
           </div>
         )}
 
-        {isAuthenticated && <SyncIndicator />}
         {authLoading ? <div className="p-8 text-center text-gray-500">Restaurando sessão...</div> : loadingData && ['/consulta', '/remover', '/reporte'].includes(location.pathname) ? (
           <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
             <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
