@@ -1140,12 +1140,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         const selectedIds = [...selectedItemIds];
         const novosItens = listaAtiva.itens.filter(i => !selectedItemIdSet.has(i.id));
         selectedIds.forEach(id => pendingRemovalsRef.current.add(id));
-        pendingRemovalsUntilRef.current = Date.now() + 30000;
+        pendingRemovalsUntilRef.current = Date.now() + 2000;
         setListas(previous => previous.map(lista => lista.id === listaAtiva.id ? { ...lista, itens: novosItens } : lista));
         activeItensRef.current = novosItens;
         try {
           await deleteListaItems(listaAtiva.id, selectedIds);
+          selectedIds.forEach(id => pendingRemovalsRef.current.delete(id));
+          if (!pendingRemovalsRef.current.size) pendingRemovalsUntilRef.current = 0;
         } catch (error) {
+          selectedIds.forEach(id => pendingRemovalsRef.current.delete(id));
+          if (!pendingRemovalsRef.current.size) pendingRemovalsUntilRef.current = 0;
           setStorageError(error instanceof Error ? error.message : 'Não foi possível excluir todos os IDs.');
           return;
         }
