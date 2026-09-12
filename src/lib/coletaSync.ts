@@ -4,7 +4,6 @@ import { asJson, type ItemRow, type ListaRow } from './database.types';
 import { applyListaMutation, diffLista, snapshotLista, splitListaItemsIntoBatches, type ListaMutation } from './listaPersistence';
 import { databaseOperation, DataError } from '../services/errors';
 import { createLiveQuery } from '../services/realtime.service';
-import { flushOfflineMutations, onOfflineRetry, queueOfflineMutation } from './offlineQueue';
 import { compareListasNewestFirst } from './listaOrder';
 
 const PAGE_SIZE = 500;
@@ -151,35 +150,20 @@ async function confirmMutationItems(mutation: ListaMutation, timeoutMs = CONFIRM
   throw lastRetryableError || new DataError('timeout', 'O Supabase não confirmou todos os IDs do lote a tempo. Tente novamente.');
 }
 
-function replayQueuedMutations() {
-  void flushOfflineMutations<QueuedListaMutation>('listas', async mutation => {
-    await sendMutation(mutation);
-    live.refresh(mutation.listaId);
-  });
-}
-
-if (typeof window !== 'undefined') onOfflineRetry(replayQueuedMutations);
-
-async function submit(mutation: ListaMutation, options: { allowOffline?: boolean } = {}): Promise<boolean> {
+async function submit(mutation: ListaMutation): Promise<boolean> {
   const write = writeChain.catch(() => undefined).then(async () => {
     try {
       await sendWithConflictRecovery(mutation);
       return true;
-    } catch (error) {
-      if (options.allowOffline !== false && error instanceof DataError && error.kind === 'network') {
-        await queueOfflineMutation('listas', mutation);
-        return true;
-      }
-      throw error;
     } finally { live.refresh(mutation.listaId); }
   });
   writeChain = write;
   return write;
 }
-export async function saveLista(lista: ColetaLista, requireServer = false): Promise<boolean> {
+export async function saveLista(lista: ColetaLista, _requireServer = false): Promise<boolean> {
   const mutation = diffLista(lista);
   if (!mutation.create && !Object.keys(mutation.metadata).length && !mutation.upserts.length && !mutation.removedIds.length) return true;
-  return submit(mutation, { allowOffline: !requireServer });
+  return submit(mutation);
 }
 export async function deleteLista(listaId: string): Promise<boolean> {
   const lista = live.current()?.get(listaId) || await getListaById(listaId);
@@ -250,7 +234,7 @@ export async function saveListaItemsBatch(
     const updated = { ...latestTouched, itens: batch };
     const mutation = diffLista(updated);
     if (mutation.upserts.length) {
-      await submit(mutation, { allowOffline: false });
+      await submit(mutation);
       await confirmMutationItems(mutation);
     }
     confirmed += batch.length;

@@ -56,8 +56,6 @@ export default function App() {
   }, [canUseListas, currentUser?.id]);
 
   useEffect(() => {
-    // Remove the old unsigned session; Supabase Auth persists/restores the real session.
-    sessionStorage.removeItem('localizador_session_user');
     return subscribeAuthSession(user => {
       setCurrentUser(user);
       setAuthLoading(false);
