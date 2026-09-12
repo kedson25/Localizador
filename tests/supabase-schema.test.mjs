@@ -146,6 +146,17 @@ test('Supabase migration: identity, permissions, batching, conflicts and atomici
     assert.equal((await db.query('select * from public.coleta_listas')).rows.length, 0);
     await assert.rejects(mutate(mutation()), code('42501'));
   });
+  await t.test('approved collectors see the responsibility directory without private permission data', async () => {
+    await asUser('alice');
+    const visible = (await db.query('select * from public.list_visible_profiles()')).rows;
+    // Bob was revoked in the preceding test, so only the three approved profiles remain.
+    assert.equal(visible.length, 3);
+    assert.ok(visible.every(row => row.email === '' && row.is_admin === false && row.is_approved === true));
+    await asUser('admin');
+    const administrative = (await db.query('select * from public.list_visible_profiles()')).rows;
+    assert.equal(administrative.length, 5);
+    assert.equal(administrative.find(row => row.firebase_uid === 'alice').email, 'alice@example.test');
+  });
   await t.test('only the seven live state tables are published to Realtime', async () => {
     await db.exec('reset role');
     assert.deepEqual((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime' order by tablename")).rows.map(r => r.tablename),

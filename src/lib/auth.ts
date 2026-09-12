@@ -132,13 +132,9 @@ export async function getUserById(userId: string): Promise<User | null> {
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const users: User[] = [];
-  for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase.from('profiles').select(PROFILE_COLUMNS).order('firebase_uid').range(offset, offset + 499);
-    if (error) throw new Error(authErrorMessage(error));
-    users.push(...(data as ProfileRow[]).map(fromProfile));
-    if (data.length < 500) return users;
-  }
+  const { data, error } = await supabase.rpc('list_visible_profiles', {});
+  if (error) throw new Error(authErrorMessage(error));
+  return (data as ProfileRow[]).map(fromProfile);
 }
 
 export async function updateUserAdminStatus(userId: string, updates: Partial<User>): Promise<boolean> {

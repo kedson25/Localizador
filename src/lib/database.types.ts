@@ -22,6 +22,7 @@ export type Database = { public: {
   };
   Views: Record<string, never>;
   Functions: {
+    list_visible_profiles: { Args: Record<string, never>; Returns: ProfileRow[] };
     mutate_lista: { Args: { p_mutation: Json }; Returns: boolean };
     upsert_operational_base: { Args: { p_kind: string; p_raw_text: string; p_total_rows: number; p_file_name: string; p_expected_revision?: number | null }; Returns: boolean };
     clear_operational_base: { Args: { p_kind: string; p_expected_revision?: number | null }; Returns: boolean };

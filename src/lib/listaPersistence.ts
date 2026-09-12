@@ -44,15 +44,23 @@ export function diffLista(lista: ColetaLista): ListaMutation {
       metadata[key] = lista[key];
     }
   }
+  const upserts = lista.itens.filter(item => !previous.has(item.id) ||
+    JSON.stringify(persistedItem(item)) !== JSON.stringify(persistedItem(previous.get(item.id)!)))
+    .map(persistedItem);
+  const removedIds = [...previous.keys()].filter(id => !nextIds.has(id));
+  // Send concurrency versions only for rows touched by this mutation. A scan in
+  // a 1,600-item list therefore remains one small request.
+  const expectedIds = new Set([...upserts.map(item => item.id), ...removedIds]);
   return {
     id: crypto.randomUUID(), listaId: lista.id, metadata,
     create: !original,
     expectedRevision: original?.revision,
-    expectedItems: Object.fromEntries((original?.itens || []).map(item => [item.id, item.revision ?? 0])),
-    upserts: lista.itens.filter(item => !previous.has(item.id) ||
-      JSON.stringify(persistedItem(item)) !== JSON.stringify(persistedItem(previous.get(item.id)!)))
-      .map(persistedItem),
-    removedIds: [...previous.keys()].filter(id => !nextIds.has(id)),
+    expectedItems: Object.fromEntries([...expectedIds].flatMap(id => {
+      const item = previous.get(id);
+      return item ? [[id, item.revision ?? 0]] : [];
+    })),
+    upserts,
+    removedIds,
   };
 }
 

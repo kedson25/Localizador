@@ -208,6 +208,24 @@ grant all on public.profiles, public.coleta_listas, public.coleta_itens, public.
   public.refugo_state, public.refugo_scans, public.individual_items, public.operational_history,
   public.operation_receipts to service_role;
 
+-- Operational users need the approved usernames for the responsibility picker,
+-- while only administrators may receive email addresses and permission details.
+create function public.list_visible_profiles()
+returns table(firebase_uid text, username text, email text, is_admin boolean,
+  is_approved boolean, allowed_groups text[])
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform private.require_access('listas');
+  if private.is_admin() then
+    return query select p.firebase_uid, p.username, p.email, p.is_admin,
+      p.is_approved, p.allowed_groups from public.profiles p order by lower(p.username);
+    return;
+  end if;
+  return query select p.firebase_uid, p.username, ''::text, false, true, '{}'::text[]
+    from public.profiles p where p.is_approved order by lower(p.username);
+end;
+$$;
+
 create function public.mutate_lista(p_mutation jsonb) returns boolean
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -505,11 +523,13 @@ revoke all on all functions in schema private from public, anon, authenticated;
 grant execute on function private.firebase_uid(), private.is_approved(), private.is_admin(), private.has_group(text) to authenticated;
 revoke all on function public.mutate_lista(jsonb), public.upsert_operational_base(text,text,integer,text,bigint),
   public.clear_operational_base(text,bigint), public.mutate_refugo_scans(jsonb,uuid), public.reset_refugo_scans(),
-  public.mutate_individual_items(text,jsonb,text[],boolean), public.promote_individual_session(text,text,jsonb)
+  public.mutate_individual_items(text,jsonb,text[],boolean), public.promote_individual_session(text,text,jsonb),
+  public.list_visible_profiles()
   from public, anon, authenticated;
 grant execute on function public.mutate_lista(jsonb), public.upsert_operational_base(text,text,integer,text,bigint),
   public.clear_operational_base(text,bigint), public.mutate_refugo_scans(jsonb,uuid), public.reset_refugo_scans(),
-  public.mutate_individual_items(text,jsonb,text[],boolean), public.promote_individual_session(text,text,jsonb) to authenticated;
+  public.mutate_individual_items(text,jsonb,text[],boolean), public.promote_individual_session(text,text,jsonb),
+  public.list_visible_profiles() to authenticated;
 
 -- Tables have primary keys so DELETE notifications retain their identifiers.
 -- No per-ID channels: clients subscribe by table or lista_id and read with RLS.

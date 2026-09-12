@@ -45,6 +45,7 @@ export interface ColetaItem {
   user_name?: string;
   user_email?: string;
   created_at?: string;
+  syncStatus?: 'pendente' | 'sincronizando' | 'sincronizado';
   id: string;
   codigo: string;
   rota: string;
@@ -75,7 +76,7 @@ export interface ColetaLista {
   status: 'em_andamento' | 'finalizada';
   saidaPadrao: string;
   motivoPadrao: string;
-  itens?: ColetaItem[];
+  itens: ColetaItem[];
   totalItens?: number;
   porcentagemAcerto?: number;
   fechamentoGaiola?: string;

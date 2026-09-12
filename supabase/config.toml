@@ -1,0 +1,5 @@
+project_id = "localizador-main"
+
+[auth.third_party.firebase]
+enabled = true
+project_id = "ecooy-5b791"

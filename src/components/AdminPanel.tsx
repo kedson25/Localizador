@@ -7,7 +7,7 @@ import {
   Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { listenToListas, saveLista } from '../lib/firebase';
+import { listenToListas, saveLista } from '../lib/coletaSync';
 import { ColetaLista } from '../types';
 
 const TABS = [
@@ -101,6 +101,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [loading, setLoading] = useState(true);
   const [isVerifiedAdmin, setIsVerifiedAdmin] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Modal de métricas para a lista selecionada
@@ -120,8 +121,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
 
   useEffect(() => {
     verifyAndFetch();
-    const unsubListas = listenToListas((data) => {
-      setListas(data);
+    const unsubListas = listenToListas(setListas, error => {
+      setListas([]);
+      setOperationError(error.message);
     });
     return () => {
       unsubListas();
@@ -136,14 +138,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       return;
     }
     
-    const freshUser = await getUserById(currentUser.id);
-    if ((freshUser && freshUser.isAdmin) || (!freshUser && currentUser.isAdmin)) {
-      setIsVerifiedAdmin(true);
-      await fetchUsers();
-    } else {
+    try {
+      const freshUser = await getUserById(currentUser.id);
+      if (freshUser?.isAdmin) {
+        setIsVerifiedAdmin(true);
+        await fetchUsers();
+      } else {
+        setIsVerifiedAdmin(false);
+      }
+      setOperationError(null);
+    } catch (error) {
       setIsVerifiedAdmin(false);
-    }
-    setLoading(false);
+      setOperationError(error instanceof Error ? error.message : 'Não foi possível verificar as permissões.');
+    } finally { setLoading(false); }
   };
 
   const fetchUsers = async () => {
@@ -151,14 +158,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     setUsers(data);
   };
 
+  const runAdminAction = async (action: () => Promise<void>) => {
+    try { await action(); setOperationError(null); }
+    catch (error) { setOperationError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação.'); }
+  };
+
   const toggleApproval = async (userId: string, currentStatus: boolean) => {
-    await updateUserAdminStatus(userId, { isApproved: !currentStatus });
-    fetchUsers();
+    await runAdminAction(async () => {
+      await updateUserAdminStatus(userId, { isApproved: !currentStatus });
+      await fetchUsers();
+    });
   };
 
   const toggleAdmin = async (userId: string, currentStatus: boolean) => {
-    await updateUserAdminStatus(userId, { isAdmin: !currentStatus });
-    fetchUsers();
+    await runAdminAction(async () => {
+      await updateUserAdminStatus(userId, { isAdmin: !currentStatus });
+      await fetchUsers();
+    });
   };
 
   const toggleTabAccess = async (userId: string, currentGroups: string[], tabId: string) => {
@@ -166,8 +182,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       ? currentGroups.filter(t => t !== tabId)
       : [...currentGroups, tabId];
       
-    await updateUserAdminStatus(userId, { allowedGroups: newGroups });
-    fetchUsers();
+    await runAdminAction(async () => {
+      await updateUserAdminStatus(userId, { allowedGroups: newGroups });
+      await fetchUsers();
+    });
   };
 
   const handleOpenMetricsModal = (lista: ColetaLista) => {
@@ -189,8 +207,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       fechamentoGaiola: formGaiola,
       itensFaltaram: parseInt(formFaltaram, 10) || 0
     };
-    await saveLista(updated);
-    setSelectedListaForMetrics(null);
+    await runAdminAction(async () => {
+      await saveLista(updated);
+      setSelectedListaForMetrics(null);
+    });
   };
 
   // Manter selectedListaForReport atualizada com listas em tempo real
@@ -214,8 +234,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       ...selectedListaForReport,
       itens: updatedItens
     };
-    setSelectedListaForReport(updatedLista);
-    await saveLista(updatedLista);
+    await runAdminAction(async () => { await saveLista(updatedLista); });
   };
 
   // Validar todos os pendentes de uma vez no relatório do Admin
@@ -230,8 +249,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       ...selectedListaForReport,
       itens: updatedItens
     };
-    setSelectedListaForReport(updatedLista);
-    await saveLista(updatedLista);
+    await runAdminAction(async () => { await saveLista(updatedLista); });
   };
 
   // Copiar IDs Não Validados
@@ -375,6 +393,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
 
   return (
     <div className="space-y-6 animate-in pb-12">
+      {operationError && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+          {operationError}
+        </div>
+      )}
       {/* NAVEGAÇÃO DE ABAS DO PAINEL ADMIN */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
         <div className="flex items-center gap-2 flex-wrap">
