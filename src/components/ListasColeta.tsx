@@ -2489,16 +2489,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                                 )}
                               </button>
 
-                              {item.syncStatus === 'pendente' && (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200" title="Item gravado no cliente, pendente de envio para o banco">
-                                  <Clock className="w-2.5 h-2.5 text-amber-600" /> Sync Pend.
-                                </span>
-                              )}
-                              {item.syncStatus === 'sincronizando' && (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 border border-blue-200" title="Sincronizando com o Supabase...">
-                                  <Loader2 className="w-2.5 h-2.5 text-[#3483FA] animate-spin" /> Syncing
-                                </span>
-                              )}
                             </div>
                           </td>
 
