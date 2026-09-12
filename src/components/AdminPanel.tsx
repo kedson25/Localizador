@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { listenToListas, saveLista } from '../lib/coletaSync';
+import { listenToRefugoScans, type RefugoScan } from '../services/operational.service';
 import { compareListasNewestFirst } from '../lib/listaOrder';
 import { ColetaLista } from '../types';
 import { PageSkeleton } from './PageSkeleton';
@@ -101,6 +102,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [quickFilter, setQuickFilter] = useState<'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual' | 'custom'>('todos');
   const [users, setUsers] = useState<User[]>([]);
   const [listas, setListas] = useState<ColetaLista[]>([]);
+  const [refugoScans, setRefugoScans] = useState<RefugoScan[]>([]);
   const [loading, setLoading] = useState(true);
   const [listasReady, setListasReady] = useState(false);
   const [isVerifiedAdmin, setIsVerifiedAdmin] = useState(false);
@@ -133,8 +135,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       setListasReady(true);
       setOperationError(error.message);
     });
+    const unsubRefugo = listenToRefugoScans(scans => {
+      setRefugoScans(scans);
+    }, error => setOperationError(error.message));
     return () => {
       unsubListas();
+      unsubRefugo();
     };
   }, [currentUser]);
 
@@ -378,12 +384,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const countRotasBrancas = (lista: ColetaLista) => (lista.itens || []).filter(item =>
     (item.rota || '').trim().toLowerCase().includes('branca')
   ).length;
-  const countRotasEncontradas = (lista: ColetaLista) => (lista.itens || []).filter(item => {
-    const rota = (item.rota || '').trim().toLowerCase();
-    return rota.length > 0 && rota !== '-' && !rota.includes('sem rota') && !rota.includes('branca');
-  }).length;
   const totalBrancasEmFluxo = filteredListas.reduce((acc, lista) => acc + countRotasBrancas(lista), 0);
-  const totalRotasEncontradas = filteredListas.reduce((acc, lista) => acc + countRotasEncontradas(lista), 0);
+  const totalRotasEncontradas = refugoScans.filter(scan => {
+    if (scan.status !== 'found') return false;
+    const scanDate = new Date(scan.scannedAt);
+    if (Number.isNaN(scanDate.getTime())) return false;
+    const scanIso = `${scanDate.getFullYear()}-${String(scanDate.getMonth() + 1).padStart(2, '0')}-${String(scanDate.getDate()).padStart(2, '0')}`;
+    return (!startDate || scanIso >= startDate) && (!endDate || scanIso <= endDate);
+  }).length;
   const mediaAcertoGeral = listasFinalizadas.length > 0 
     ? (listasFinalizadas.reduce((acc, l) => acc + (l.porcentagemAcerto ?? 100), 0) / listasFinalizadas.length).toFixed(1)
     : '0.0';
@@ -861,7 +869,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                         {countRotasBrancas(lista).toLocaleString('pt-BR')}
                       </td>
                       <td className="py-3.5 px-4 text-center font-bold text-cyan-700">
-                        {countRotasEncontradas(lista).toLocaleString('pt-BR')}
+                        {(lista.rotasEncontradas || 0).toLocaleString('pt-BR')}
                       </td>
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
