@@ -230,6 +230,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   // Ref para itens ativos como cache em memória ultra-rápido prevenindo race-conditions em bips velozes
   const activeItensRef = useRef<ColetaItem[]>([]);
+  const pendingBipsRef = useRef(new Map<string, ColetaItem>());
+  const pendingBipsUntilRef = useRef(0);
   const activeListaIdRef = useRef(activeListaId);
   activeListaIdRef.current = activeListaId;
   const lastRefugoTextRef = useRef<string>('');
@@ -261,6 +263,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   useEffect(() => {
     setModoIndividual(false);
     setIsLocked(false);
+    pendingBipsRef.current.clear();
+    pendingBipsUntilRef.current = 0;
   }, [activeListaId]);
 
   // Buscar usuários registrados no sistema
@@ -281,8 +285,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Receber listas e base de refugo do Supabase.
   useEffect(() => {
     const unsubListas = listenToListas((listasServer) => {
-      activeItensRef.current = listasServer.find(lista => lista.id === activeListaIdRef.current)?.itens || [];
-      setListas(listasServer);
+      const activeId = activeListaIdRef.current;
+      const pending = Date.now() < pendingBipsUntilRef.current ? pendingBipsRef.current : new Map<string, ColetaItem>();
+      if (!pending.size) {
+        pendingBipsRef.current.clear();
+        pendingBipsUntilRef.current = 0;
+      }
+      const merged = listasServer.map(lista => {
+        if (lista.id !== activeId || !pending.size) return lista;
+        const serverItems = new Map(lista.itens.map(item => [item.id, item]));
+        pending.forEach(item => serverItems.set(item.id, item));
+        const pendingIds = new Set(pending.keys());
+        return { ...lista, itens: [...pending.values(), ...[...serverItems.values()].filter(item => !pendingIds.has(item.id))] };
+      });
+      activeItensRef.current = merged.find(lista => lista.id === activeId)?.itens || [];
+      setListas(merged);
       setListasLoaded(true);
     }, error => {
       setListasLoaded(true);
@@ -868,6 +885,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     const updatedLista = { ...listaAtiva, itens: novosItens };
     activeItensRef.current = novosItens;
+    pendingBipsRef.current.set(novosItens[0].id, novosItens[0]);
+    pendingBipsUntilRef.current = Date.now() + 5000;
     setListas(previous => previous.map(lista => lista.id === updatedLista.id ? { ...lista, itens: novosItens } : lista));
     void persistLista(updatedLista).then(saved => {
       if (!saved) setLastScanResult({ status: 'error', code: cleanInput, message: 'O servidor não confirmou o bip. Tente novamente.' });
