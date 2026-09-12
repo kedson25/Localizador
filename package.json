@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
-    "test": "node --test tests/*.test.mjs",
+    "test": "tsx --test tests/*.test.mjs tests/*.test.ts",
     "test:db": "node --test tests/supabase-schema.test.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

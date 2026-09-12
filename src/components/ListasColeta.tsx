@@ -40,6 +40,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { listenToRefugo, validateAndCleanIds } from '../services/operational.service';
 import { listenToListas, saveLista, deleteLista, deleteListaItems } from '../lib/coletaSync';
+import { compareListasNewestFirst } from '../lib/listaOrder';
 import { promoteIndividualSession } from '../lib/individualSession';
 import { useIndividualDraft } from './useIndividualDraft';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
@@ -74,6 +75,12 @@ const cleanDigits = (value: string) => (value || '').replace(/\D/g, '');
 const itemCodeKey = (value: string) => {
   const normalized = (value || '').trim().toUpperCase().replace(/M$/, '');
   return cleanDigits(normalized) || normalized;
+};
+const scanTimeValue = (value: string) => {
+  const brazilian = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (brazilian) return new Date(Number(brazilian[3]), Number(brazilian[2]) - 1, Number(brazilian[1]), Number(brazilian[4]), Number(brazilian[5]), Number(brazilian[6] || 0)).getTime();
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
 };
 
 // Appending keeps existing indexes stable while a session contains new and repeated IDs.
@@ -1203,7 +1210,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const exportarApenasIdsCSV = (lista: ColetaLista, itensCustom?: ColetaItem[], sufixoNome?: string) => {
-    const itens = itensCustom || lista.itens;
+    const itens = [...(itensCustom || lista.itens)].sort((left, right) =>
+      scanTimeValue(right.scannedAt) - scanTimeValue(left.scannedAt));
     if (itens.length === 0) {
       alert('Não há itens para exportar.');
       return;
@@ -1228,12 +1236,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || EMPTY_ITEMS);
-  const scanTimeValue = (value: string) => {
-    const brazilian = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2})(?::(\d{2}))?$/);
-    if (brazilian) return new Date(Number(brazilian[3]), Number(brazilian[2]) - 1, Number(brazilian[1]), Number(brazilian[4]), Number(brazilian[5]), Number(brazilian[6] || 0)).getTime();
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? 0 : parsed;
-  };
   const formatScanTime = (value: string) => {
     const parsed = new Date(scanTimeValue(value));
     return scanTimeValue(value) ? parsed.toLocaleString('pt-BR') : value;
@@ -1370,19 +1372,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           (i.saida && i.saida.toLowerCase().includes(term))
         )
       );
-    }).sort((a, b) => {
-      const getPriority = (s: string) => {
-        const u = (s || '').toUpperCase();
-        if (u.includes('AM')) return 1;
-        if (u.includes('SD')) return 2;
-        if (u.includes('PM')) return 3;
-        return 4;
-      };
-      const pA = getPriority(a.saidaPadrao || a.nome);
-      const pB = getPriority(b.saidaPadrao || b.nome);
-      if (pA !== pB) return pA - pB;
-      return b.id.localeCompare(a.id);
-    });
+    }).sort(compareListasNewestFirst);
 
     return (
       <div className="w-full space-y-6 pb-12">

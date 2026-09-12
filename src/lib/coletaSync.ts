@@ -5,6 +5,7 @@ import { applyListaMutation, diffLista, snapshotLista, type ListaMutation } from
 import { databaseOperation, DataError } from '../services/errors';
 import { createLiveQuery } from '../services/realtime.service';
 import { flushOfflineMutations, onOfflineRetry, queueOfflineMutation } from './offlineQueue';
+import { compareListasNewestFirst } from './listaOrder';
 
 const PAGE_SIZE = 500;
 export function itemFromRow(row: ItemRow): ColetaItem {
@@ -13,12 +14,14 @@ export function itemFromRow(row: ItemRow): ColetaItem {
     created_at: row.created_at, syncStatus: 'sincronizado' };
 }
 function listaFromRow(row: ListaRow, itens: ColetaItem[]): ColetaLista {
-  return snapshotLista({ ...(row.data as unknown as ColetaLista), id: row.id, revision: row.revision, itens });
+  return snapshotLista({ ...(row.data as unknown as ColetaLista), id: row.id, revision: row.revision,
+    created_at: row.created_at, updated_at: row.updated_at, itens });
 }
 async function loadMetadata() {
   const rows: ListaRow[] = [];
   for (let offset = 0; ; offset += PAGE_SIZE) {
-    const batch = await databaseOperation('listas:read', () => supabase.from('coleta_listas').select('*').order('id').range(offset, offset + PAGE_SIZE - 1));
+    const batch = await databaseOperation('listas:read', () => supabase.from('coleta_listas').select('*')
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + PAGE_SIZE - 1));
     rows.push(...(batch || []));
     if (!batch || batch.length < PAGE_SIZE) return rows;
   }
@@ -86,7 +89,7 @@ const live = createLiveQuery<Map<string, ColetaLista>>('listas', [{ table: 'cole
   });
 
 export function listenToListas(callback: (listas: ColetaLista[]) => void, onError?: (error: Error) => void) {
-  return live.subscribe(listas => callback([...listas.values()].sort((a, b) => b.data.localeCompare(a.data))), onError);
+  return live.subscribe(listas => callback([...listas.values()].sort(compareListasNewestFirst)), onError);
 }
 export function startListasSync() { return live.subscribe(() => {}); }
 export function refreshListas() { live.refresh(); }
@@ -180,7 +183,8 @@ export async function saveListaItemsBatch(listaId: string, items: ColetaItem[], 
 export async function fetchListasPaginated(options: { pageSize?: number; statusFilter?: 'todas' | 'em_andamento' | 'finalizada'; dateFilter?: string; lastDocSnap?: number | null }) {
   const size = Math.min(options.pageSize || 50, 100);
   const offset = options.lastDocSnap || 0;
-  let query = supabase.from('coleta_listas').select('*').order('data->>data', { ascending: false }).order('id').range(offset, offset + size);
+  let query = supabase.from('coleta_listas').select('*').order('created_at', { ascending: false })
+    .order('id', { ascending: false }).range(offset, offset + size);
   if (options.statusFilter && options.statusFilter !== 'todas') query = query.eq('data->>status', options.statusFilter);
   if (options.dateFilter) query = query.eq('data->>data', options.dateFilter);
   const result = await databaseOperation('listas:read', () => query);

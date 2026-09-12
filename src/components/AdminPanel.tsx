@@ -4,10 +4,12 @@ import {
   Shield, ShieldAlert, CheckCircle, XCircle, Users, Activity, Settings2, 
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
   AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check,
-  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw
+  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw, Presentation, Printer,
+  TrendingUp, Target, Trophy
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { listenToListas, saveLista } from '../lib/coletaSync';
+import { compareListasNewestFirst } from '../lib/listaOrder';
 import { ColetaLista } from '../types';
 
 const TABS = [
@@ -358,7 +360,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     if (endDate && listIso > endDate) return false;
 
     return true;
-  });
+  }).sort(compareListasNewestFirst);
 
   // Texto legível descrevendo o período de cálculo ativo
   const getFilterDescription = () => {
@@ -388,17 +390,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const totalFaltantesGeral = listasFinalizadas.reduce((acc, l) => acc + (l.itensFaltaram || 0), 0);
   const mediaAcertoGeral = listasFinalizadas.length > 0 
     ? (listasFinalizadas.reduce((acc, l) => acc + (l.porcentagemAcerto ?? 100), 0) / listasFinalizadas.length).toFixed(1)
-    : '100.0';
+    : '0.0';
+  const listasEmAndamento = filteredListas.length - listasFinalizadas.length;
+  const taxaValidacao = totalItensColetados > 0
+    ? Math.round((totalValidadosGeral / totalItensColetados) * 100) : 0;
+  const taxaConclusao = filteredListas.length > 0
+    ? Math.round((listasFinalizadas.length / filteredListas.length) * 100) : 0;
+  const mediaItensPorLista = filteredListas.length > 0
+    ? Math.round(totalItensColetados / filteredListas.length) : 0;
+  const operatorRanking = Array.from(filteredListas.reduce((ranking, lista) => {
+    for (const item of lista.itens || []) {
+      const operator = item.responsavel?.trim() || lista.responsavel?.trim() || 'Sem responsável';
+      ranking.set(operator, (ranking.get(operator) || 0) + 1);
+    }
+    return ranking;
+  }, new Map<string, number>()), ([name, total]) => ({ name, total }))
+    .sort((left, right) => right.total - left.total || left.name.localeCompare(right.name))
+    .slice(0, 5);
+  const maxOperatorTotal = operatorRanking[0]?.total || 1;
+  const listasComAtencao = filteredListas.filter(lista =>
+    lista.status !== 'finalizada' || (lista.itens || []).some(item => !item.validado) || (lista.itensFaltaram || 0) > 0);
+  const listaMaisRecente = filteredListas[0];
 
   return (
-    <div className="space-y-6 animate-in pb-12">
+    <div className="admin-presentation space-y-6 animate-in pb-12">
       {operationError && (
         <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
           {operationError}
         </div>
       )}
       {/* NAVEGAÇÃO DE ABAS DO PAINEL ADMIN */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
+      <div className="admin-no-print flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
@@ -448,7 +470,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       {adminTab === 'metricas' && (
         <div className="space-y-6 animate-in fade-in">
           {/* SELETOR DE PERÍODO & DATA DE CÁLCULO */}
-          <div className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
+          <div className="admin-no-print bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-gray-100 pb-4">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 bg-blue-50 text-[#3483FA] rounded-xl border border-blue-100">
@@ -612,48 +634,145 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* PAINEL DE CARDS DE MÉTRICAS */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Activity className="w-6 h-6 text-blue-600" />
+          {/* VISÃO EXECUTIVA PARA APRESENTAÇÕES E REUNIÕES */}
+          <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 text-white shadow-xl">
+            <div className="flex flex-col gap-5 border-b border-white/10 p-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-4">
+                <div className="rounded-xl border border-blue-400/30 bg-blue-500/15 p-3 text-blue-300">
+                  <Presentation className="h-6 w-6" />
+                </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">Resultado Operacional de Cálculo</h2>
-                  <p className="text-xs text-gray-500">Métricas geradas em tempo real com base na data selecionada</p>
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <h2 className="text-xl font-black tracking-tight">Visão executiva da operação</h2>
+                    <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-300">
+                      Atualização em tempo real
+                    </span>
+                  </div>
+                  <p className="max-w-2xl text-sm text-slate-300">{getFilterDescription()}</p>
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="admin-no-print inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-white/20"
+              >
+                <Printer className="h-4 w-4" />
+                Imprimir ou salvar em PDF
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-blue-700">{totalItensColetados}</div>
-                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Total Coletado</div>
-              </div>
-              <div className="bg-emerald-50/80 border border-emerald-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-emerald-700">{totalValidadosGeral}</div>
-                <div className="text-xs text-emerald-600 font-bold uppercase mt-1">Validados</div>
-              </div>
-              <div className={`p-4 rounded-xl border ${
-                totalNaoValidadosGeral > 0 
-                  ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200' 
-                  : 'bg-gray-50 border-gray-100'
-              }`}>
-                <div className="text-2xl font-black text-amber-800">{totalNaoValidadosGeral}</div>
-                <div className="text-xs text-amber-700 font-bold uppercase mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3 text-amber-600" />
-                  Não Validados
+            <div className="grid grid-cols-1 gap-px bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="bg-slate-950 p-5">
+                <div className="mb-3 flex items-center justify-between text-blue-300">
+                  <span className="text-[11px] font-black uppercase tracking-widest">Volume coletado</span>
+                  <Package className="h-4 w-4" />
                 </div>
+                <div className="text-3xl font-black tabular-nums">{totalItensColetados.toLocaleString('pt-BR')}</div>
+                <p className="mt-1 text-xs text-slate-400">{mediaItensPorLista.toLocaleString('pt-BR')} itens por lista, em média</p>
               </div>
-              <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-blue-800">{mediaAcertoGeral}%</div>
-                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Média de Acerto</div>
+              <div className="bg-slate-950 p-5">
+                <div className="mb-3 flex items-center justify-between text-emerald-300">
+                  <span className="text-[11px] font-black uppercase tracking-widest">Taxa de validação</span>
+                  <Target className="h-4 w-4" />
+                </div>
+                <div className="text-3xl font-black tabular-nums">{taxaValidacao}%</div>
+                <p className="mt-1 text-xs text-slate-400">{totalValidadosGeral.toLocaleString('pt-BR')} confirmados de {totalItensColetados.toLocaleString('pt-BR')}</p>
               </div>
-              <div className="bg-purple-50/80 border border-purple-100 p-4 rounded-xl">
-                <div className="text-2xl font-black text-purple-700">{listasFinalizadas.length} / {filteredListas.length}</div>
-                <div className="text-xs text-purple-600 font-bold uppercase mt-1">Finalizadas</div>
+              <div className="bg-slate-950 p-5">
+                <div className="mb-3 flex items-center justify-between text-violet-300">
+                  <span className="text-[11px] font-black uppercase tracking-widest">Listas concluídas</span>
+                  <CheckCircle2 className="h-4 w-4" />
+                </div>
+                <div className="text-3xl font-black tabular-nums">{listasFinalizadas.length}<span className="text-lg text-slate-500">/{filteredListas.length}</span></div>
+                <p className="mt-1 text-xs text-slate-400">{taxaConclusao}% do período encerrado</p>
+              </div>
+              <div className="bg-slate-950 p-5">
+                <div className="mb-3 flex items-center justify-between text-amber-300">
+                  <span className="text-[11px] font-black uppercase tracking-widest">Média de acerto</span>
+                  <TrendingUp className="h-4 w-4" />
+                </div>
+                <div className="text-3xl font-black tabular-nums">{mediaAcertoGeral}%</div>
+                <p className="mt-1 text-xs text-slate-400">Baseada nas listas finalizadas</p>
               </div>
             </div>
+          </section>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="mb-5 flex items-center gap-3">
+                <div className="rounded-xl bg-blue-50 p-2 text-blue-600"><Activity className="h-5 w-5" /></div>
+                <div>
+                  <h3 className="text-sm font-black text-gray-900">Progresso operacional</h3>
+                  <p className="text-xs text-gray-500">Leitura rápida para acompanhamento</p>
+                </div>
+              </div>
+              <div className="space-y-5">
+                <div>
+                  <div className="mb-2 flex justify-between text-xs font-bold text-gray-600"><span>Itens validados</span><span>{taxaValidacao}%</span></div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${taxaValidacao}%` }} /></div>
+                </div>
+                <div>
+                  <div className="mb-2 flex justify-between text-xs font-bold text-gray-600"><span>Listas finalizadas</span><span>{taxaConclusao}%</span></div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-blue-500" style={{ width: `${taxaConclusao}%` }} /></div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center gap-3">
+                <div className="rounded-xl bg-amber-50 p-2 text-amber-600"><Trophy className="h-5 w-5" /></div>
+                <div>
+                  <h3 className="text-sm font-black text-gray-900">Destaques do período</h3>
+                  <p className="text-xs text-gray-500">Dados para abertura da reunião</p>
+                </div>
+              </div>
+              <dl className="divide-y divide-gray-100 text-sm">
+                <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-gray-500">Maior volume</dt><dd className="max-w-[55%] truncate font-black text-gray-900">{operatorRanking[0]?.name || 'Sem dados'}</dd></div>
+                <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-gray-500">Média por lista</dt><dd className="font-black text-gray-900">{mediaItensPorLista.toLocaleString('pt-BR')} itens</dd></div>
+                <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-gray-500">Lista mais recente</dt><dd className="max-w-[55%] truncate font-black text-gray-900">{listaMaisRecente?.nome || 'Sem dados'}</dd></div>
+              </dl>
+            </section>
+
+            <section className={`rounded-2xl border p-5 shadow-sm ${listasComAtencao.length > 0 ? 'border-amber-200 bg-amber-50/60' : 'border-emerald-200 bg-emerald-50/60'}`}>
+              <div className="mb-4 flex items-center gap-3">
+                <div className={`rounded-xl p-2 ${listasComAtencao.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  {listasComAtencao.length > 0 ? <AlertTriangle className="h-5 w-5" /> : <CheckCircle className="h-5 w-5" />}
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-gray-900">Pontos de atenção</h3>
+                  <p className="text-xs text-gray-600">Pendências que pedem decisão</p>
+                </div>
+              </div>
+              <dl className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-white/80 p-3"><dd className="text-xl font-black text-amber-800">{listasEmAndamento}</dd><dt className="mt-1 text-[10px] font-bold uppercase text-gray-500">Em andamento</dt></div>
+                <div className="rounded-xl bg-white/80 p-3"><dd className="text-xl font-black text-amber-800">{totalNaoValidadosGeral}</dd><dt className="mt-1 text-[10px] font-bold uppercase text-gray-500">Não validados</dt></div>
+                <div className="rounded-xl bg-white/80 p-3"><dd className="text-xl font-black text-red-700">{totalFaltantesGeral}</dd><dt className="mt-1 text-[10px] font-bold uppercase text-gray-500">Faltantes</dt></div>
+              </dl>
+            </section>
           </div>
+
+          {operatorRanking.length > 0 && (
+            <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+              <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h3 className="text-base font-black text-gray-900">Participação por responsável</h3>
+                  <p className="text-xs text-gray-500">Cinco maiores volumes de leitura no período selecionado</p>
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">Total de itens registrados</span>
+              </div>
+              <div className="grid gap-x-8 gap-y-4 lg:grid-cols-2">
+                {operatorRanking.map((operator, index) => (
+                  <div key={operator.name} className="space-y-2">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="flex min-w-0 items-center gap-2 font-bold text-gray-700"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] text-white">{index + 1}</span><span className="truncate">{operator.name}</span></span>
+                      <span className="font-black tabular-nums text-gray-900">{operator.total.toLocaleString('pt-BR')}</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" style={{ width: `${Math.max(6, Math.round((operator.total / maxOperatorTotal) * 100))}%` }} /></div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* TABELA DE LISTAS DA DATA DE CÁLCULO */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
@@ -682,7 +801,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <th className="py-3 px-4 text-center">Acerto (%)</th>
                     <th className="py-3 px-4 text-center">Gaiola</th>
                     <th className="py-3 px-4 text-center">Faltaram</th>
-                    <th className="py-3 px-4 text-center">Ações</th>
+                    <th className="admin-no-print py-3 px-4 text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -751,7 +870,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                       <td className="py-3.5 px-4 text-center font-bold text-red-600">
                         {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
                       </td>
-                      <td className="py-3.5 px-4 text-center">
+                      <td className="admin-no-print py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
                             type="button"

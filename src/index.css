@@ -6,3 +6,24 @@
   }
 }
 
+/* The administrative dashboard is also used as a meeting artifact. Restore
+   its intended visual hierarchy without changing the operational screens. */
+.admin-presentation .rounded-2xl { border-radius: 1rem !important; }
+.admin-presentation .rounded-xl { border-radius: 0.75rem !important; }
+.admin-presentation .rounded-lg { border-radius: 0.5rem !important; }
+.admin-presentation .rounded-md { border-radius: 0.375rem !important; }
+.admin-presentation .rounded-full { border-radius: 9999px !important; }
+
+@media print {
+  @page { size: landscape; margin: 10mm; }
+  body { background: white !important; }
+  .admin-no-print { display: none !important; }
+  .admin-presentation {
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .admin-presentation section,
+  .admin-presentation table { break-inside: avoid; }
+  .admin-presentation button { box-shadow: none !important; }
+}

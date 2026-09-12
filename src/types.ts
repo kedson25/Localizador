@@ -65,6 +65,8 @@ export interface ColetaGrupo {
 
 export interface ColetaLista {
   revision?: number;
+  created_at?: string;
+  updated_at?: string;
   id: string;
   nome: string;
   tipo?: 'comum' | 'grupos';
