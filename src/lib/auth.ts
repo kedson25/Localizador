@@ -51,10 +51,15 @@ async function runInteractiveAuth<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+function authErrorCode(error: unknown): string {
+  return typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+}
+
 export function authErrorMessage(error: unknown): string {
-  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  const code = authErrorCode(error);
   if (code === 'auth/network-request-failed' || code === 'functions/unavailable') return 'Sem conexão com o serviço de autenticação. Tente novamente.';
   if (code === 'functions/deadline-exceeded' || code === 'auth/timeout') return 'O serviço de autenticação demorou para responder. Tente novamente.';
+  if (code === 'functions/not-found' || code === 'functions/internal') return 'A integração entre Firebase e Supabase ainda não está disponível. Publique as Cloud Functions do projeto Firebase.';
   if (code === 'auth/too-many-requests' || code === 'functions/resource-exhausted') return 'Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.';
   if (['auth/invalid-credential', 'auth/user-not-found', 'auth/wrong-password', 'functions/unauthenticated'].includes(code)) return 'Usuário/e-mail ou senha inválidos.';
   if (code === 'auth/email-already-in-use') return 'E-mail já cadastrado. Faça login para continuar.';
@@ -82,19 +87,50 @@ async function prepareSession(firebaseUser: FirebaseUser, username?: string): Pr
 
 export async function signupUser(username: string, email: string, password: string): Promise<{ success: boolean; message?: string }> {
   return runInteractiveAuth(async () => {
-    let accountCreated = false;
+    const normalizedUsername = username.trim();
+    const normalizedEmail = email.trim();
+    let firebaseUser: FirebaseUser | null = null;
+    let existingFirebaseAccount = false;
     try {
-      const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      accountCreated = true;
-      await updateProfile(credential.user, { displayName: username.trim() });
-      await prepareSession(credential.user, username.trim());
-      return { success: true };
+      try {
+        const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+        firebaseUser = credential.user;
+      } catch (error) {
+        if (authErrorCode(error) !== 'auth/email-already-in-use') throw error;
+
+        existingFirebaseAccount = true;
+        try {
+          const credential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+          firebaseUser = credential.user;
+        } catch (loginError) {
+          if (['auth/invalid-credential', 'auth/user-not-found', 'auth/wrong-password'].includes(authErrorCode(loginError))) {
+            return {
+              success: false,
+              message: 'Este e-mail já existe no Firebase. Informe a senha atual dessa conta para vinculá-la ao sistema.',
+            };
+          }
+          throw loginError;
+        }
+      }
+
+      if (!existingFirebaseAccount || !firebaseUser.displayName) {
+        await updateProfile(firebaseUser, { displayName: normalizedUsername });
+      }
+      await prepareSession(firebaseUser, normalizedUsername);
+      return {
+        success: true,
+        message: existingFirebaseAccount
+          ? 'Conta Firebase vinculada ao sistema! Aguarde a aprovação de um Administrador.'
+          : 'Cadastro realizado! Aguarde a aprovação de um Administrador.',
+      };
     } catch (error) {
       // A partially completed signup can safely be resumed by logging in with its email.
-      const resume = accountCreated ? ' Sua conta Firebase foi criada; faça login com o e-mail para concluir o cadastro.' : '';
+      const resume = firebaseUser && !existingFirebaseAccount
+        ? ' Sua conta Firebase foi criada; repita o cadastro com o mesmo e-mail e senha para concluir a vinculação.'
+        : '';
       return { success: false, message: authErrorMessage(error) + resume };
     } finally {
-      if (accountCreated) await signOut(auth);
+      if (firebaseUser) await signOut(auth);
     }
   });
 }

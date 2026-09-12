@@ -68,7 +68,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setIsLoading(false);
     
     if (res.success) {
-      setSuccessMsg('Cadastro realizado! Aguarde a aprovação de um Administrador.');
+      setSuccessMsg(res.message || 'Cadastro realizado! Aguarde a aprovação de um Administrador.');
       setMode('login');
       setStep(1);
       setUsername('');
@@ -203,7 +203,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[13px] text-gray-600 font-medium">Nova Senha</label>
+                <label className="text-[13px] text-gray-600 font-medium">Senha</label>
                 <div className="relative">
                   <input 
                     type={showPassword ? "text" : "password"} 
@@ -219,6 +219,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <p className="text-[11px] leading-4 text-gray-500">
+                  Se o e-mail já existe no Firebase, informe a senha atual para vincular a conta.
+                </p>
               </div>
               <button 
                 type="submit"
