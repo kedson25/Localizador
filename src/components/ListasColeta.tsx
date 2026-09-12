@@ -239,6 +239,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const operanteNome = currentUser?.username || 'Usuário Atual';
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
+  const leitorTravado = isLocked || listaAtiva?.status === 'finalizada';
 
   const persistLista = async (lista: ColetaLista, immediate = false): Promise<boolean> => {
     if (savingListaRef.current) {
@@ -263,6 +264,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   useEffect(() => {
     setModoIndividual(false);
+    setIsLocked(false);
   }, [activeListaId]);
 
   // Buscar usuários registrados no sistema
@@ -369,6 +371,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return () => clearTimeout(t);
     }
   }, [listaAtiva, isLoadingLista]);
+
+  useEffect(() => {
+    if (!listaAtiva || leitorTravado || isSavingLista || individualDraft.saving || isSavingUnify) return;
+    const focusScanner = () => inputRef.current?.focus();
+    focusScanner();
+    const timer = setTimeout(focusScanner, 150);
+    return () => clearTimeout(timer);
+  }, [listaAtiva?.id, listaAtiva?.status, listaAtiva?.itens, leitorTravado, isSavingLista, individualDraft.saving, isSavingUnify]);
 
   const handleAbrirLista = (id: string) => {
     setOpeningListaId(id);
@@ -746,7 +756,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Bipar ID na tela de coleta
   const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bipInput.trim() || !listaAtiva || isLocked || savingListaRef.current || individualDraft.saving || isSavingUnify) return;
+    if (!bipInput.trim() || !listaAtiva || leitorTravado || savingListaRef.current || individualDraft.saving || isSavingUnify) return;
 
     let processedInput = bipInput.trim();
     processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
@@ -2618,16 +2628,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               <button 
                 type="button" 
                 onClick={() => {
+                  if (listaAtiva.status === 'finalizada') return;
                   setIsLocked(!isLocked);
                   if (isLocked) setTimeout(() => inputRef.current?.focus(), 50);
                 }}
-                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border cursor-pointer ${
-                  isLocked 
+                disabled={listaAtiva.status === 'finalizada'}
+                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border ${
+                  listaAtiva.status === 'finalizada' ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : leitorTravado
                     ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 cursor-pointer'
                 }`}
               >
-                {isLocked ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
+                {leitorTravado ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
               </button>
             </div>
 
@@ -2635,7 +2647,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <form onSubmit={handleBip} className="mt-3">
               <div className="relative flex items-center">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Barcode className={`h-5 w-5 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
+                  <Barcode className={`h-5 w-5 ${leitorTravado ? 'text-gray-300' : 'text-[#3483FA]'}`} />
                 </div>
                 <input
                   ref={inputRef}
@@ -2643,11 +2655,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   value={bipInput}
                   onChange={(e) => setBipInput(e.target.value)}
                   onBlur={() => {
-                    if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
+                    if (!leitorTravado) setTimeout(() => inputRef.current?.focus(), 150);
                   }}
-                  disabled={isLocked || isSavingLista || individualDraft.saving || isSavingUnify || (modoIndividual && !individualDraft.ready)}
+                  disabled={leitorTravado || isSavingLista || individualDraft.saving || isSavingUnify || (modoIndividual && !individualDraft.ready)}
                   className={`block w-full pl-11 pr-3 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
-                    isLocked 
+                    leitorTravado
                       ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
                       : 'border-[#3483FA]/40 focus:ring-2 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-400'
                   }`}
@@ -2657,7 +2669,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </div>
               <button
                 type="submit"
-                disabled={isLocked || !bipInput.trim()}
+                disabled={leitorTravado || !bipInput.trim()}
                 className="w-full mt-2 py-2.5 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
               >
                 Registrar Bip
