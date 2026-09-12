@@ -29,8 +29,8 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
   let epoch = 0;
 
   const fail = (cause: unknown) => {
-    value = undefined;
     const error = toDataError(cause);
+    if (error.kind === 'auth' || error.kind === 'permission') value = undefined;
     syncFailure(context, error.message);
     subscribers.forEach(subscriber => subscriber.error?.(error));
   };

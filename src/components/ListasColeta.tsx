@@ -289,10 +289,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setListas(listasServer);
       setListasLoaded(true);
     }, error => {
-      activeItensRef.current = [];
-      setListas([]);
       setListasLoaded(true);
-      setIsLoadingLista(false);
       setStorageError(error.message);
     });
 
