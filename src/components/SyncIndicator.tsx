@@ -7,6 +7,7 @@ export function SyncIndicator({ error, onRetry }: { error?: string | null; onRet
   useEffect(() => subscribeSyncStatus(setStatus), []);
   const failure = error || status.error;
   const label = status.state === 'Sem conexão' ? status.state : failure ? 'Erro de sincronização' : status.state;
+  if (!failure && label === 'Sincronizando...') return null;
   const Icon = label === 'Sem conexão' ? CloudOff : failure ? AlertCircle : label === 'Sincronizando...' ? Loader2 : CheckCircle2;
   const colors = failure ? 'text-red-800 bg-red-50 border-red-200' : label === 'Sincronizado' ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-amber-800 bg-amber-50 border-amber-200';
   return <button type="button" onClick={onRetry} title={failure || label} aria-live="polite"

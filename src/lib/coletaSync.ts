@@ -4,6 +4,7 @@ import { asJson, type ItemRow, type ListaRow } from './database.types';
 import { diffLista, snapshotLista, type ListaMutation } from './listaPersistence';
 import { databaseOperation, DataError } from '../services/errors';
 import { createLiveQuery } from '../services/realtime.service';
+import { flushOfflineMutations, onOfflineRetry, queueOfflineMutation } from './offlineQueue';
 
 const PAGE_SIZE = 500;
 export function itemFromRow(row: ItemRow): ColetaItem {
@@ -34,13 +35,14 @@ async function loadItems(listaId?: string) {
 }
 export async function getListaById(listaId: string): Promise<ColetaLista | null> {
   // A revision bracket prevents publishing items paged across different commits.
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 8; attempt++) {
     const row = await databaseOperation('listas:read', () => supabase.from('coleta_listas').select('*').eq('id', listaId).maybeSingle());
     if (!row) return null;
     const items = await loadItems(listaId);
     const after = await databaseOperation('listas:read', () => supabase.from('coleta_listas').select('revision').eq('id', listaId).maybeSingle());
     if (!after) return null;
     if (after.revision === row.revision) return listaFromRow(row, items.map(itemFromRow));
+    await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new DataError('conflict', 'A lista está recebendo alterações. Aguarde a sincronização e tente novamente.');
 }
@@ -51,7 +53,17 @@ const live = createLiveQuery<Map<string, ColetaLista>>('listas', [{ table: 'cole
       const next = new Map(previous);
       const ids = [...changed];
       for (let offset = 0; offset < ids.length; offset += 4) {
-        const updates = await Promise.all(ids.slice(offset, offset + 4).map(async id => [id, await getListaById(id)] as const));
+        const updates = await Promise.all(ids.slice(offset, offset + 4).map(async id => {
+          try {
+            return [id, await getListaById(id)] as const;
+          } catch (error) {
+            if (error instanceof DataError && error.kind === 'conflict') {
+              setTimeout(() => live.refresh(id), 100);
+              return [id, previous.get(id) || null] as const;
+            }
+            throw error;
+          }
+        }));
         for (const [id, lista] of updates) { if (lista) next.set(id, lista); else next.delete(id); }
       }
       return next;
@@ -79,12 +91,33 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void, onErro
 export function startListasSync() { return live.subscribe(() => {}); }
 export function refreshListas() { live.refresh(); }
 let writeChain: Promise<unknown> = Promise.resolve();
+type QueuedListaMutation = ListaMutation;
+
+async function sendMutation(mutation: QueuedListaMutation): Promise<void> {
+  const saved = await databaseOperation('listas:write', () => supabase.rpc('mutate_lista', { p_mutation: asJson(mutation) }));
+  if (!saved) throw new DataError('database', 'O servidor não confirmou a alteração.');
+}
+
+function replayQueuedMutations() {
+  void flushOfflineMutations<QueuedListaMutation>('listas', async mutation => {
+    await sendMutation(mutation);
+    live.refresh(mutation.listaId);
+  });
+}
+
+if (typeof window !== 'undefined') onOfflineRetry(replayQueuedMutations);
+
 async function submit(mutation: ListaMutation): Promise<boolean> {
   const write = writeChain.catch(() => undefined).then(async () => {
     try {
-      const saved = await databaseOperation('listas:write', () => supabase.rpc('mutate_lista', { p_mutation: asJson(mutation) }));
-      if (!saved) throw new DataError('database', 'O servidor não confirmou a alteração.');
+      await sendMutation(mutation);
       return true;
+    } catch (error) {
+      if (error instanceof DataError && error.kind === 'network') {
+        await queueOfflineMutation('listas', mutation);
+        return true;
+      }
+      throw error;
     } finally { live.refresh(mutation.listaId); }
   });
   writeChain = write;

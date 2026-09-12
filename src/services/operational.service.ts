@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { asJson, type BaseRow } from '../lib/database.types';
 import { databaseOperation, DataError } from './errors';
 import { createLiveQuery } from './realtime.service';
+import { flushOfflineMutations, onOfflineRetry, queueOfflineMutation } from '../lib/offlineQueue';
 
 export interface RefugoData { rawText: string; totalRows: number; updatedAt: string; fileName: string; revision: number }
 export type ColetorData = RefugoData;
@@ -17,6 +18,32 @@ const bases = {
   coletor: createLiveQuery('coletor', [{ table: 'bases_operacionais', filter: 'kind=eq.coletor' }], () => loadBase('coletor')),
   refugo: createLiveQuery('refugo', [{ table: 'bases_operacionais', filter: 'kind=eq.refugo' }], () => loadBase('refugo')),
 };
+interface QueuedBaseMutation { action: 'save' | 'clear'; kind: Kind; rawText?: string; totalRows?: number; fileName?: string; expectedRevision: number | null }
+interface QueuedRefugoScan { scan: RefugoScan; generation: string | null }
+async function replayQueuedBaseMutations() {
+  await flushOfflineMutations<QueuedBaseMutation>('bases', async mutation => {
+    if (mutation.action === 'clear') {
+      await databaseOperation(`base:${mutation.kind}:write`, () => supabase.rpc('clear_operational_base', { p_kind: mutation.kind, p_expected_revision: mutation.expectedRevision }));
+    } else {
+      await databaseOperation(`base:${mutation.kind}:write`, () => supabase.rpc('upsert_operational_base', {
+        p_kind: mutation.kind, p_raw_text: mutation.rawText || '', p_total_rows: mutation.totalRows || 0,
+        p_file_name: mutation.fileName || '', p_expected_revision: mutation.expectedRevision,
+      }));
+    }
+    bases[mutation.kind].refresh();
+  });
+}
+if (typeof window !== 'undefined') onOfflineRetry(() => { void replayQueuedBaseMutations(); });
+async function replayQueuedRefugoScans() {
+  await flushOfflineMutations<QueuedRefugoScan>('refugo', async mutation => {
+    await databaseOperation('refugoScans:write', () => supabase.rpc('mutate_refugo_scans', {
+      p_scans: asJson([mutation.scan]), p_generation: mutation.generation,
+    }));
+    scansLive.refresh();
+  });
+}
+if (typeof window !== 'undefined') onOfflineRetry(() => { void replayQueuedRefugoScans(); });
+
 async function saveBase(kind: Kind, rawText: string, totalRows: number, fileName: string) {
   const current = bases[kind].current();
   const existing = current === undefined ? await loadBase(kind) : current;
@@ -24,6 +51,12 @@ async function saveBase(kind: Kind, rawText: string, totalRows: number, fileName
     return await databaseOperation(`base:${kind}:write`, () => supabase.rpc('upsert_operational_base', {
       p_kind: kind, p_raw_text: rawText, p_total_rows: totalRows, p_file_name: fileName, p_expected_revision: existing?.revision ?? null,
     }));
+  } catch (error) {
+    if (error instanceof DataError && error.kind === 'network') {
+      await queueOfflineMutation('bases', { action: 'save', kind, rawText, totalRows, fileName, expectedRevision: existing?.revision ?? null } satisfies QueuedBaseMutation);
+      return true;
+    }
+    throw error;
   } finally { bases[kind].refresh(); if (kind === 'refugo') scansLive.refresh(); }
 }
 async function clearBase(kind: Kind) {
@@ -64,6 +97,13 @@ async function loadScans() {
 const scansLive = createLiveQuery('refugoScans', [{ table: 'refugo_scans' }, { table: 'refugo_state' }], () => loadScans());
 export async function saveRefugoScan(scan: RefugoScan, generation: string | null): Promise<boolean> {
   try { return await databaseOperation('refugoScans:write', () => supabase.rpc('mutate_refugo_scans', { p_scans: asJson([scan]), p_generation: generation })); }
+  catch (error) {
+    if (error instanceof DataError && error.kind === 'network') {
+      await queueOfflineMutation('refugo', { scan, generation } satisfies QueuedRefugoScan);
+      return true;
+    }
+    throw error;
+  }
   finally { scansLive.refresh(); }
 }
 export async function saveRefugoScans(scans: RefugoScan[]): Promise<boolean> {

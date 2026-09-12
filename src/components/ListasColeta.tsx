@@ -1250,7 +1250,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         </div>
         <div className="text-center">
           <h3 className="text-base font-bold text-[#333333]">{listasLoaded ? 'Lista ainda não disponível' : 'Carregando lista de coleta...'}</h3>
-          <p className="text-xs text-gray-500 mt-1">{listasLoaded ? storageError || 'A lista pode ter sido excluída ou não estar disponível no servidor.' : 'Sincronizando dados em tempo real'}</p>
+          <p className="text-xs text-gray-500 mt-1">{listasLoaded ? storageError || 'A lista pode ter sido excluída ou não estar disponível no servidor.' : 'Carregando dados...'}</p>
         </div>
         <button onClick={() => navigate('/listas')} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold cursor-pointer">Voltar para listas</button>
       </div>
