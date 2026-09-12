@@ -98,7 +98,12 @@ export async function flushOfflineMutations<T>(namespace: string, send: (payload
 
 export function onOfflineRetry(callback: () => void): () => void {
   const retry = () => callback();
+  const retryTimer = setInterval(retry, 10000);
   window.addEventListener('online', retry);
   window.addEventListener(RETRY_EVENT, retry);
-  return () => { window.removeEventListener('online', retry); window.removeEventListener(RETRY_EVENT, retry); };
+  return () => {
+    clearInterval(retryTimer);
+    window.removeEventListener('online', retry);
+    window.removeEventListener(RETRY_EVENT, retry);
+  };
 }

@@ -22,6 +22,7 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
   let value: T | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
+  let fallbackTimer: ReturnType<typeof setInterval> | undefined;
   let dirty = new Set<string>();
   let full = true;
   let working = false;
@@ -64,8 +65,16 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
     fail(new DataError('network', 'Sem conexão. Os dados precisam ser consultados novamente no servidor.'));
   };
   const onOnline = () => {
-    // A successful subscription handshake, not navigator.onLine, establishes sync.
     if (channel?.state === 'joined') { connected = true; refresh(); }
+    else if (subscribers.size) activateHttpFallback();
+  };
+  const activateHttpFallback = () => {
+    if (fallbackTimer || !subscribers.size) return;
+    // Corporate networks often block WebSocket while allowing HTTPS REST calls.
+    connected = true;
+    syncConnection(context, true);
+    refresh();
+    fallbackTimer = setInterval(() => { if (connected) refresh(); }, 5000);
   };
   const start = async () => {
     const generation = ++epoch;
@@ -84,22 +93,31 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
       }
       channel.subscribe(status => {
         if (generation !== epoch) return;
-        if (status === 'SUBSCRIBED') { connected = true; refresh(); }
+        if (status === 'SUBSCRIBED') {
+          if (fallbackTimer) clearInterval(fallbackTimer);
+          fallbackTimer = undefined;
+          connected = true;
+          refresh();
+        }
         else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
-          connected = false; syncConnection(context, false);
-          fail(new DataError('network', 'A sincronização foi interrompida. Tentando reconectar ao Supabase.'));
+          activateHttpFallback();
         }
       });
-      // Reconcile missed events as well as RLS changes. Never expose a disk cache.
+      // Reconcile missed events as well as RLS changes. HTTPS fallback keeps
+      // synchronization working when a corporate firewall blocks WebSocket.
       healthTimer = setInterval(() => { if (connected) refresh(); }, 60000);
       window.addEventListener('offline', onOffline);
       window.addEventListener('online', onOnline);
-    } catch (error) { if (generation === epoch) fail(error); }
+    } catch (error) {
+      if (generation === epoch && error instanceof DataError && error.kind === 'auth') fail(error);
+      else if (generation === epoch) activateHttpFallback();
+    }
   };
   const stop = () => {
     epoch++; connected = false; value = undefined; full = true; dirty.clear();
     if (timer) clearTimeout(timer); timer = undefined;
     if (healthTimer) clearInterval(healthTimer); healthTimer = undefined;
+    if (fallbackTimer) clearInterval(fallbackTimer); fallbackTimer = undefined;
     if (channel) void supabase.removeChannel(channel); channel = undefined;
     window.removeEventListener('offline', onOffline); window.removeEventListener('online', onOnline);
     syncConnection(context, null);
