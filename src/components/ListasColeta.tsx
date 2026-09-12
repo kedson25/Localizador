@@ -2369,10 +2369,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
                         <input
                           type="checkbox"
-                          checked={visibleItems.length > 0 && visibleItems.every(i => selectedItemIdSet.has(i.id))}
-                          onChange={() => handleToggleSelectAll(visibleItems)}
+                          checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIdSet.has(i.id))}
+                          onChange={() => handleToggleSelectAll(filteredItems)}
                           className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
-                          title="Selecionar/Desmarcar Todos os visíveis"
+                          title="Selecionar/Desmarcar todos os IDs filtrados"
                         />
                       </th>
                       <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">#</th>
