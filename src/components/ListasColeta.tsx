@@ -279,6 +279,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   }, []);
 
   const persistLista = async (lista: ColetaLista, immediate = false): Promise<boolean> => {
+    pinnedListasRef.current.delete(lista.id);
     savingListaCountRef.current += 1;
     setIsSavingLista(true);
     try {
