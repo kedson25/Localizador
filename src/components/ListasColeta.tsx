@@ -2396,7 +2396,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         />
                       </th>
                       <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">#</th>
-                      <th className="py-1 px-1 sm:px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
+                      <th className="min-w-[150px] py-1 px-2 sm:px-3 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
                       {listaAtiva.tipo === 'grupos' && (
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100 text-gray-700">Grupo</th>
                       )}
@@ -2435,12 +2435,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - pageOffset - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
+                            className="min-w-[150px] py-1 px-2 sm:px-3 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
                             <div className="flex items-center gap-1.5 font-mono text-xs">
                               <Barcode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                              <span>{item.codigo}</span>
+                              <span className="whitespace-nowrap">{item.codigo}</span>
                             </div>
                           </td>
 
