@@ -1212,12 +1212,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || EMPTY_ITEMS);
+  const scanTimeValue = (value: string) => {
+    const brazilian = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (brazilian) return new Date(Number(brazilian[3]), Number(brazilian[2]) - 1, Number(brazilian[1]), Number(brazilian[4]), Number(brazilian[5]), Number(brazilian[6] || 0)).getTime();
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  const formatScanTime = (value: string) => {
+    const parsed = new Date(scanTimeValue(value));
+    return scanTimeValue(value) ? parsed.toLocaleString('pt-BR') : value;
+  };
   const orderedListItems = useMemo(() => [...listToVerify].sort((left, right) => {
-    const parseScanTime = (value: string) => {
-      const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2}):(\d{2})$/);
-      return match ? new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6])).getTime() : 0;
-    };
-    return parseScanTime(right.scannedAt) - parseScanTime(left.scannedAt);
+    return scanTimeValue(right.scannedAt) - scanTimeValue(left.scannedAt);
   }), [listToVerify]);
   const totalColetados = orderedListItems.length;
   const bipsPorOperador = useMemo(() => {
@@ -2547,7 +2553,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA DATA / HORA - NEUTRA */}
                           <td className="py-1 px-1 sm:px-2 text-center text-gray-500 text-[11px] border-r border-gray-200">
-                            {item.scannedAt}
+                            {formatScanTime(item.scannedAt)}
                           </td>
                           <td className="py-1 px-1 sm:px-2 text-center">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -3056,7 +3062,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                                 </div>
                                 <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-500">
                                   <span>Motivo: <strong className="text-gray-700">{item.motivo}</strong></span>
-                                  <span>• {item.scannedAt}</span>
+                                  <span>• {formatScanTime(item.scannedAt)}</span>
                                 </div>
                               </div>
                             </div>
