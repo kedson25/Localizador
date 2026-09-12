@@ -835,7 +835,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     if (idx !== -1) {
       // Atualizar item existente
-      novosItens[idx] = {
+      const itemAtualizado = {
         ...novosItens[idx],
         saida: saidaItemFinal,
         motivo: selectedMotivo || novosItens[idx].motivo,
@@ -845,6 +845,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId,
         syncStatus: 'pendente'
       };
+      // O ultimo pacote bipado sempre aparece primeiro, mesmo se ja estava na lista.
+      novosItens = [itemAtualizado, ...novosItens.filter((_, itemIndex) => itemIndex !== idx)];
       scanMessage = `ID já existente atualizado! (Rota: ${rotaItemFinal})`;
     } else {
       // Adicionar novo ID na lista
