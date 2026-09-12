@@ -1212,10 +1212,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || EMPTY_ITEMS);
-  const totalColetados = listToVerify.length;
+  const orderedListItems = useMemo(() => [...listToVerify].sort((left, right) => {
+    const parseScanTime = (value: string) => {
+      const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2}):(\d{2})$/);
+      return match ? new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6])).getTime() : 0;
+    };
+    return parseScanTime(right.scannedAt) - parseScanTime(left.scannedAt);
+  }), [listToVerify]);
+  const totalColetados = orderedListItems.length;
   const bipsPorOperador = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const item of listToVerify) {
+    for (const item of orderedListItems) {
       const operator = item.responsavel || listaAtiva?.responsavel || 'Operador';
       counts.set(operator, (counts.get(operator) || 0) + 1);
     }
@@ -1223,14 +1230,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (listaAtiva?.responsavel && !counts.has(listaAtiva.responsavel)) counts.set(listaAtiva.responsavel, 0);
     return Array.from(counts, ([nome, total]) => ({ nome, total, isVoce: nome === operanteNome }))
       .sort((a, b) => b.total - a.total);
-  }, [listToVerify, listaAtiva?.responsavel, operanteNome]);
+  }, [orderedListItems, listaAtiva?.responsavel, operanteNome]);
 
   const usuariosSistemaOnline = registeredUsers.length > 0 ? registeredUsers : (currentUser ? [currentUser] : []);
   const selectedItemIdSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
   const filteredItems = useMemo(() => {
     const term = deferredSearchTerm.trim().toLowerCase();
     const groupNames = new Map<string, string>((listaAtiva?.grupos || []).map(group => [group.id, group.nome.toLowerCase()]));
-    return listToVerify.filter(item => {
+    return orderedListItems.filter(item => {
       if (modoIndividual && modoIndFiltroStatus === 'validados' && !item.validado) return false;
       if (modoIndividual && modoIndFiltroStatus === 'pendentes' && item.validado) return false;
       if (!term) return true;
@@ -1238,7 +1245,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         (item.motivo || '').toLowerCase().includes(term) || (item.saida || '').toLowerCase().includes(term) ||
         (item.responsavel || '').toLowerCase().includes(term) || (groupNames.get(item.grupoId || '') || '').includes(term);
     });
-  }, [listToVerify, deferredSearchTerm, modoIndividual, modoIndFiltroStatus, listaAtiva?.grupos, getRotaItem]);
+  }, [orderedListItems, deferredSearchTerm, modoIndividual, modoIndFiltroStatus, listaAtiva?.grupos, getRotaItem]);
   const totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
   const currentItemsPage = Math.min(itemsPage, totalItemPages - 1);
   const pageOffset = currentItemsPage * ITEMS_PER_PAGE;
