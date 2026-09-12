@@ -109,7 +109,7 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
       });
       // Reconcile missed events as well as RLS changes. HTTPS fallback keeps
       // synchronization working when a corporate firewall blocks WebSocket.
-      healthTimer = setInterval(() => { if (connected) refresh(); }, 60000);
+      healthTimer = setInterval(() => { if (connected) refresh(); }, 5000);
       window.addEventListener('offline', onOffline);
       window.addEventListener('online', onOnline);
     } catch (error) {
