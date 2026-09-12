@@ -14,7 +14,7 @@ const key = configuredKey?.startsWith('sb_publishable_') && !configuredKey.inclu
 
 export const supabase = createClient<Database>(url, key, {
   auth: {
-    persistSession: false,
+    persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
   },
