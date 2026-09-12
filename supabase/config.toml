@@ -1,5 +1,12 @@
 project_id = "localizador-main"
 
+[auth]
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
 [auth.third_party.firebase]
-enabled = true
+enabled = false
 project_id = "ecooy-5b791"

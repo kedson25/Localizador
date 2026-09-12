@@ -22,7 +22,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const handleNext = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
-    if (username.trim()) {
+    if (!username.includes('@')) {
+      setErrorMsg('Insira o e-mail cadastrado no Supabase.');
+    } else {
       setStep(2);
     }
   };
@@ -32,7 +34,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setErrorMsg('');
     setIsLoading(true);
     
-    // We allow email or username in the "username" field for login
     const res = await loginUser(username.trim(), password);
     setIsLoading(false);
     
@@ -116,9 +117,10 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             step === 1 ? (
               <form onSubmit={handleNext} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-[13px] text-gray-600 font-medium">Username ou E-mail</label>
+                  <label className="text-[13px] text-gray-600 font-medium">E-mail</label>
                   <input 
-                    type="text" 
+                    type="email"
+                    autoComplete="email"
                     value={username}
                     onChange={e => { setUsername(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
                     className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
@@ -184,7 +186,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           ) : (
             <form onSubmit={handleSignup} className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="space-y-1.5">
-                <label className="text-[13px] text-gray-600 font-medium">Novo Username</label>
+                <label className="text-[13px] text-gray-600 font-medium">Nome de usuário</label>
                 <input 
                   type="text" 
                   value={username}
@@ -206,7 +208,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 <label className="text-[13px] text-gray-600 font-medium">Senha</label>
                 <div className="relative">
                   <input 
-                    type={showPassword ? "text" : "password"} 
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
                     value={password}
                     onChange={e => { setPassword(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
                     className="w-full bg-white border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
@@ -219,9 +222,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                <p className="text-[11px] leading-4 text-gray-500">
-                  Se o e-mail já existe no Firebase, informe a senha atual para vincular a conta.
-                </p>
               </div>
               <button 
                 type="submit"

@@ -1,6 +1,5 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { auth } from '../lib/firebase';
 import { DataError, toDataError } from './errors';
 import { syncConnection, syncFailure, syncSuccess } from './syncStatus';
 
@@ -72,9 +71,10 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
     const generation = ++epoch;
     syncConnection(context, false);
     try {
-      await auth.authStateReady();
-      if (!auth.currentUser) throw new DataError('auth', 'Entre com sua conta para carregar os dados.');
-      await supabase.realtime.setAuth(await auth.currentUser.getIdToken());
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!data.session) throw new DataError('auth', 'Entre com sua conta para carregar os dados.');
+      await supabase.realtime.setAuth(data.session.access_token);
       if (generation !== epoch || !subscribers.size) return;
       channel = supabase.channel(`${context}:${crypto.randomUUID()}`);
       for (const table of tables) {

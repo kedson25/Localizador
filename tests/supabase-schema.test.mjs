@@ -14,22 +14,40 @@ test('Supabase migration: identity, permissions, batching, conflicts and atomici
     create role authenticated;
     create role service_role bypassrls;
     create schema auth;
+    create table auth.users (
+      id uuid primary key,
+      email text,
+      raw_user_meta_data jsonb not null default '{}'
+    );
     create function auth.jwt() returns jsonb language sql stable as
       $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
     grant usage on schema auth to authenticated;
     grant execute on function auth.jwt() to authenticated;
   `);
   await db.exec(await readFile(new URL('../supabase/migrations/001_initial_schema.sql', import.meta.url), 'utf8'));
-  await db.exec(`insert into public.profiles(firebase_uid,username,email,is_approved,is_admin,allowed_groups) values
-    ('alice','Alice','alice@example.test',true,false,array['listas','upload']),
-    ('bob','Bob','bob@example.test',true,false,array['listas']),
-    ('pending','Pending','pending@example.test',false,false,array['listas']),
-    ('restricted','Restricted','restricted@example.test',true,false,'{}'),
-    ('admin','Admin','admin@example.test',true,true,'{}');`);
+  await db.exec(await readFile(new URL('../supabase/migrations/002_supabase_auth.sql', import.meta.url), 'utf8'));
+  const ids = {
+    alice: '00000000-0000-4000-8000-000000000001',
+    bob: '00000000-0000-4000-8000-000000000002',
+    pending: '00000000-0000-4000-8000-000000000003',
+    restricted: '00000000-0000-4000-8000-000000000004',
+    admin: '00000000-0000-4000-8000-000000000005',
+  };
+  await db.exec(`insert into auth.users(id,email,raw_user_meta_data) values
+    ('${ids.alice}','alice@example.test','{"username":"ALICE"}'),
+    ('${ids.bob}','bob@example.test','{"username":"BOB"}'),
+    ('${ids.pending}','pending@example.test','{"username":"PENDING"}'),
+    ('${ids.restricted}','restricted@example.test','{"username":"RESTRICTED"}'),
+    ('${ids.admin}','admin@example.test','{"username":"ADMIN"}');
+    update public.users set allowed_groups=array['listas','upload'] where id='${ids.alice}';
+    update public.users set allowed_groups=array['listas'] where id='${ids.bob}';
+    update public.users set is_approved=false, allowed_groups=array['listas'] where id='${ids.pending}';
+    update public.users set allowed_groups='{}' where id='${ids.restricted}';
+    update public.users set is_admin=true, allowed_groups='{}' where id='${ids.admin}';`);
   const asUser = async (uid, overrides = {}) => {
     await db.exec('reset role');
     await db.query("select set_config('request.jwt.claims', $1, false)", [JSON.stringify({
-      sub: uid, iss: 'https://securetoken.google.com/ecooy-5b791', aud: 'ecooy-5b791',
+      sub: ids[uid] || uid, iss: 'https://uncspldfjqqaaszlglkp.supabase.co/auth/v1', aud: 'authenticated',
       role: 'authenticated', name: uid.toUpperCase(), email: `${uid}@example.test`, ...overrides,
     })]);
     await db.exec('set role authenticated');
@@ -44,32 +62,32 @@ test('Supabase migration: identity, permissions, batching, conflicts and atomici
     await assert.rejects(db.query('select * from public.coleta_listas'), code('42501'));
     await assert.rejects(mutate(mutation()), code('42501'));
   });
-  await t.test('wrong Firebase issuer, audience and pending account cannot access operations', async () => {
-    for (const [uid, overrides] of [['alice', { iss: 'https://securetoken.google.com/other' }], ['alice', { aud: 'other' }], ['pending', {}]]) {
+  await t.test('missing identity and disabled account cannot access operations', async () => {
+    for (const [uid, overrides] of [['alice', { sub: '' }], ['pending', {}]]) {
       await asUser(uid, overrides);
       await assert.rejects(mutate(mutation()), code('42501'));
       assert.equal((await db.query('select * from public.coleta_listas')).rows.length, 0);
     }
     await asUser('pending');
-    assert.deepEqual((await db.query('select firebase_uid from public.profiles')).rows.map(r => r.firebase_uid), ['pending']);
+    assert.deepEqual((await db.query('select id::text from public.users')).rows.map(r => r.id), [ids.pending]);
   });
-  await t.test('write-only RPC boundary prevents profile escalation and forged audit records', async () => {
+  await t.test('write-only RPC boundary prevents user escalation and forged audit records', async () => {
     await asUser('alice');
-    await assert.rejects(db.query("update public.profiles set is_admin=true where firebase_uid='alice'"), code('42501'));
+    await assert.rejects(db.query(`update public.users set is_admin=true where id='${ids.alice}'`), code('42501'));
     await assert.rejects(db.query("insert into public.coleta_listas(id,data,firebase_uid) values ('fake','{}','bob')"), code('42501'));
     await assert.rejects(db.query("select private.audit('lista','x','forged','{}')"), code('42501'));
     await assert.rejects(db.query('delete from public.operational_history'), code('42501'));
-    assert.equal((await db.query('select * from public.profiles')).rows.length, 1);
+    assert.equal((await db.query('select * from public.users')).rows.length, 1);
   });
   let creation;
-  await t.test('1600 items commit as one batch with trusted Firebase identity', async () => {
+  await t.test('1600 items commit as one batch with trusted Supabase identity', async () => {
     await asUser('alice');
     creation = mutation({ create: true, metadata: { nome: 'Shared', status: 'em_andamento', data: '2026-09-11' },
       upserts: Array.from({ length: 1600 }, (_, i) => item(`item-${i}`, String(47234567890 + i))) });
     await mutate(creation);
     assert.equal((await db.query('select count(*)::integer as count from public.coleta_itens')).rows[0].count, 1600);
     const actor = (await db.query("select firebase_uid,user_name,user_email,revision from public.coleta_itens where id='item-0'")).rows[0];
-    assert.deepEqual(actor, { firebase_uid: 'alice', user_name: 'ALICE', user_email: 'alice@example.test', revision: 1 });
+    assert.deepEqual(actor, { firebase_uid: ids.alice, user_name: 'ALICE', user_email: 'alice@example.test', revision: 1 });
     assert.equal((await db.query('select * from public.operational_history')).rows.length, 1);
   });
   await t.test('retrying one mutation UUID is idempotent, changing its payload is rejected', async () => {
@@ -137,29 +155,29 @@ test('Supabase migration: identity, permissions, batching, conflicts and atomici
     await asUser('bob');
     assert.equal((await db.query('select * from public.individual_items')).rows.length, 1);
   });
-  await t.test('admin reads profiles and audit, revocation immediately removes operational visibility', async () => {
+  await t.test('admin reads users, updates permissions and revocation immediately removes operational visibility', async () => {
     await asUser('admin');
-    assert.equal((await db.query('select * from public.profiles')).rows.length, 5);
+    assert.equal((await db.query('select * from public.users')).rows.length, 5);
     assert.ok((await db.query('select * from public.operational_history')).rows.length > 4);
-    await db.exec("reset role; update public.profiles set is_approved=false where firebase_uid='bob'");
+    await db.query('select public.update_user_permissions($1,false,false,$2)', [ids.bob, ['listas']]);
     await asUser('bob');
     assert.equal((await db.query('select * from public.coleta_listas')).rows.length, 0);
     await assert.rejects(mutate(mutation()), code('42501'));
   });
   await t.test('approved collectors see the responsibility directory without private permission data', async () => {
     await asUser('alice');
-    const visible = (await db.query('select * from public.list_visible_profiles()')).rows;
-    // Bob was revoked in the preceding test, so only the three approved profiles remain.
+    const visible = (await db.query('select * from public.list_visible_users()')).rows;
+    // Bob was revoked in the preceding test, so only the three approved users remain.
     assert.equal(visible.length, 3);
     assert.ok(visible.every(row => row.email === '' && row.is_admin === false && row.is_approved === true));
     await asUser('admin');
-    const administrative = (await db.query('select * from public.list_visible_profiles()')).rows;
+    const administrative = (await db.query('select * from public.list_visible_users()')).rows;
     assert.equal(administrative.length, 5);
-    assert.equal(administrative.find(row => row.firebase_uid === 'alice').email, 'alice@example.test');
+    assert.equal(administrative.find(row => row.id === ids.alice).email, 'alice@example.test');
   });
   await t.test('only the seven live state tables are published to Realtime', async () => {
     await db.exec('reset role');
     assert.deepEqual((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime' order by tablename")).rows.map(r => r.tablename),
-      ['bases_operacionais', 'coleta_itens', 'coleta_listas', 'individual_items', 'profiles', 'refugo_scans', 'refugo_state']);
+      ['bases_operacionais', 'coleta_itens', 'coleta_listas', 'individual_items', 'refugo_scans', 'refugo_state', 'users']);
   });
 });

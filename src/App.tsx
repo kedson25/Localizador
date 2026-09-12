@@ -28,7 +28,7 @@ export default function App() {
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
-  const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
+  const [loadingData, setLoadingData] = useState<boolean>(true);
   const [authLoading, setAuthLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,7 +43,7 @@ export default function App() {
   }, [canUseListas, currentUser?.id]);
 
   useEffect(() => {
-    // Remove the old unsigned session; Firebase persists/restores the real session.
+    // Remove the old unsigned session; Supabase Auth persists/restores the real session.
     sessionStorage.removeItem('localizador_session_user');
     return subscribeAuthSession(user => {
       setCurrentUser(user);
@@ -61,8 +61,8 @@ export default function App() {
   useEffect(() => () => { if (notificationTimer.current) clearTimeout(notificationTimer.current); }, []);
 
   useEffect(() => {
-    if (!canReadColetor) { setLoadingFirebase(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]); return; }
-    setLoadingFirebase(true);
+    if (!canReadColetor) { setLoadingData(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]); return; }
+    setLoadingData(true);
     let lastRawText: string | undefined;
     const unsubscribe = listenToColetor(data => {
       const text = data?.rawText || '';
@@ -72,9 +72,9 @@ export default function App() {
         const parsed = text ? parseCsvText(text) : { rows: [], groups: [], headers: [] };
         setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
       }
-      setLoadingFirebase(false);
+      setLoadingData(false);
     }, () => {
-      setLoadingFirebase(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]);
+      setLoadingData(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]);
       showNotification('Não foi possível sincronizar a base. Verifique a conexão.');
     });
     return () => { unsubscribe(); };
@@ -139,7 +139,7 @@ export default function App() {
         )}
 
         {isAuthenticated && <SyncIndicator />}
-        {authLoading ? <div className="p-8 text-center text-gray-500">Restaurando sessão...</div> : loadingFirebase && ['/consulta', '/remover', '/reporte'].includes(location.pathname) ? (
+        {authLoading ? <div className="p-8 text-center text-gray-500">Restaurando sessão...</div> : loadingData && ['/consulta', '/remover', '/reporte'].includes(location.pathname) ? (
           <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
             <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
             <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>

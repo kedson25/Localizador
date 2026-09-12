@@ -1,8 +1,0 @@
-{
-  "functions": [{
-    "source": "firebase-functions",
-    "codebase": "localizador-auth",
-    "ignore": ["node_modules", ".git", ".env.example", "*.log"],
-    "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run check"]
-  }]
-}

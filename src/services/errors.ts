@@ -15,7 +15,7 @@ export function toDataError(error: unknown): DataError {
   if (/timeout|aborted|AbortError/i.test(message + value?.name) || code === '57014')
     return new DataError('timeout', 'O servidor não confirmou a operação a tempo. Atualize os dados antes de tentar novamente.');
   if (value?.status === 401 || /JWT|token|PGRST30|auth\//i.test(code + message))
-    return new DataError('auth', 'Sua sessão precisa ser renovada. Entre novamente com sua conta Firebase.');
+    return new DataError('auth', 'Sua sessão precisa ser renovada. Entre novamente com sua conta Supabase.');
   if (code === '42501' || value?.status === 403)
     return new DataError('permission', 'Sua conta não tem permissão para esta operação. Verifique a aprovação e as permissões com um administrador.');
   if (code === '23505') return new DataError('duplicate', 'Este ID já foi registrado por outro usuário. A lista será atualizada.');

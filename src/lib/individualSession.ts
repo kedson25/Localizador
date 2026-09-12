@@ -1,6 +1,5 @@
 import type { ColetaItem } from '../types';
-import { auth } from './firebase';
-import { supabase } from './supabase';
+import { getCurrentUserId, supabase } from './supabase';
 import { asJson } from './database.types';
 import { databaseOperation, DataError } from '../services/errors';
 import { createLiveQuery, type LiveQuery } from '../services/realtime.service';
@@ -8,7 +7,7 @@ import { getListaById, refreshListas } from './coletaSync';
 
 const sessions = new Map<string, LiveQuery<ColetaItem[]>>();
 export async function loadIndividualSession(session: string): Promise<ColetaItem[]> {
-  const uid = auth.currentUser?.uid;
+  const uid = getCurrentUserId();
   if (!uid) throw new DataError('auth', 'Entre novamente para abrir sua sessão individual.');
   const items: ColetaItem[] = [];
   for (let offset = 0; ; offset += 500) {
@@ -20,7 +19,7 @@ export async function loadIndividualSession(session: string): Promise<ColetaItem
   }
 }
 export function listenToIndividualSession(session: string, callback: (items: ColetaItem[]) => void, onError?: (error: Error) => void) {
-  const uid = auth.currentUser?.uid;
+  const uid = getCurrentUserId();
   const key = `${uid}:${session}`;
   let live = sessions.get(key);
   if (!live) {
@@ -29,7 +28,7 @@ export function listenToIndividualSession(session: string, callback: (items: Col
   }
   return live.subscribe(callback, onError);
 }
-function refresh(session: string) { sessions.get(`${auth.currentUser?.uid}:${session}`)?.refresh(); }
+function refresh(session: string) { sessions.get(`${getCurrentUserId()}:${session}`)?.refresh(); }
 export async function saveIndividualItems(session: string, items: ColetaItem[], removedIds: string[] = []): Promise<void> {
   try { await databaseOperation('individual:write', () => supabase.rpc('mutate_individual_items', { p_session: session, p_items: asJson(items), p_removed_ids: removedIds })); }
   finally { refresh(session); }

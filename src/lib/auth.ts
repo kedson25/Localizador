@@ -1,14 +1,4 @@
-import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithCustomToken,
-  signInWithEmailAndPassword,
-  signOut,
-  updateProfile,
-  type User as FirebaseUser,
-} from 'firebase/auth';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { app, auth } from './firebase';
+import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
 export interface User {
@@ -20,8 +10,8 @@ export interface User {
   allowedGroups: string[];
 }
 
-interface ProfileRow {
-  firebase_uid: string;
+interface UserRow {
+  id: string;
   username: string;
   email: string;
   is_admin: boolean;
@@ -29,14 +19,7 @@ interface ProfileRow {
   allowed_groups: string[];
 }
 
-const PROFILE_COLUMNS = 'firebase_uid,username,email,is_admin,is_approved,allowed_groups';
-const functions = getFunctions(app, import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1');
-const ensureSession = httpsCallable<{ username?: string }, { claimsChanged: boolean }>(functions, 'ensureFirebaseSession');
-const usernameLogin = httpsCallable<{ username: string; password: string }, { token: string }>(functions, 'loginWithUsername');
-const changePermissions = httpsCallable<{
-  userId: string;
-  updates: Pick<Partial<User>, 'isAdmin' | 'isApproved' | 'allowedGroups'>;
-}, { success: boolean }>(functions, 'updateUserPermissions');
+const USER_COLUMNS = 'id,username,email,is_admin,is_approved,allowed_groups';
 
 let interactiveAuth: Promise<void> | null = null;
 async function runInteractiveAuth<T>(operation: () => Promise<T>): Promise<T> {
@@ -57,176 +40,167 @@ function authErrorCode(error: unknown): string {
 
 export function authErrorMessage(error: unknown): string {
   const code = authErrorCode(error);
-  if (code === 'auth/network-request-failed' || code === 'functions/unavailable') return 'Sem conexão com o serviço de autenticação. Tente novamente.';
-  if (code === 'functions/deadline-exceeded' || code === 'auth/timeout') return 'O serviço de autenticação demorou para responder. Tente novamente.';
-  if (code === 'functions/not-found' || code === 'functions/internal') return 'A integração entre Firebase e Supabase ainda não está disponível. Publique as Cloud Functions do projeto Firebase.';
-  if (code === 'auth/too-many-requests' || code === 'functions/resource-exhausted') return 'Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.';
-  if (['auth/invalid-credential', 'auth/user-not-found', 'auth/wrong-password', 'functions/unauthenticated'].includes(code)) return 'Usuário/e-mail ou senha inválidos.';
-  if (code === 'auth/email-already-in-use') return 'E-mail já cadastrado. Faça login para continuar.';
-  if (code === 'auth/weak-password') return 'A senha precisa ter pelo menos 6 caracteres.';
-  if (code === 'auth/invalid-email') return 'Informe um e-mail válido.';
-  if (code === 'auth/user-disabled') return 'Esta conta está desativada. Entre em contato com um administrador.';
-  if (code === '42501' || code === 'functions/permission-denied') return 'Você não tem permissão para realizar esta operação.';
-  if (code.startsWith('functions/') && error instanceof Error && error.message !== 'INTERNAL') return error.message;
-  if (error instanceof Error && !code) return error.message;
-  return 'Não foi possível concluir a autenticação. Verifique a conexão e a configuração do serviço.';
+  const status = typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0;
+  if (['invalid_credentials', 'user_not_found'].includes(code)) return 'E-mail ou senha inválidos.';
+  if (['email_exists', 'user_already_exists', 'user_already_registered'].includes(code)) return 'E-mail já cadastrado. Faça login para continuar.';
+  if (code === 'email_not_confirmed') return 'Confirme o e-mail enviado pelo Supabase antes de entrar.';
+  if (code === 'weak_password') return 'A senha precisa ter pelo menos 6 caracteres.';
+  if (['over_request_rate_limit', 'over_email_send_rate_limit'].includes(code) || status === 429) return 'Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.';
+  if (code === 'signup_disabled') return 'Novos cadastros estão desativados no Supabase.';
+  if (code === '42501') return 'Você não tem permissão para realizar esta operação.';
+  if (status >= 500) return 'O serviço de autenticação está indisponível. Tente novamente.';
+  if (error instanceof Error && error.message) return error.message;
+  return 'Não foi possível concluir a autenticação. Verifique a conexão e tente novamente.';
 }
 
-function fromProfile(row: ProfileRow): User {
-  return { id: row.firebase_uid, username: row.username, email: row.email, isAdmin: row.is_admin, isApproved: row.is_approved, allowedGroups: row.allowed_groups || [] };
+function fromUserRow(row: UserRow): User {
+  return {
+    id: row.id,
+    username: row.username,
+    email: row.email,
+    isAdmin: row.is_admin,
+    isApproved: row.is_approved,
+    allowedGroups: row.allowed_groups || [],
+  };
 }
 
 export function normalizeUser(user: User): User {
   return { ...user, allowedGroups: Array.isArray(user.allowedGroups) ? [...user.allowedGroups] : [] };
 }
 
-async function prepareSession(firebaseUser: FirebaseUser, username?: string): Promise<void> {
-  const result = await ensureSession(username ? { username } : {});
-  await firebaseUser.getIdToken(result.data.claimsChanged);
-}
-
 export async function signupUser(username: string, email: string, password: string): Promise<{ success: boolean; message?: string }> {
   return runInteractiveAuth(async () => {
-    const normalizedUsername = username.trim();
-    const normalizedEmail = email.trim();
-    let firebaseUser: FirebaseUser | null = null;
-    let existingFirebaseAccount = false;
     try {
-      try {
-        const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-        firebaseUser = credential.user;
-      } catch (error) {
-        if (authErrorCode(error) !== 'auth/email-already-in-use') throw error;
-
-        existingFirebaseAccount = true;
-        try {
-          const credential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
-          firebaseUser = credential.user;
-        } catch (loginError) {
-          if (['auth/invalid-credential', 'auth/user-not-found', 'auth/wrong-password'].includes(authErrorCode(loginError))) {
-            return {
-              success: false,
-              message: 'Este e-mail já existe no Firebase. Informe a senha atual dessa conta para vinculá-la ao sistema.',
-            };
-          }
-          throw loginError;
-        }
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { username: username.trim() } },
+      });
+      if (error) throw error;
+      if (!data.user || data.user.identities?.length === 0) {
+        return { success: false, message: 'E-mail já cadastrado. Faça login para continuar.' };
       }
 
-      if (!existingFirebaseAccount || !firebaseUser.displayName) {
-        await updateProfile(firebaseUser, { displayName: normalizedUsername });
-      }
-      await prepareSession(firebaseUser, normalizedUsername);
+      const requiresConfirmation = !data.session;
+      if (data.session) await supabase.auth.signOut();
       return {
         success: true,
-        message: existingFirebaseAccount
-          ? 'Conta Firebase vinculada ao sistema! Aguarde a aprovação de um Administrador.'
-          : 'Cadastro realizado! Aguarde a aprovação de um Administrador.',
+        message: requiresConfirmation
+          ? 'Cadastro realizado! Confirme o e-mail enviado pelo Supabase e depois faça login.'
+          : 'Cadastro realizado! Você já pode fazer login.',
       };
     } catch (error) {
-      // A partially completed signup can safely be resumed by logging in with its email.
-      const resume = firebaseUser && !existingFirebaseAccount
-        ? ' Sua conta Firebase foi criada; repita o cadastro com o mesmo e-mail e senha para concluir a vinculação.'
-        : '';
-      return { success: false, message: authErrorMessage(error) + resume };
-    } finally {
-      if (firebaseUser) await signOut(auth);
+      await supabase.auth.signOut();
+      return { success: false, message: authErrorMessage(error) };
     }
   });
 }
 
-export async function loginUser(emailOrUsername: string, password: string): Promise<{ success: boolean; user?: User; message?: string }> {
+export async function loginUser(email: string, password: string): Promise<{ success: boolean; user?: User; message?: string }> {
   return runInteractiveAuth(async () => {
     try {
-      const login = emailOrUsername.trim();
-      const credential = login.includes('@')
-        ? await signInWithEmailAndPassword(auth, login, password)
-        : await signInWithCustomToken(auth, (await usernameLogin({ username: login, password })).data.token);
-      await prepareSession(credential.user);
-      const user = await getUserById(credential.user.uid);
-      if (!user) throw new Error('Perfil não encontrado. Solicite a um administrador a conclusão do cadastro.');
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
+      const user = await getUserById(data.user.id);
+      if (!user) throw new Error('Perfil não encontrado. Crie a conta novamente ou verifique a tabela users.');
       if (!user.isApproved) {
-        await signOut(auth);
-        return { success: false, message: 'Acesso pendente de aprovação por um Administrador.' };
+        await supabase.auth.signOut();
+        return { success: false, message: 'Acesso desativado por um Administrador.' };
       }
       return { success: true, user };
     } catch (error) {
-      await signOut(auth);
+      await supabase.auth.signOut();
       return { success: false, message: authErrorMessage(error) };
     }
   });
 }
 
 export async function logoutUser(): Promise<void> {
-  await signOut(auth);
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }
 
 export async function getUserById(userId: string): Promise<User | null> {
-  const { data, error } = await supabase.from('profiles').select(PROFILE_COLUMNS).eq('firebase_uid', userId).maybeSingle();
+  const { data, error } = await supabase.from('users').select(USER_COLUMNS).eq('id', userId).maybeSingle();
   if (error) throw new Error(authErrorMessage(error));
-  return data ? fromProfile(data as ProfileRow) : null;
+  return data ? fromUserRow(data as UserRow) : null;
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const { data, error } = await supabase.rpc('list_visible_profiles', {});
+  const { data, error } = await supabase.rpc('list_visible_users', {});
   if (error) throw new Error(authErrorMessage(error));
-  return (data as ProfileRow[]).map(fromProfile);
+  return (data as UserRow[]).map(fromUserRow);
 }
 
 export async function updateUserAdminStatus(userId: string, updates: Partial<User>): Promise<boolean> {
-  const { data } = await changePermissions({ userId, updates: {
-    ...(updates.isAdmin !== undefined ? { isAdmin: updates.isAdmin } : {}),
-    ...(updates.isApproved !== undefined ? { isApproved: updates.isApproved } : {}),
-    ...(updates.allowedGroups !== undefined ? { allowedGroups: updates.allowedGroups } : {}),
-  } });
-  return data.success;
+  const { data, error } = await supabase.rpc('update_user_permissions', {
+    p_user_id: userId,
+    p_is_admin: updates.isAdmin ?? null,
+    p_is_approved: updates.isApproved ?? null,
+    p_allowed_groups: updates.allowedGroups ?? null,
+  });
+  if (error) throw new Error(authErrorMessage(error));
+  return data;
 }
 
-/** Firebase owns the session; profile permissions always come from the server. */
+/** Supabase Auth owns the session; profile permissions always come from PostgreSQL. */
 export function subscribeAuthSession(onChange: (user: User | null) => void, onError: (message: string) => void): () => void {
   let disposed = false;
   let generation = 0;
+  let activeUserId: string | null = null;
   let profileChannel: ReturnType<typeof supabase.channel> | null = null;
   let permissionTimer: ReturnType<typeof setInterval> | null = null;
+
   const clearProfileListener = () => {
     if (profileChannel) void supabase.removeChannel(profileChannel);
     profileChannel = null;
     if (permissionTimer) clearInterval(permissionTimer);
     permissionTimer = null;
   };
-  const stop = onAuthStateChanged(auth, firebaseUser => {
+
+  const handleSession = (session: Session | null) => {
     const thisGeneration = ++generation;
+    activeUserId = session?.user.id ?? null;
     clearProfileListener();
     void (async () => {
       if (interactiveAuth) await interactiveAuth;
-      if (disposed || generation !== thisGeneration || auth.currentUser?.uid !== firebaseUser?.uid) return;
-      if (!firebaseUser) { onChange(null); return; }
-      const isCurrent = () => !disposed && generation === thisGeneration && auth.currentUser?.uid === firebaseUser.uid;
+      if (disposed || generation !== thisGeneration || activeUserId !== (session?.user.id ?? null)) return;
+      if (!session) { onChange(null); return; }
+      const userId = session.user.id;
+      const isCurrent = () => !disposed && generation === thisGeneration && activeUserId === userId;
       const refreshProfile = async () => {
         try {
-          const profile = await getUserById(firebaseUser.uid);
+          const profile = await getUserById(userId);
           if (!isCurrent()) return;
           onChange(profile?.isApproved ? profile : null);
           if (!profile?.isApproved) {
-            onError('Acesso pendente de aprovação por um Administrador.');
-            await signOut(auth);
+            onError(profile ? 'Acesso desativado por um Administrador.' : 'Perfil não encontrado na tabela users.');
+            await supabase.auth.signOut();
           }
         } catch (error) {
           if (isCurrent()) { onChange(null); onError(authErrorMessage(error)); }
         }
       };
-      try {
-        await prepareSession(firebaseUser);
-        if (!isCurrent()) return;
-        profileChannel = supabase.channel(`profile-permissions:${firebaseUser.uid}`)
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: `firebase_uid=eq.${firebaseUser.uid}` }, () => { void refreshProfile(); })
-          .subscribe();
-        await refreshProfile();
-        if (isCurrent()) permissionTimer = setInterval(() => { void refreshProfile(); }, 60_000);
-      } catch (error) {
-        if (isCurrent()) { onChange(null); onError(authErrorMessage(error)); }
-      }
+
+      profileChannel = supabase.channel(`user-permissions:${userId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'users', filter: `id=eq.${userId}` }, () => { void refreshProfile(); })
+        .subscribe();
+      await refreshProfile();
+      if (isCurrent()) permissionTimer = setInterval(() => { void refreshProfile(); }, 60_000);
     })();
-  }, error => { if (!disposed) { onChange(null); onError(authErrorMessage(error)); } });
-  return () => { disposed = true; generation += 1; stop(); clearProfileListener(); };
+  };
+
+  const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => handleSession(session));
+  const initialGeneration = generation;
+  void supabase.auth.getSession().then(({ data, error }) => {
+    if (error) { if (!disposed) onError(authErrorMessage(error)); return; }
+    if (!disposed && generation === initialGeneration) handleSession(data.session);
+  });
+
+  return () => {
+    disposed = true;
+    generation += 1;
+    listener.subscription.unsubscribe();
+    clearProfileListener();
+  };
 }
