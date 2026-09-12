@@ -153,13 +153,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [storageError, setStorageError] = useState<string | null>(null);
   const [listasLoaded, setListasLoaded] = useState(false);
   const [dashboardSearchTerm, setDashboardSearchTerm] = useState('');
-  const [dashboardDateFilter, setDashboardDateFilter] = useState(() => {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  });
+  const [dashboardDateFilter, setDashboardDateFilter] = useState('');
   const [dashboardStatusFilter, setDashboardStatusFilter] = useState<'todas' | 'em_andamento' | 'finalizada'>('todas');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [refugoBaseRows, setRefugoBaseRows] = useState<RefugoRow[]>([]);
@@ -865,7 +859,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     if (idx !== -1) {
       // Atualizar item existente
-      const itemAtualizado = {
+      const itemAtualizado: ColetaItem = {
         ...novosItens[idx],
         saida: saidaItemFinal,
         motivo: selectedMotivo || novosItens[idx].motivo,

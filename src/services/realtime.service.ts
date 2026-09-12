@@ -85,6 +85,10 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
       if (!data.session) throw new DataError('auth', 'Entre com sua conta para carregar os dados.');
       await supabase.realtime.setAuth(data.session.access_token);
       if (generation !== epoch || !subscribers.size) return;
+      // Load immediately over HTTPS. Realtime then keeps the snapshot current,
+      // while the polling fallback covers networks that block WebSockets.
+      connected = true;
+      refresh();
       channel = supabase.channel(`${context}:${crypto.randomUUID()}`);
       for (const table of tables) {
         channel.on('postgres_changes', { event: '*', schema: 'public', ...table }, payload => {

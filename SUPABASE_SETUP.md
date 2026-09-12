@@ -26,6 +26,18 @@ As políticas RLS permitem que o usuário consulte o próprio registro. Somente
 um administrador pode listar todos os usuários ou alterar permissões pelo
 aplicativo.
 
+## Listas compartilhadas
+
+Toda conta aprovada pode abrir **Listas de Coleta**, consultar qualquer lista e
+colaborar nela em tempo real. Links no formato `/listas/ID_DA_LISTA` retornam à
+mesma lista depois do login. O Realtime atualiza as telas abertas e uma consulta
+HTTPS assíncrona mantém a sincronização em redes que bloqueiam WebSocket.
+
+Durante a migração das contas antigas, `VITE_FIREBASE_LEGACY_AUTH_API_KEY`
+permite validar uma senha antiga no Firebase uma única vez. Depois da validação,
+a conta é criada no Supabase com a mesma senha e os próximos logins usam apenas
+o Supabase.
+
 ## Primeiro administrador
 
 Crie sua conta na tela **Criar usuário**. Depois abra **Table Editor > users**

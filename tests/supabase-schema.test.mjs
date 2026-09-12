@@ -26,6 +26,7 @@ test('Supabase migration: identity, permissions, batching, conflicts and atomici
   `);
   await db.exec(await readFile(new URL('../supabase/migrations/001_initial_schema.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../supabase/migrations/002_supabase_auth.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/003_shared_lists.sql', import.meta.url), 'utf8'));
   const ids = {
     alice: '00000000-0000-4000-8000-000000000001',
     bob: '00000000-0000-4000-8000-000000000002',
@@ -113,10 +114,10 @@ test('Supabase migration: identity, permissions, batching, conflicts and atomici
     const rows = (await db.query("select payload->>'motivo' motivo from public.coleta_itens where id in ('item-0','item-1') order by id")).rows;
     assert.deepEqual(rows, [{ motivo: 'Alice change' }, { motivo: 'Bob change' }]);
   });
-  await t.test('granular list and upload permissions are enforced by PostgreSQL', async () => {
+  await t.test('every approved account shares lists while upload remains restricted', async () => {
     await asUser('restricted');
-    assert.equal((await db.query('select * from public.coleta_listas')).rows.length, 0);
-    await assert.rejects(mutate(mutation()), code('42501'));
+    assert.equal((await db.query('select * from public.coleta_listas')).rows.length, 1);
+    await mutate(mutation());
     await asUser('bob');
     await assert.rejects(db.query("select public.upsert_operational_base('coletor','header',0,'file.csv',null)"), code('42501'));
   });

@@ -32,8 +32,12 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAuthenticated = !!currentUser?.isApproved;
-  const canUseListas = isAuthenticated && (currentUser.isAdmin || currentUser.allowedGroups.includes('listas'));
+  const canUseListas = isAuthenticated;
   const canReadColetor = isAuthenticated && (currentUser.isAdmin || currentUser.allowedGroups.some(group => ['consulta', 'remover', 'reporte', 'upload'].includes(group)));
+  const requestedPath = new URLSearchParams(location.search).get('next');
+  const postLoginPath = requestedPath?.startsWith('/') && !requestedPath.startsWith('//')
+    ? requestedPath : '/';
+  const loginPath = `/login?next=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`;
 
   useEffect(() => {
     if (!canUseListas) return;
@@ -187,9 +191,9 @@ export default function App() {
             <Routes>
             {/* Public Routes */}
             <Route path="/login" element={
-              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => {
+              isAuthenticated ? <Navigate to={postLoginPath} replace /> : <Login onLogin={(user) => {
                 setCurrentUser(user);
-                navigate('/');
+                navigate(postLoginPath, { replace: true });
               }} />
             } />
             
@@ -218,12 +222,8 @@ export default function App() {
                   <Route path="/reporte" element={<WhatsappReport rows={rows} />} />
                 )}
 
-                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
-                  <>
-                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
-                    <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
-                  </>
-                )}
+                <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
                   <Route path="/upload" element={<CsvUploader onLoadText={(text) => { void handleParseAndSave(text); }} currentTotalRows={rows.length} />} />
@@ -232,7 +232,7 @@ export default function App() {
             )}
             
             {/* Fallback */}
-            <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to="/login" replace />} />
+            <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to={loginPath} replace />} />
           </Routes>
           </>
         )}

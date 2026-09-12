@@ -14,7 +14,6 @@ const TABS = [
   { id: 'consulta', label: 'Buscar grupos' },
   { id: 'remover', label: 'Remover IDs' },
   { id: 'reporte', label: 'Reporte WhatsApp' },
-  { id: 'listas', label: 'Listas de Coleta' },
   { id: 'upload', label: 'Importar CSV' },
 ];
 
@@ -935,6 +934,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
 
                       <td className="px-4 py-4">
                         <div className="flex flex-wrap gap-1.5">
+                          <span className="px-2.5 py-1 border rounded-lg text-[11px] font-bold bg-emerald-50 border-emerald-200 text-emerald-700">
+                            Listas de Coleta · Todos
+                          </span>
                           {TABS.map(tab => (
                             <button
                               key={tab.id}

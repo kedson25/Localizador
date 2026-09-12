@@ -20,6 +20,21 @@ interface UserRow {
 }
 
 const USER_COLUMNS = 'id,username,email,is_admin,is_approved,allowed_groups';
+const legacyFirebaseApiKey = import.meta.env.VITE_FIREBASE_LEGACY_AUTH_API_KEY?.trim()
+  || 'AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA';
+
+interface LegacyFirebaseUser {
+  localId: string;
+  email: string;
+  displayName?: string;
+}
+
+class LegacyMigrationError extends Error {
+  constructor(message: string, readonly code: string) {
+    super(message);
+    this.name = 'LegacyMigrationError';
+  }
+}
 
 let interactiveAuth: Promise<void> | null = null;
 async function runInteractiveAuth<T>(operation: () => Promise<T>): Promise<T> {
@@ -36,6 +51,75 @@ async function runInteractiveAuth<T>(operation: () => Promise<T>): Promise<T> {
 
 function authErrorCode(error: unknown): string {
   return typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+}
+
+function isInvalidCredentials(error: unknown): boolean {
+  return ['invalid_credentials', 'user_not_found'].includes(authErrorCode(error));
+}
+
+async function verifyLegacyFirebaseLogin(email: string, password: string): Promise<LegacyFirebaseUser | null> {
+  let response: Response;
+  try {
+    response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(legacyFirebaseApiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    return null;
+  }
+
+  const body = await response.json().catch(() => ({})) as {
+    localId?: string;
+    email?: string;
+    displayName?: string;
+    error?: { message?: string };
+  };
+  if (response.ok && body.localId && body.email) {
+    return { localId: body.localId, email: body.email, displayName: body.displayName };
+  }
+
+  const legacyCode = body.error?.message?.split(' : ')[0] || '';
+  if (['INVALID_LOGIN_CREDENTIALS', 'EMAIL_NOT_FOUND', 'INVALID_PASSWORD'].includes(legacyCode)) return null;
+  if (legacyCode === 'USER_DISABLED') throw new LegacyMigrationError('Esta conta antiga está desativada.', 'user_disabled');
+  if (legacyCode.includes('TOO_MANY_ATTEMPTS')) {
+    throw new LegacyMigrationError('Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.', 'over_request_rate_limit');
+  }
+  return null;
+}
+
+async function signInWithPasswordOrMigrate(email: string, password: string): Promise<string> {
+  const firstAttempt = await supabase.auth.signInWithPassword({ email, password });
+  if (!firstAttempt.error) return firstAttempt.data.user.id;
+  if (!isInvalidCredentials(firstAttempt.error)) throw firstAttempt.error;
+
+  const legacyUser = await verifyLegacyFirebaseLogin(email, password);
+  if (!legacyUser) throw firstAttempt.error;
+
+  const username = legacyUser.displayName?.trim() || legacyUser.email.split('@')[0];
+  const signup = await supabase.auth.signUp({
+    email: legacyUser.email,
+    password,
+    options: { data: { username, legacy_firebase_uid: legacyUser.localId } },
+  });
+  if (!signup.error && signup.data.user && signup.data.user.identities?.length !== 0) {
+    if (signup.data.session) return signup.data.user.id;
+    const confirmed = await supabase.auth.signInWithPassword({ email: legacyUser.email, password });
+    if (!confirmed.error) return confirmed.data.user.id;
+    throw confirmed.error;
+  }
+
+  // A simultaneous first login may have created the account between requests.
+  const retry = await supabase.auth.signInWithPassword({ email: legacyUser.email, password });
+  if (!retry.error) return retry.data.user.id;
+  if (signup.error && !['email_exists', 'user_already_exists', 'user_already_registered'].includes(authErrorCode(signup.error))) {
+    throw signup.error;
+  }
+  throw new LegacyMigrationError(
+    'A senha antiga foi validada, mas já existe uma conta Supabase com outra senha. Use a senha cadastrada no Supabase.',
+    'legacy_account_conflict',
+  );
 }
 
 export function authErrorMessage(error: unknown): string {
@@ -99,9 +183,8 @@ export async function signupUser(username: string, email: string, password: stri
 export async function loginUser(email: string, password: string): Promise<{ success: boolean; user?: User; message?: string }> {
   return runInteractiveAuth(async () => {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (error) throw error;
-      const user = await getUserById(data.user.id);
+      const userId = await signInWithPasswordOrMigrate(email.trim().toLowerCase(), password);
+      const user = await getUserById(userId);
       if (!user) throw new Error('Perfil não encontrado. Crie a conta novamente ou verifique a tabela users.');
       if (!user.isApproved) {
         await supabase.auth.signOut();
