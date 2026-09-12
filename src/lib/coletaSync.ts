@@ -99,18 +99,23 @@ async function sendMutation(mutation: QueuedListaMutation): Promise<void> {
 }
 
 async function sendWithConflictRecovery(mutation: QueuedListaMutation): Promise<void> {
-  try {
-    await sendMutation(mutation);
-  } catch (error) {
-    if (!(error instanceof DataError) || error.kind !== 'conflict' || mutation.create || mutation.deleted) throw error;
-    const latest = await getListaById(mutation.listaId);
-    if (!latest) throw error;
-    const rebased = applyListaMutation(snapshotLista(latest), mutation);
-    if (!rebased) throw error;
-    const retry = diffLista(rebased);
-    if (!Object.keys(retry.metadata).length && !retry.upserts.length && !retry.removedIds.length) return;
-    await sendMutation(retry);
+  let nextMutation = mutation;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await sendMutation(nextMutation);
+      return;
+    } catch (error) {
+      if (!(error instanceof DataError) || error.kind !== 'conflict' || mutation.create || mutation.deleted) throw error;
+      const latest = await getListaById(mutation.listaId);
+      if (!latest) throw error;
+      const rebased = applyListaMutation(snapshotLista(latest), nextMutation);
+      if (!rebased) throw error;
+      nextMutation = diffLista(rebased);
+      if (!Object.keys(nextMutation.metadata).length && !nextMutation.upserts.length && !nextMutation.removedIds.length) return;
+      await new Promise(resolve => setTimeout(resolve, 40 * (attempt + 1)));
+    }
   }
+  throw new DataError('conflict', 'Não foi possível confirmar a alteração no servidor.');
 }
 
 function replayQueuedMutations() {
