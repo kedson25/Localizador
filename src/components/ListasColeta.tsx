@@ -1840,6 +1840,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     return 'bg-blue-50 text-blue-700 border-blue-200';
   };
 
+  const tipoListaLabel = listaAtiva.tipo === 'grupos' ? 'Lista por grupos' : 'Lista comum';
+  const arquivoListaLabel = listaAtiva.nome || listaAtiva.id;
+
   return (
     <div className="w-full space-y-4 pb-12">
       {storageErrorBanner}
@@ -1874,6 +1877,29 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </button>
         )}
 
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 min-w-0" aria-label="Resumo da lista atual">
+        <div className="min-w-0 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">Arquivo / lista</p>
+          <p className="truncate text-xs font-bold text-gray-800" title={arquivoListaLabel}>{arquivoListaLabel}</p>
+        </div>
+        <div className="min-w-0 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">ID da lista</p>
+          <p className="truncate text-xs font-bold text-gray-800" title={listaAtiva.id}>{listaAtiva.id}</p>
+        </div>
+        <div className="min-w-0 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">Tipo atual</p>
+          <p className="truncate text-xs font-bold text-gray-800">{tipoListaLabel}</p>
+        </div>
+        <div className="min-w-0 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">Saída</p>
+          <p className="truncate text-xs font-bold text-gray-800" title={listaAtiva.saidaPadrao}>{listaAtiva.saidaPadrao || 'Não definida'}</p>
+        </div>
+        <div className="min-w-0 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">IDs na lista</p>
+          <p className="truncate text-xs font-bold text-gray-800">{totalColetados}</p>
+        </div>
       </div>
 
       {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
