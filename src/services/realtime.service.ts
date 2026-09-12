@@ -38,7 +38,7 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
   const refresh = (id?: string) => {
     if (id) dirty.add(id); else full = true;
     if (!subscribers.size || working || timer || !connected) return;
-    timer = setTimeout(() => { timer = undefined; void reload(); }, 60);
+    timer = setTimeout(() => { timer = undefined; void reload(); }, 0);
   };
   const reload = async () => {
     if (working || !connected || !subscribers.size) return;
@@ -74,7 +74,7 @@ export function createLiveQuery<T>(context: string, tables: WatchTable[],
     connected = true;
     syncConnection(context, true);
     refresh();
-    fallbackTimer = setInterval(() => { if (connected) refresh(); }, 5000);
+    fallbackTimer = setInterval(() => { if (connected) refresh(); }, 1000);
   };
   const start = async () => {
     const generation = ++epoch;
