@@ -1,13 +1,16 @@
 import type { ColetaItem, ColetaLista } from '../types';
 import { supabase } from './supabase';
 import { asJson, type ItemRow, type ListaRow } from './database.types';
-import { applyListaMutation, diffLista, snapshotLista, type ListaMutation } from './listaPersistence';
+import { applyListaMutation, diffLista, snapshotLista, splitListaItemsIntoBatches, type ListaMutation } from './listaPersistence';
 import { databaseOperation, DataError } from '../services/errors';
 import { createLiveQuery } from '../services/realtime.service';
 import { flushOfflineMutations, onOfflineRetry, queueOfflineMutation } from './offlineQueue';
 import { compareListasNewestFirst } from './listaOrder';
 
 const PAGE_SIZE = 500;
+const CONFIRMATION_TIMEOUT_MS = 15000;
+
+const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 export function itemFromRow(row: ItemRow): ColetaItem {
   return { ...(row.payload as unknown as ColetaItem), id: row.id, revision: row.revision,
     firebase_uid: row.firebase_uid, user_name: row.user_name, user_email: row.user_email,
@@ -121,6 +124,33 @@ async function sendWithConflictRecovery(mutation: QueuedListaMutation): Promise<
   throw new DataError('conflict', 'Não foi possível confirmar a alteração no servidor.');
 }
 
+async function confirmMutationItems(mutation: ListaMutation, timeoutMs = CONFIRMATION_TIMEOUT_MS): Promise<void> {
+  if (!mutation.upserts.length) return;
+  const expectedRevisions = new Map(mutation.upserts.map(item => [
+    item.id,
+    Math.max(1, (mutation.expectedItems?.[item.id] ?? 0) + 1),
+  ]));
+  const ids = [...expectedRevisions.keys()];
+  const deadline = Date.now() + timeoutMs;
+  let lastRetryableError: DataError | null = null;
+
+  while (Date.now() <= deadline) {
+    try {
+      const rows = await databaseOperation('listas:confirm', () => supabase.from('coleta_itens')
+        .select('id, revision').eq('lista_id', mutation.listaId).in('id', ids));
+      const revisions = new Map((rows || []).map(row => [row.id, row.revision]));
+      if ([...expectedRevisions].every(([id, revision]) => (revisions.get(id) || 0) >= revision)) return;
+      lastRetryableError = null;
+    } catch (error) {
+      if (!(error instanceof DataError) || !['network', 'timeout', 'conflict'].includes(error.kind)) throw error;
+      lastRetryableError = error;
+    }
+    await wait(150);
+  }
+
+  throw lastRetryableError || new DataError('timeout', 'O Supabase não confirmou todos os IDs do lote a tempo. Tente novamente.');
+}
+
 function replayQueuedMutations() {
   void flushOfflineMutations<QueuedListaMutation>('listas', async mutation => {
     await sendMutation(mutation);
@@ -130,13 +160,13 @@ function replayQueuedMutations() {
 
 if (typeof window !== 'undefined') onOfflineRetry(replayQueuedMutations);
 
-async function submit(mutation: ListaMutation): Promise<boolean> {
+async function submit(mutation: ListaMutation, options: { allowOffline?: boolean } = {}): Promise<boolean> {
   const write = writeChain.catch(() => undefined).then(async () => {
     try {
       await sendWithConflictRecovery(mutation);
       return true;
     } catch (error) {
-      if (error instanceof DataError && error.kind === 'network') {
+      if (options.allowOffline !== false && error instanceof DataError && error.kind === 'network') {
         await queueOfflineMutation('listas', mutation);
         return true;
       }
@@ -146,10 +176,10 @@ async function submit(mutation: ListaMutation): Promise<boolean> {
   writeChain = write;
   return write;
 }
-export async function saveLista(lista: ColetaLista, _immediate = false): Promise<boolean> {
+export async function saveLista(lista: ColetaLista, requireServer = false): Promise<boolean> {
   const mutation = diffLista(lista);
   if (!mutation.create && !Object.keys(mutation.metadata).length && !mutation.upserts.length && !mutation.removedIds.length) return true;
-  return submit(mutation);
+  return submit(mutation, { allowOffline: !requireServer });
 }
 export async function deleteLista(listaId: string): Promise<boolean> {
   const lista = live.current()?.get(listaId) || await getListaById(listaId);
@@ -176,9 +206,61 @@ export async function saveListaItems(listaId: string, items: ColetaItem[], remov
   const ids = new Set([...items.map(item => item.id), ...removedIds]);
   return saveLista({ ...lista, itens: [...items, ...lista.itens.filter(item => !ids.has(item.id))] });
 }
-export async function saveListaItemsBatch(listaId: string, items: ColetaItem[], onProgress?: (current: number, total: number, percent: number) => void) {
-  const saved = await saveListaItems(listaId, items);
-  onProgress?.(items.length, items.length, 100); return saved;
+
+export async function waitForListaAvailable(listaId: string, expectedItemIds: string[] = [], timeoutMs = CONFIRMATION_TIMEOUT_MS): Promise<ColetaLista> {
+  const expected = new Set(expectedItemIds);
+  const deadline = Date.now() + timeoutMs;
+  let lastRetryableError: DataError | null = null;
+
+  while (Date.now() <= deadline) {
+    try {
+      const lista = await getListaById(listaId);
+      if (lista && [...expected].every(id => lista.itens.some(item => item.id === id))) return lista;
+      lastRetryableError = null;
+    } catch (error) {
+      if (!(error instanceof DataError) || !['network', 'timeout', 'conflict'].includes(error.kind)) throw error;
+      lastRetryableError = error;
+    }
+    await wait(150);
+  }
+
+  throw lastRetryableError || new DataError('timeout', expected.size
+    ? 'O Supabase não confirmou todos os IDs importados a tempo.'
+    : 'O Supabase não confirmou a criação da lista a tempo. Tente novamente.');
+}
+
+export async function saveListaItemsBatch(
+  listaId: string,
+  items: ColetaItem[],
+  onProgress?: (current: number, total: number, percent: number) => void,
+): Promise<ColetaLista> {
+  const uniqueItems = [...new Map(items.map(item => [item.id, item])).values()];
+  const batches = splitListaItemsIntoBatches(uniqueItems);
+  let confirmed = 0;
+  const parent = await databaseOperation('listas:read', () => supabase.from('coleta_listas')
+    .select('*').eq('id', listaId).maybeSingle());
+  if (!parent) throw new DataError('conflict', 'Esta lista já foi excluída. Nenhum lote pendente foi ocultado.');
+
+  for (const batch of batches) {
+    const existingRows = await databaseOperation('listas:read', () => supabase.from('coleta_itens')
+      .select('*').eq('lista_id', listaId).in('id', batch.map(item => item.id)));
+    // Build the diff from only the touched rows. Unrelated IDs never enter the
+    // request, keeping each confirmation fast even when the list is very large.
+    const latestTouched = listaFromRow(parent, (existingRows || []).map(itemFromRow));
+    const updated = { ...latestTouched, itens: batch };
+    const mutation = diffLista(updated);
+    if (mutation.upserts.length) {
+      await submit(mutation, { allowOffline: false });
+      await confirmMutationItems(mutation);
+    }
+    confirmed += batch.length;
+    onProgress?.(confirmed, uniqueItems.length, uniqueItems.length ? Math.round((confirmed / uniqueItems.length) * 100) : 100);
+  }
+
+  const saved = await waitForListaAvailable(listaId, uniqueItems.map(item => item.id));
+  live.refresh(listaId);
+  if (!uniqueItems.length) onProgress?.(0, 0, 100);
+  return saved;
 }
 export async function fetchListasPaginated(options: { pageSize?: number; statusFilter?: 'todas' | 'em_andamento' | 'finalizada'; dateFilter?: string; lastDocSnap?: number | null }) {
   const size = Math.min(options.pageSize || 50, 100);

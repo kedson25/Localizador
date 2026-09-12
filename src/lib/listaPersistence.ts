@@ -1,5 +1,16 @@
 import type { ColetaItem, ColetaLista } from '../types';
 
+export const LISTA_ITEMS_BATCH_SIZE = 50;
+
+export function splitListaItemsIntoBatches<T>(items: T[], batchSize = LISTA_ITEMS_BATCH_SIZE): T[][] {
+  if (!Number.isInteger(batchSize) || batchSize < 1) throw new RangeError('O tamanho do lote deve ser maior que zero.');
+  const batches: T[][] = [];
+  for (let offset = 0; offset < items.length; offset += batchSize) {
+    batches.push(items.slice(offset, offset + batchSize));
+  }
+  return batches;
+}
+
 
 const baseline = Symbol('listaBaseline');
 type Snapshot = ColetaLista & { [baseline]?: ColetaLista };

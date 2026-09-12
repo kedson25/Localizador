@@ -39,7 +39,16 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { listenToRefugo, validateAndCleanIds } from '../services/operational.service';
-import { listenToListas, saveLista, deleteLista, deleteListaItems } from '../lib/coletaSync';
+import {
+  deleteLista,
+  deleteListaItems,
+  getListaById,
+  listenToListas,
+  refreshListas,
+  saveLista,
+  saveListaItemsBatch,
+  waitForListaAvailable,
+} from '../lib/coletaSync';
 import { compareListasNewestFirst } from '../lib/listaOrder';
 import { promoteIndividualSession } from '../lib/individualSession';
 import { useIndividualDraft } from './useIndividualDraft';
@@ -75,6 +84,12 @@ const cleanDigits = (value: string) => (value || '').replace(/\D/g, '');
 const itemCodeKey = (value: string) => {
   const normalized = (value || '').trim().toUpperCase().replace(/M$/, '');
   return cleanDigits(normalized) || normalized;
+};
+const pastedCodeKey = (value: string) => {
+  let normalized = (value || '').trim().replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4');
+  normalized = normalized.replace(/^[^0-9a-zA-Z]+/, '');
+  const tracking = normalized.match(/(47\d+)/);
+  return itemCodeKey(tracking ? tracking[1] : normalized);
 };
 const scanTimeValue = (value: string) => {
   const brazilian = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2})(?::(\d{2}))?$/);
@@ -158,7 +173,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const [itemsPage, setItemsPage] = useState(0);
   const [storageError, setStorageError] = useState<string | null>(null);
-  const [listasLoaded, setListasLoaded] = useState(false);
   const [dashboardSearchTerm, setDashboardSearchTerm] = useState('');
   const [dashboardDateFilter, setDashboardDateFilter] = useState('');
   const [dashboardStatusFilter, setDashboardStatusFilter] = useState<'todas' | 'em_andamento' | 'finalizada'>('todas');
@@ -218,6 +232,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [isLoadingLista, setIsLoadingLista] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('Carregando lista...');
   const [openingListaId, setOpeningListaId] = useState<string | null>(null);
+  const [missingListaId, setMissingListaId] = useState<string | null>(null);
+  const [listaLookupError, setListaLookupError] = useState<string | null>(null);
 
   // Modo Individual (Sessão isolada zerada que se unifica na principal ao fechar)
   const [modoIndividual, setModoIndividual] = useState(false);
@@ -237,6 +253,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const pendingRemovalsUntilRef = useRef(0);
   const activeListaIdRef = useRef(activeListaId);
   activeListaIdRef.current = activeListaId;
+  const pinnedListasRef = useRef(new Map<string, { lista: ColetaLista; expiresAt: number }>());
   const lastRefugoTextRef = useRef<string>('');
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -245,6 +262,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
   const leitorTravado = isLocked || listaAtiva?.status === 'finalizada';
+
+  const pinConfirmedLista = useCallback((confirmed: ColetaLista) => {
+    pinnedListasRef.current.set(confirmed.id, { lista: confirmed, expiresAt: Date.now() + 30000 });
+    setListas(previous => {
+      const next = previous.filter(lista => lista.id !== confirmed.id);
+      next.push(confirmed);
+      return next.sort(compareListasNewestFirst);
+    });
+    if (activeListaIdRef.current === confirmed.id) activeItensRef.current = confirmed.itens;
+    refreshListas();
+  }, []);
 
   const persistLista = async (lista: ColetaLista, immediate = false): Promise<boolean> => {
     savingListaCountRef.current += 1;
@@ -307,6 +335,33 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           ? { ...lista, itens: [...pending.values(), ...[...serverItems.values()].filter(item => !pendingIds.has(item.id))] }
           : lista;
       });
+      for (const [id, pin] of pinnedListasRef.current) {
+        if (Date.now() >= pin.expiresAt) {
+          pinnedListasRef.current.delete(id);
+          continue;
+        }
+        const pinned = pin.lista;
+        const index = merged.findIndex(lista => lista.id === id);
+        if (index < 0) {
+          merged.push(pinned);
+          continue;
+        }
+        const server = merged[index];
+        const serverIds = new Set(server.itens.map(item => item.id));
+        const serverCaughtUp = (server.revision || 0) >= (pinned.revision || 0)
+          && pinned.itens.every(item => serverIds.has(item.id));
+        if (serverCaughtUp) {
+          pinnedListasRef.current.delete(id);
+          continue;
+        }
+        const pinnedIds = new Set(pinned.itens.map(item => item.id));
+        merged[index] = {
+          ...server,
+          ...((pinned.revision || 0) >= (server.revision || 0) ? pinned : {}),
+          itens: [...pinned.itens, ...server.itens.filter(item => !pinnedIds.has(item.id))],
+        };
+      }
+      merged.sort(compareListasNewestFirst);
       const serverActive = listasServer.find(lista => lista.id === activeId);
       if (serverActive && pendingRemovals.size) {
         pendingRemovals.forEach(id => { if (!serverActive.itens.some(item => item.id === id)) pendingRemovals.delete(id); });
@@ -314,9 +369,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       }
       activeItensRef.current = merged.find(lista => lista.id === activeId)?.itens || [];
       setListas(merged);
-      setListasLoaded(true);
     }, error => {
-      setListasLoaded(true);
       setStorageError(error.message);
     });
 
@@ -364,6 +417,45 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       unsubRefugo();
     };
   }, []);
+
+  // A rota direta só declara uma lista ausente depois de consultá-la pelo ID.
+  // Isso evita o falso "não disponível" enquanto o snapshot geral ainda atualiza.
+  useEffect(() => {
+    if (!activeListaId) {
+      setMissingListaId(null);
+      setListaLookupError(null);
+      return;
+    }
+    if (listaAtiva) {
+      setMissingListaId(null);
+      setListaLookupError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setMissingListaId(null);
+    setListaLookupError(null);
+    void (async () => {
+      try {
+        for (let attempt = 0; attempt < 8 && !cancelled; attempt++) {
+          const found = await getListaById(activeListaId);
+          if (cancelled) return;
+          if (found) {
+            pinConfirmedLista(found);
+            return;
+          }
+          if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        if (!cancelled) setMissingListaId(activeListaId);
+      } catch (error) {
+        if (cancelled) return;
+        setListaLookupError(error instanceof Error ? error.message : 'Não foi possível consultar esta lista no Supabase.');
+        setMissingListaId(activeListaId);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [activeListaId, listaAtiva?.id, pinConfirmedLista]);
 
   // Sincronizar cache em memória da lista ativa para evitar race-conditions
   useEffect(() => {
@@ -548,51 +640,59 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const handleProcessarVerificarLote = async () => {
-    if (!listaAtiva || !verificarLoteText.trim()) return;
+    if (!listaAtiva || !verificarLoteText.trim() || isImporting) return;
 
-    const rawIds = verificarLoteText.split(/[\n\t,;]+/).map(i => i.trim()).filter(Boolean);
-    let processados = 0;
+    setIsImporting(true);
+    setImportProgress(0);
+    setImportStatusText('Processando IDs para validação...');
 
-    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    try {
+      const rawIds = new Set(verificarLoteText.split(/[\n\t,;]+/).map(pastedCodeKey).filter(Boolean));
+      let processados = 0;
 
-    const itensAtualizados = listToVerify.map(item => {
-      if (item.validado) return item;
+      const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
 
-      const itemDigits = cleanDigits(item.codigo);
-      const matched = rawIds.some(rawId => {
-        let pId = rawId;
-        pId = pId.replace(/d[çc]?⁴/gi, '4');
-        pId = pId.replace(/d[çc]?4/gi, '4');
-        pId = pId.replace(/^[^0-9a-zA-Z]+/, '');
-        const match47 = pId.match(/(47\d+)/);
-        if (match47) pId = match47[1];
-        else pId = pId.replace(/m$/i, '');
-        
-        const cleanPId = pId.toUpperCase();
-        const pIdDigits = cleanDigits(cleanPId);
-        
-        return item.codigo === cleanPId || (itemDigits && pIdDigits && itemDigits === pIdDigits);
+      const itensAtualizados = listToVerify.map(item => {
+        if (item.validado) return item;
+
+        const matched = rawIds.has(itemCodeKey(item.codigo));
+
+        if (matched) {
+          processados++;
+          return { ...item, validado: true };
+        }
+        return item;
       });
 
-      if (matched) {
-        processados++;
-        return { ...item, validado: true };
+      const changedItems = itensAtualizados.filter((item, index) => item !== listToVerify[index]);
+      if (modoIndividual) {
+        setImportStatusText('Confirmando validações no Supabase...');
+        if (!await setItensModoIndividual(itensAtualizados)) return;
+        setImportProgress(100);
+        setImportStatusText(`${processados} validações confirmadas no Supabase`);
+      } else if (changedItems.length) {
+        const confirmed = await saveListaItemsBatch(listaAtiva.id, changedItems, (current, total, percent) => {
+          setImportProgress(percent);
+          setImportStatusText(`${current} de ${total} validações confirmadas no Supabase`);
+        });
+        pinConfirmedLista(confirmed);
+      } else {
+        setImportProgress(100);
+        setImportStatusText('Nenhuma validação nova para gravar');
       }
-      return item;
-    });
 
-    if (modoIndividual) {
-      if (!await setItensModoIndividual(itensAtualizados)) return;
-    } else {
-      const updatedLista = { ...listaAtiva, itens: itensAtualizados };
-      if (!await persistLista(updatedLista)) return;
+      await new Promise(resolve => setTimeout(resolve, 250));
+      setShowVerificarLoteModal(false);
+      setVerificarLoteText('');
+      setShowVerificarModal(false); // Fecha o modal principal
+      alert(`${processados} pacotes encontrados e validados com sucesso!`);
+    } catch (error) {
+      setStorageError(error instanceof Error
+        ? `${error.message} O lote de validação foi mantido para tentar novamente.`
+        : 'Não foi possível confirmar o lote de validação no Supabase.');
+    } finally {
+      setIsImporting(false);
     }
-    
-    setShowVerificarLoteModal(false);
-    setVerificarLoteText('');
-    setShowVerificarModal(false); // Fecha o modal principal
-    
-    alert(`${processados} pacotes encontrados e validados com sucesso!`);
   };
 
   const handleCopiarIdsVerificacao = () => {
@@ -764,15 +864,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         itens: []
       };
 
-      if (!await persistLista(novaLista)) {
+      if (!await persistLista(novaLista, true)) {
         setIsLoadingLista(false);
         return;
       }
+      setLoadingMessage('Confirmando lista no Supabase...');
+      const confirmed = await waitForListaAvailable(novaLista.id);
+      pinConfirmedLista(confirmed);
       setOpeningListaId(novaLista.id);
       setShowModalNovaLista(false);
       navigate(`/listas/${novaLista.id}`);
     } catch (err) {
       console.error('Erro ao criar lista:', err);
+      setStorageError(err instanceof Error ? err.message : 'Não foi possível confirmar a criação da lista.');
       setIsLoadingLista(false);
     }
   };
@@ -1094,8 +1198,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const scannedAt = new Date().toLocaleString('pt-BR');
 
       for (let offset = 0; offset < cleanCodigos.length; offset += 250) {
-        const chunk = cleanCodigos.slice(offset, offset + 250);
-        for (const codigo of chunk) {
+        const localChunk = cleanCodigos.slice(offset, offset + 250);
+        for (const codigo of localChunk) {
           const key = itemCodeKey(codigo);
           if (modoIndividual && existingIndividualCodes.has(key)) continue;
           existingIndividualCodes.add(key);
@@ -1114,31 +1218,38 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             ...(modoIndividual ? {} : { syncStatus: 'pendente' as const })
           });
         }
-        setImportProgress(Math.round(((offset + chunk.length) / cleanCodigos.length) * 100));
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
       if (modoIndividual) {
+        setImportStatusText('Confirmando IDs no Supabase...');
         if (!await setItensModoIndividual(previous => {
           const existingKeys = new Set(previous.map(item => itemCodeKey(item.codigo)));
           return [...Array.from(changedItems.values()).filter(item => !existingKeys.has(itemCodeKey(item.codigo))), ...previous];
         })) return;
+        setImportProgress(100);
+        setImportStatusText(`${changedItems.size} IDs confirmados no Supabase`);
       } else {
-        // Use the latest items after yielding so scans received during import are retained.
-        const currentItems = activeItensRef.current;
-        const existingKeys = new Set(currentItems.map(item => itemCodeKey(item.codigo)));
-        const newItems = Array.from(changedItems.values()).filter(item => !existingKeys.has(itemCodeKey(item.codigo)));
-        const itens = [...newItems, ...currentItems.map(item => changedItems.get(itemCodeKey(item.codigo)) || item)];
-        const updatedLista = { ...listaAtiva, itens };
-        setImportStatusText('Confirmando IDs no servidor...');
-        if (!await persistLista(updatedLista)) return;
+        setImportStatusText(`Enviando 0 de ${changedItems.size} IDs ao Supabase...`);
+        const confirmed = await saveListaItemsBatch(
+          listaAtiva.id,
+          Array.from(changedItems.values()),
+          (current, total, percent) => {
+            setImportProgress(percent);
+            setImportStatusText(`${current} de ${total} IDs confirmados no Supabase`);
+          },
+        );
+        pinConfirmedLista(confirmed);
       }
+      await new Promise(resolve => setTimeout(resolve, 250));
       setItemsPage(0);
       setLoteText('');
       setShowModalLote(false);
     } catch (error) {
       console.error('Erro ao importar IDs:', error);
-      setStorageError('Não foi possível concluir a importação. O texto do lote foi mantido para tentar novamente.');
+      setStorageError(error instanceof Error
+        ? `${error.message} O texto do lote foi mantido para tentar novamente.`
+        : 'Não foi possível concluir a importação. O texto do lote foi mantido para tentar novamente.');
     } finally {
       setIsImporting(false);
     }
@@ -1289,14 +1400,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
   if (activeListaId && !listaAtiva) {
+    const checkingLista = missingListaId !== activeListaId;
     return (
       <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
         <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
-          {listasLoaded ? <AlertCircle className="w-8 h-8 text-[#3483FA]" /> : <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />}
+          {checkingLista ? <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" /> : <AlertCircle className="w-8 h-8 text-[#3483FA]" />}
         </div>
         <div className="text-center">
-          <h3 className="text-base font-bold text-[#333333]">{listasLoaded ? 'Lista ainda não disponível' : 'Carregando lista de coleta...'}</h3>
-          <p className="text-xs text-gray-500 mt-1">{listasLoaded ? storageError || 'A lista pode ter sido excluída ou não estar disponível no servidor.' : 'Carregando dados...'}</p>
+          <h3 className="text-base font-bold text-[#333333]">{checkingLista ? 'Carregando lista de coleta...' : listaLookupError ? 'Não foi possível carregar a lista' : 'Lista não encontrada'}</h3>
+          <p className="text-xs text-gray-500 mt-1">{checkingLista ? 'Consultando esta lista diretamente no Supabase...' : listaLookupError || 'A lista foi excluída ou sua conta não tem acesso a ela.'}</p>
         </div>
         <button onClick={() => navigate('/listas')} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold cursor-pointer">Voltar para listas</button>
       </div>
@@ -3125,10 +3237,28 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <ListPlus className="w-5 h-5 text-[#3483FA]" />
                 Verificação em Lote (Colar IDs Válidos)
               </h3>
-              <button onClick={() => setShowVerificarLoteModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
+              <button
+                onClick={() => setShowVerificarLoteModal(false)}
+                disabled={isImporting}
+                className="text-gray-400 hover:text-black cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Fechar validação em lote"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
+            {isImporting ? (
+              <div className="py-8 space-y-6 text-center">
+                <Loader2 className="w-10 h-10 mx-auto text-[#3483FA] animate-spin" />
+                <div className="space-y-2">
+                  <h4 className="text-sm font-black text-gray-800">{importStatusText}</h4>
+                  <div className="w-full bg-gray-100 rounded-full h-3.5 overflow-hidden border border-gray-200 p-0.5">
+                    <div className="bg-[#3483FA] h-full transition-all duration-300 rounded-full" style={{ width: `${importProgress}%` }} />
+                  </div>
+                  <p className="text-xs font-black text-[#3483FA]">{importProgress}% Concluído</p>
+                </div>
+                <p className="text-[11px] text-gray-500 font-medium">A janela fechará depois da confirmação completa no banco.</p>
+              </div>
+            ) : (
             <form onSubmit={(e) => { e.preventDefault(); handleProcessarVerificarLote(); }}>
               <div className="space-y-4">
                 <div>
@@ -3166,6 +3296,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}
@@ -3179,7 +3310,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <ListPlus className="w-5 h-5 text-[#3483FA]" />
                 Adicionar Lote de IDs na Lista
               </h3>
-              <button onClick={() => setShowModalLote(false)} className="text-gray-400 hover:text-black cursor-pointer">
+              <button
+                onClick={() => setShowModalLote(false)}
+                disabled={isImporting}
+                className="text-gray-400 hover:text-black cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Fechar importação"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -3199,7 +3335,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </div>
                   <p className="text-xs font-black text-[#3483FA]">{importProgress}% Concluído</p>
                 </div>
-                <p className="text-[11px] text-gray-400 font-medium">Processamento otimizado para carregar todos os IDs sem perdas.</p>
+                <p className="text-[11px] text-gray-500 font-medium">O percentual só avança depois que cada bloco é confirmado no banco.</p>
               </div>
             ) : (
               <form onSubmit={handleAdicionarLote} className="space-y-4">
