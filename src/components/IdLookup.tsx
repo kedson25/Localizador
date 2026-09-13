@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, Upload, Filter, ListPlus } from 'lucide-react';
+import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Upload, Filter, ListPlus } from 'lucide-react';
 import { CsvRow, LookupMatch, ColetaLista, ColetaItem } from '../types';
 import { searchIdsInRows, cleanDigits } from '../utils/csvParser';
 import { listenToListas } from '../lib/firebase';
@@ -202,6 +202,189 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
       return a.searchTerm.localeCompare(b.searchTerm, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [matches, saidaFilter]);
+
+  // Paginação da Consulta de IDs para suportar 9.000+ IDs sem travar
+  const [lookupPage, setLookupPage] = useState<number>(1);
+  const [lookupPageSize, setLookupPageSize] = useState<number>(100);
+  const [jumpLookupPageInput, setJumpLookupPageInput] = useState<string>('1');
+
+  useEffect(() => {
+    setLookupPage(1);
+    setJumpLookupPageInput('1');
+  }, [inputText, saidaFilter]);
+
+  const totalLookupPages = Math.max(1, Math.ceil(filteredMatches.length / lookupPageSize));
+
+  useEffect(() => {
+    if (lookupPage > totalLookupPages) {
+      setLookupPage(totalLookupPages);
+      setJumpLookupPageInput(String(totalLookupPages));
+    }
+  }, [totalLookupPages, lookupPage]);
+
+  const startLookupIndex = (lookupPage - 1) * lookupPageSize;
+  const endLookupIndex = Math.min(filteredMatches.length, startLookupIndex + lookupPageSize);
+
+  const displayedMatches = useMemo(() => {
+    return filteredMatches.slice(startLookupIndex, endLookupIndex);
+  }, [filteredMatches, startLookupIndex, endLookupIndex]);
+
+  const renderLookupPagination = (position: 'top' | 'bottom') => {
+    if (filteredMatches.length === 0) return null;
+
+    const delta = 2;
+    const range: number[] = [];
+    for (let i = 1; i <= totalLookupPages; i++) {
+      if (i === 1 || i === totalLookupPages || (i >= lookupPage - delta && i <= lookupPage + delta)) {
+        range.push(i);
+      }
+    }
+
+    const rangeWithDots: (number | string)[] = [];
+    let prevNum: number | undefined;
+    for (const num of range) {
+      if (prevNum) {
+        if (num - prevNum === 2) {
+          rangeWithDots.push(prevNum + 1);
+        } else if (num - prevNum !== 1) {
+          rangeWithDots.push('...');
+        }
+      }
+      rangeWithDots.push(num);
+      prevNum = num;
+    }
+
+    const handleJump = (e: React.FormEvent) => {
+      e.preventDefault();
+      const p = parseInt(jumpLookupPageInput, 10);
+      if (!isNaN(p) && p >= 1 && p <= totalLookupPages) {
+        setLookupPage(p);
+      } else {
+        setJumpLookupPageInput(String(lookupPage));
+      }
+    };
+
+    return (
+      <div className={`px-4 py-2.5 bg-gray-50 border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-600 ${
+        position === 'top' ? 'border-b rounded-t-lg' : 'border-t rounded-b-lg'
+      }`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span>
+            Mostrando <strong className="text-gray-900 font-mono">{filteredMatches.length === 0 ? 0 : startLookupIndex + 1}</strong>–<strong className="text-gray-900 font-mono">{endLookupIndex}</strong> de <strong className="text-[#3483FA] font-mono">{filteredMatches.length.toLocaleString('pt-BR')}</strong> IDs
+          </span>
+          <span className="text-gray-300 hidden sm:inline">|</span>
+          <span className="text-gray-500">
+            Pág. <strong className="text-gray-800 font-mono">{lookupPage}</strong> de <strong className="text-gray-800 font-mono">{totalLookupPages}</strong>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1 flex-wrap justify-center">
+          <button
+            type="button"
+            onClick={() => { setLookupPage(1); setJumpLookupPageInput('1'); }}
+            disabled={lookupPage === 1}
+            className="p-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Primeira página"
+          >
+            <ChevronsLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const nextP = Math.max(1, lookupPage - 1);
+              setLookupPage(nextP);
+              setJumpLookupPageInput(String(nextP));
+            }}
+            disabled={lookupPage === 1}
+            className="p-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Página anterior"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="hidden sm:flex items-center gap-1">
+            {rangeWithDots.map((p, idx) => {
+              if (p === '...') {
+                return <span key={`ellipsis-lookup-${position}-${idx}`} className="px-1 text-gray-400 font-mono select-none">...</span>;
+              }
+              const isCurrent = p === lookupPage;
+              return (
+                <button
+                  key={`page-lookup-${position}-${p}`}
+                  type="button"
+                  onClick={() => { setLookupPage(Number(p)); setJumpLookupPageInput(String(p)); }}
+                  className={`min-w-[28px] h-7 px-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
+                    isCurrent
+                      ? 'bg-[#3483FA] text-white shadow-sm'
+                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const nextP = Math.min(totalLookupPages, lookupPage + 1);
+              setLookupPage(nextP);
+              setJumpLookupPageInput(String(nextP));
+            }}
+            disabled={lookupPage >= totalLookupPages}
+            className="p-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Próxima página"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => { setLookupPage(totalLookupPages); setJumpLookupPageInput(String(totalLookupPages)); }}
+            disabled={lookupPage >= totalLookupPages}
+            className="p-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Última página"
+          >
+            <ChevronsRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] text-gray-500">Por pág:</span>
+            <select
+              value={lookupPageSize}
+              onChange={(e) => {
+                setLookupPageSize(Number(e.target.value));
+                setLookupPage(1);
+                setJumpLookupPageInput('1');
+              }}
+              className="px-2 py-1 bg-white border border-gray-300 rounded text-xs font-bold text-gray-700 outline-none focus:border-[#3483FA] cursor-pointer"
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+              <option value={500}>500</option>
+              <option value={1000}>1000</option>
+            </select>
+          </div>
+
+          <form onSubmit={handleJump} className="flex items-center gap-1">
+            <span className="text-[11px] text-gray-500">Ir:</span>
+            <input
+              type="number"
+              min={1}
+              max={totalLookupPages}
+              value={jumpLookupPageInput}
+              onChange={(e) => setJumpLookupPageInput(e.target.value)}
+              onBlur={handleJump}
+              className="w-12 px-1 py-1 bg-white border border-gray-300 rounded text-xs font-mono font-bold text-center text-gray-800 outline-none focus:border-[#3483FA]"
+            />
+          </form>
+        </div>
+      </div>
+    );
+  };
 
   // Group breakdown for matched IDs in numeric order (1, 2, 3...)
   const foundGroupCounts = useMemo(() => {
@@ -482,7 +665,8 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
           Nenhum resultado corresponde ao filtro de Saída: "{saidaFilter}".
         </div>
       ) : matches.length > 0 ? (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm flex flex-col">
+          {renderLookupPagination('top')}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-gray-50 text-gray-500 font-bold border-b border-gray-200 uppercase tracking-wider text-[10px]">
@@ -497,16 +681,17 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 text-gray-800 text-[11px]">
-                {filteredMatches.map((match, idx) => {
-                  const isExpanded = expandedRowIdx === idx;
+                {displayedMatches.map((match, idx) => {
+                  const globalIdx = startLookupIndex + idx;
+                  const isExpanded = expandedRowIdx === globalIdx;
                   return (
-                    <React.Fragment key={`${match.searchTerm}-${idx}`}>
+                    <React.Fragment key={`${match.searchTerm}-${globalIdx}`}>
                       <tr
                         className={`hover:bg-amber-50/50 transition-colors ${
-                          !match.found ? 'bg-red-50/30' : idx % 2 === 1 ? 'bg-gray-50/40' : 'bg-white'
+                          !match.found ? 'bg-red-50/30' : globalIdx % 2 === 1 ? 'bg-gray-50/40' : 'bg-white'
                         }`}
                       >
-                        <td className="py-2 px-3 text-gray-400 text-[10px]">{idx + 1}</td>
+                        <td className="py-2 px-3 text-gray-400 text-[10px]">{globalIdx + 1}</td>
 
                         <td className="py-2 px-3 font-bold text-gray-900 whitespace-nowrap">
                           <div className="flex flex-col">
@@ -567,11 +752,11 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                         <td className="py-2 px-3 whitespace-nowrap text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
-                              onClick={() => handleCopySingleRowDetail(match, idx)}
+                              onClick={() => handleCopySingleRowDetail(match, globalIdx)}
                               className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-300 text-[10px] font-mono font-medium transition-colors"
                               title="Copiar ID, Grupo e Saída"
                             >
-                              {copiedDetailIdx === idx ? (
+                              {copiedDetailIdx === globalIdx ? (
                                 <span className="text-green-600 font-bold">Copiado</span>
                               ) : (
                                 <span>Copiar</span>
@@ -580,7 +765,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
 
                             {match.found && match.row && (
                               <button
-                                onClick={() => setExpandedRowIdx(isExpanded ? null : idx)}
+                                onClick={() => setExpandedRowIdx(isExpanded ? null : globalIdx)}
                                 className="p-1 text-gray-400 hover:text-gray-700 bg-gray-50 hover:bg-gray-100 rounded border border-gray-200"
                                 title="Detalhes completos"
                               >
@@ -641,6 +826,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
               </tbody>
             </table>
           </div>
+          {renderLookupPagination('bottom')}
         </div>
       ) : null}
 

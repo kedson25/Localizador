@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Papa from 'papaparse';
 import { 
   Barcode, 
@@ -25,6 +25,9 @@ import {
   Layers,
   Edit2,
   ChevronRight,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
   AlertCircle,
   CheckSquare,
   Square,
@@ -72,10 +75,31 @@ const MOTIVOS_DISPONIVEIS = [
 ];
 
 let audioCtx: AudioContext | null = null;
+
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    try {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+    } catch (_) {}
+    window.removeEventListener('pointerdown', unlockAudio);
+    window.removeEventListener('keydown', unlockAudio);
+  };
+  window.addEventListener('pointerdown', unlockAudio, { once: true });
+  window.addEventListener('keydown', unlockAudio, { once: true });
+}
+
 const playShortBeep = () => {
   try {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
     }
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -88,13 +112,147 @@ const playShortBeep = () => {
     
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    
+
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        gain.disconnect();
+      } catch (_) {}
+    };
+
     osc.start();
     osc.stop(audioCtx.currentTime + 0.05);
   } catch (e) {
     console.error("Audio beep error:", e);
   }
 };
+
+const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
+
+interface BipScannerFormProps {
+  onBip: (code: string) => void;
+  isLocked: boolean;
+  onToggleLock: () => void;
+  inputRef?: React.RefObject<HTMLInputElement>;
+}
+
+const BipScannerForm: React.FC<BipScannerFormProps> = React.memo(({ onBip, isLocked, onToggleLock, inputRef: externalInputRef }) => {
+  const [inputValue, setInputValue] = useState('');
+  const localInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = externalInputRef || localInputRef;
+  const isSubmittingRef = useRef(false);
+
+  useEffect(() => {
+    if (!isLocked) {
+      inputRef.current?.focus();
+    }
+  }, [isLocked, inputRef]);
+
+  // Global scanner listener: auto-focus input when a barcode is scanned even if focus was blurred
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (isLocked) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
+        return;
+      }
+      if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [isLocked, inputRef]);
+
+  const submitCurrent = () => {
+    const trimmed = inputValue.trim();
+    if (!trimmed || isLocked || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    onBip(trimmed);
+    setInputValue('');
+    requestAnimationFrame(() => {
+      isSubmittingRef.current = false;
+      inputRef.current?.focus();
+    });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitCurrent();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitCurrent();
+    }
+  };
+
+  return (
+    <>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+        <div className="flex items-center gap-2">
+          <Barcode className="w-5 h-5 text-[#3483FA]" />
+          <span className="font-bold text-sm text-[#333333]">Leitor de Pacotes</span>
+        </div>
+
+        <button 
+          type="button" 
+          onClick={onToggleLock}
+          className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border cursor-pointer ${
+            isLocked 
+              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
+              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+          }`}
+        >
+          {isLocked ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
+        </button>
+      </div>
+
+      <form onSubmit={handleSubmit} className="mt-3">
+        <div className="relative flex items-center">
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+            <Barcode className={`h-5 w-5 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
+          </div>
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={() => {
+              if (!isLocked) {
+                setTimeout(() => {
+                  if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+                    inputRef.current?.focus();
+                  }
+                }, 150);
+              }
+            }}
+            disabled={isLocked}
+            className={`block w-full pl-11 pr-3 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
+              isLocked 
+                ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
+                : 'border-[#3483FA]/40 focus:ring-2 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-400'
+            }`}
+            placeholder="ID do pacote..."
+            autoFocus
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck="false"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={isLocked || !inputValue.trim()}
+          className="w-full mt-2 py-2.5 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
+        >
+          Registrar Bip
+        </button>
+      </form>
+    </>
+  );
+});
 
 export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const params = useParams();
@@ -103,7 +261,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const activeListaId = params.id || null;
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   
-  const [bipInput, setBipInput] = useState('');
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string, code: string } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -308,32 +465,48 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     navigate(`/listas/${id}`);
   };
 
-  const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
+  // Mapa indexado em memória para busca O(1) instantânea de rota por ID (elimina qualquer lag de busca)
+  const refugoMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!refugoBaseRows || refugoBaseRows.length === 0) return map;
 
-  // Obter rota oficial baseada estritamente no arquivo de refugo atual
+    for (let i = 0; i < refugoBaseRows.length; i++) {
+      const r = refugoBaseRows[i];
+      if (!r.id) continue;
+      const rota = (r.rota && r.rota.trim() !== '' && r.rota.toLowerCase() !== 'sem rota' && r.rota !== '-')
+        ? r.rota.trim()
+        : '';
+      if (!rota) continue;
+
+      const rId = r.id.trim().toUpperCase();
+      map.set(rId, rota);
+      const withoutM = rId.replace(/m$/i, '');
+      if (!map.has(withoutM)) map.set(withoutM, rota);
+      const digits = cleanDigits(rId);
+      if (digits && !map.has(digits)) map.set(digits, rota);
+    }
+    return map;
+  }, [refugoBaseRows]);
+
+  // Obter rota oficial baseada estritamente no arquivo de refugo atual (busca ultra-rápida O(1))
   const getRotaItem = useCallback((item: { codigo: string; rota?: string }): string => {
-    if (refugoBaseRows && refugoBaseRows.length > 0) {
+    if (refugoMap.size > 0) {
       const cleanCod = (item.codigo || '').trim().toUpperCase();
       const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
       const cleanCodDigits = cleanDigits(cleanCod);
 
-      const match = refugoBaseRows.find(r => {
-        if (!r.id) return false;
-        const rId = r.id.trim().toUpperCase();
-        if (rId === cleanCod) return true;
-        if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
-        const rDigits = cleanDigits(rId);
-        return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
-      });
+      const matchedRota = refugoMap.get(cleanCod) || 
+                          refugoMap.get(cleanCodWithoutM) || 
+                          (cleanCodDigits ? refugoMap.get(cleanCodDigits) : undefined);
 
-      if (match && match.rota && match.rota.trim() !== '' && match.rota.toLowerCase() !== 'sem rota' && match.rota !== '-') {
-        return match.rota.trim();
+      if (matchedRota) {
+        return matchedRota;
       }
     }
     return (item.rota && item.rota.trim() !== '' && item.rota.toLowerCase() !== 'sem rota' && item.rota !== '-')
       ? item.rota.trim()
       : 'Sem Rota';
-  }, [refugoBaseRows]);
+  }, [refugoMap]);
 
   // Sincronizar automaticamente as rotas dos itens da lista ativa com o arquivo de refugo atual
   useEffect(() => {
@@ -762,12 +935,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
   };
 
-  // Bipar ID na tela de coleta
-  const handleBip = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bipInput.trim() || !listaAtiva) return;
+  // Bipar ID na tela de coleta (Otimizado O(1) sem travamento ou atraso)
+  const handleBipCode = useCallback(async (codeToBip: string) => {
+    if (!codeToBip.trim() || !listaAtiva) return;
 
-    let processedInput = bipInput.trim();
+    let processedInput = codeToBip.trim();
     processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
     processedInput = processedInput.replace(/d[çc]?4/gi, '4');
 
@@ -784,23 +956,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const cleanInput = processedInput.toUpperCase();
     const cleanInputDigits = cleanDigits(cleanInput);
 
-    // Beep curto de 50ms
+    // Beep curto de 50ms instantâneo
     playShortBeep();
 
-    // Tentar localizar se existe na base de refugo para puxar a rota exata
+    // Fast O(1) Map lookup para puxar a rota exata em 0ms
     const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
-    const refugoMatch = refugoBaseRows.find(r => {
-      if (!r.id) return false;
-      const rId = r.id.trim().toUpperCase();
-      if (rId === cleanInput) return true;
-      if (rId.replace(/m$/i, '') === cleanInputWithoutM) return true;
-      const rDigits = cleanDigits(rId);
-      return Boolean(rDigits && cleanInputDigits && rDigits === cleanInputDigits);
-    });
+    const matchedRota = refugoMap.get(cleanInput) || 
+                        refugoMap.get(cleanInputWithoutM) || 
+                        (cleanInputDigits ? refugoMap.get(cleanInputDigits) : undefined);
 
-    const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
-      ? refugoMatch.rota.trim()
-      : 'Sem Rota';
+    const rotaItemFinal = matchedRota || 'Sem Rota';
 
     // Usar obrigatoriamente a saída do ciclo configurada
     const saidaItemFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
@@ -843,9 +1008,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           message: `ID validado na sessão individual! (Rota: ${novoItemIndividual.rota})`
         });
       }
-
-      setBipInput('');
-      inputRef.current?.focus();
       return;
     }
 
@@ -904,10 +1066,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const updatedLista = { ...listaAtiva, itens: novosItens };
     setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
     saveLista(updatedLista).catch(err => console.error('Erro ao salvar no banco:', err));
-
-    setBipInput('');
-    inputRef.current?.focus();
-  };
+  }, [listaAtiva, refugoMap, selectedSaida, modoIndividual, itensModoIndividual, selectedMotivo, operanteNome]);
 
   // Alterar motivo do item selecionado na gaveta
   const handleMudarMotivoItem = async (novoMotivoEscolha: string) => {
@@ -1095,17 +1254,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
         const cleanCodDigits = cleanDigits(cleanCod);
         const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
-        const refugoMatch = refugoBaseRows.find(r => {
-          if (!r.id) return false;
-          const rId = r.id.trim().toUpperCase();
-          if (rId === cleanCod) return true;
-          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
-          const rDigits = cleanDigits(rId);
-          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
-        });
-        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
-          ? refugoMatch.rota.trim()
-          : 'Sem Rota';
+        const matchedRota = refugoMap.get(cleanCod) || 
+                            refugoMap.get(cleanCodWithoutM) || 
+                            (cleanCodDigits ? refugoMap.get(cleanCodDigits) : undefined);
+        const rotaItemFinal = matchedRota || 'Sem Rota';
         const itemPrincipal = listaAtiva.itens.find(i => i.codigo === cleanCod || (cleanDigits(i.codigo) === cleanCodDigits && cleanCodDigits !== ''));
         const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
 
@@ -1155,17 +1307,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         const cleanCodDigits = cleanDigits(cleanCod);
         const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
 
-        const refugoMatch = refugoBaseRows.find(r => {
-          if (!r.id) return false;
-          const rId = r.id.trim().toUpperCase();
-          if (rId === cleanCod) return true;
-          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
-          const rDigits = cleanDigits(rId);
-          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
-        });
-        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
-          ? refugoMatch.rota.trim()
-          : 'Sem Rota';
+        const matchedRota = refugoMap.get(cleanCod) || 
+                            refugoMap.get(cleanCodWithoutM) || 
+                            (cleanCodDigits ? refugoMap.get(cleanCodDigits) : undefined);
+        const rotaItemFinal = matchedRota || 'Sem Rota';
 
         if (novosItensMap.has(cleanCod)) {
           const item = novosItensMap.get(cleanCod)!;
@@ -1738,21 +1883,220 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const meusItensCount = listToVerify.filter(i => (i.responsavel || listaAtiva.responsavel) === operanteNome).length;
 
-  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+  const [jumpPageInput, setJumpPageInput] = useState('1');
 
-  const filteredItems = itemsFiltradosBase.filter(item => {
-    if (!searchTerm.trim()) return true;
+  useEffect(() => {
+    setCurrentPage(1);
+    setJumpPageInput('1');
+  }, [activeListaId, searchTerm]);
+
+  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || []);
+
+  const filteredItems = useMemo(() => {
+    if (!searchTerm.trim()) return itemsFiltradosBase;
     const term = searchTerm.toLowerCase();
-    const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
-    const nomeGrupo = grupo ? grupo.nome.toLowerCase() : '';
-    const rotaCalculada = getRotaItem(item).toLowerCase();
-    return item.codigo.toLowerCase().includes(term) || 
-           rotaCalculada.includes(term) || 
-           item.motivo.toLowerCase().includes(term) || 
-           (item.saida && item.saida.toLowerCase().includes(term)) ||
-           (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
-           nomeGrupo.includes(term);
-  });
+    const gruposMap = new Map((listaAtiva?.grupos || []).map(g => [g.id, g.nome.toLowerCase()]));
+
+    return itemsFiltradosBase.filter(item => {
+      const nomeGrupo = item.grupoId ? (gruposMap.get(item.grupoId) || '') : '';
+      const rotaCalculada = getRotaItem(item).toLowerCase();
+      return item.codigo.toLowerCase().includes(term) || 
+             rotaCalculada.includes(term) || 
+             (item.motivo && item.motivo.toLowerCase().includes(term)) || 
+             (item.saida && item.saida.toLowerCase().includes(term)) ||
+             (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
+             nomeGrupo.includes(term);
+    });
+  }, [itemsFiltradosBase, searchTerm, listaAtiva?.grupos, getRotaItem]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+      setJumpPageInput(String(totalPages));
+    }
+  }, [totalPages, currentPage]);
+
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(filteredItems.length, startIndex + pageSize);
+
+  const displayedItems = useMemo(() => {
+    return filteredItems.slice(startIndex, endIndex);
+  }, [filteredItems, startIndex, endIndex]);
+
+  const selectedItemIdsSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
+  const allPageSelected = displayedItems.length > 0 && displayedItems.every(i => selectedItemIdsSet.has(i.id));
+
+  const handleToggleSelectPage = useCallback(() => {
+    const pageIds = displayedItems.map(i => i.id);
+    const allSelected = pageIds.length > 0 && pageIds.every(id => selectedItemIdsSet.has(id));
+    if (allSelected) {
+      setSelectedItemIds(prev => prev.filter(id => !pageIds.includes(id)));
+    } else {
+      const newSet = new Set([...selectedItemIds, ...pageIds]);
+      setSelectedItemIds(Array.from(newSet));
+    }
+  }, [displayedItems, selectedItemIdsSet, selectedItemIds]);
+
+  const renderPagination = (position: 'top' | 'bottom') => {
+    if (filteredItems.length === 0) return null;
+
+    const delta = 2;
+    const range: number[] = [];
+    for (let i = 1; i <= totalPages; i++) {
+      if (i === 1 || i === totalPages || (i >= currentPage - delta && i <= currentPage + delta)) {
+        range.push(i);
+      }
+    }
+
+    const rangeWithDots: (number | string)[] = [];
+    let prevNum: number | undefined;
+    for (const num of range) {
+      if (prevNum) {
+        if (num - prevNum === 2) {
+          rangeWithDots.push(prevNum + 1);
+        } else if (num - prevNum !== 1) {
+          rangeWithDots.push('...');
+        }
+      }
+      rangeWithDots.push(num);
+      prevNum = num;
+    }
+
+    const handleJump = (e: React.FormEvent) => {
+      e.preventDefault();
+      const p = parseInt(jumpPageInput, 10);
+      if (!isNaN(p) && p >= 1 && p <= totalPages) {
+        setCurrentPage(p);
+      } else {
+        setJumpPageInput(String(currentPage));
+      }
+    };
+
+    return (
+      <div className={`px-4 py-2.5 bg-gray-50 border-gray-200 flex flex-col lg:flex-row items-center justify-between gap-3 text-xs text-gray-600 ${
+        position === 'top' ? 'border-b rounded-t-xl' : 'border-t rounded-b-xl'
+      }`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span>
+            Mostrando <strong className="text-gray-900 font-mono">{filteredItems.length === 0 ? 0 : startIndex + 1}</strong>–<strong className="text-gray-900 font-mono">{endIndex}</strong> de <strong className="text-[#3483FA] font-mono">{filteredItems.length.toLocaleString('pt-BR')}</strong> pacotes
+          </span>
+          <span className="text-gray-300 hidden sm:inline">|</span>
+          <span className="text-gray-500">
+            Pág. <strong className="text-gray-800 font-mono">{currentPage}</strong> de <strong className="text-gray-800 font-mono">{totalPages}</strong>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1 flex-wrap justify-center">
+          <button
+            type="button"
+            onClick={() => { setCurrentPage(1); setJumpPageInput('1'); }}
+            disabled={currentPage === 1}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Primeira página"
+          >
+            <ChevronsLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const nextP = Math.max(1, currentPage - 1);
+              setCurrentPage(nextP);
+              setJumpPageInput(String(nextP));
+            }}
+            disabled={currentPage === 1}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Página anterior"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="hidden sm:flex items-center gap-1">
+            {rangeWithDots.map((p, idx) => {
+              if (p === '...') {
+                return <span key={`ellipsis-${position}-${idx}`} className="px-1 text-gray-400 font-mono select-none">...</span>;
+              }
+              const isCurrent = p === currentPage;
+              return (
+                <button
+                  key={`page-${position}-${p}`}
+                  type="button"
+                  onClick={() => { setCurrentPage(Number(p)); setJumpPageInput(String(p)); }}
+                  className={`min-w-[28px] h-7 px-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                    isCurrent
+                      ? 'bg-[#3483FA] text-white shadow-sm'
+                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const nextP = Math.min(totalPages, currentPage + 1);
+              setCurrentPage(nextP);
+              setJumpPageInput(String(nextP));
+            }}
+            disabled={currentPage >= totalPages}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Próxima página"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => { setCurrentPage(totalPages); setJumpPageInput(String(totalPages)); }}
+            disabled={currentPage >= totalPages}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Última página"
+          >
+            <ChevronsRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] text-gray-500">Por pág:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+                setJumpPageInput('1');
+              }}
+              className="px-2 py-1 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700 outline-none focus:border-[#3483FA] cursor-pointer"
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+              <option value={500}>500</option>
+              <option value={1000}>1000</option>
+            </select>
+          </div>
+
+          <form onSubmit={handleJump} className="flex items-center gap-1">
+            <span className="text-[11px] text-gray-500">Ir:</span>
+            <input
+              type="number"
+              min={1}
+              max={totalPages}
+              value={jumpPageInput}
+              onChange={(e) => setJumpPageInput(e.target.value)}
+              onBlur={handleJump}
+              className="w-12 px-1 py-1 bg-white border border-gray-300 rounded-lg text-xs font-mono font-bold text-center text-gray-800 outline-none focus:border-[#3483FA]"
+            />
+          </form>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <motion.div 
@@ -2192,57 +2536,88 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             )}
 
             {filteredItems.length > 0 ? (
-              <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
-                <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse">
-                  <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
-                    <tr>
-                      <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
-                        <input
-                          type="checkbox"
-                          checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))}
-                          onChange={() => handleToggleSelectAll(filteredItems)}
-                          className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
-                          title="Selecionar/Desmarcar Todos os visíveis"
-                        />
-                      </th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">#</th>
-                      <th className="py-1 px-1 sm:px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
-                      {listaAtiva.tipo === 'grupos' && (
-                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100 text-gray-700">Grupo</th>
-                      )}
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Status</th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Bipado por</th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Rota</th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Saída</th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Motivo</th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Data / Hora</th>
-                      <th className="py-1 px-1 sm:px-2 text-center border-b border-gray-200 bg-gray-100">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 font-sans">
-                    {filteredItems.map((item, idx) => {
-                      const isSelected = selectedItemIds.includes(item.id);
-                      const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
-                      const itemRota = getRotaItem(item);
-                      const hasRota = itemRota && itemRota.trim() !== '' && itemRota.toLowerCase() !== 'sem rota' && itemRota !== '-';
-                      return (
-                        <React.Fragment key={`frag-${item.id}-${idx}`}>
-                        <tr 
-                          className={`transition-all border-b border-gray-200 group ${
-                            isSelected 
-                              ? 'bg-blue-50/90 font-bold' 
-                              : 'bg-white hover:bg-gray-50'
-                          } ${isEditingMotivo ? 'bg-blue-50/40' : ''}`}
-                        >
-                          <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => handleToggleSelectItem(item.id)}
-                              className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
-                            />
-                          </td>
-                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - idx}</td>
+              <div className="flex flex-col border border-gray-200 rounded-xl shadow-sm overflow-hidden bg-white">
+                {renderPagination('top')}
+
+                {allPageSelected && filteredItems.length > displayedItems.length && (
+                  <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 text-xs text-blue-900 flex flex-col sm:flex-row items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-[#3483FA] flex-shrink-0" />
+                      <span>
+                        Todos os <strong>{displayedItems.length}</strong> pacotes desta página estão selecionados.
+                      </span>
+                    </div>
+                    {selectedItemIds.length === filteredItems.length ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedItemIds([])}
+                        className="font-bold text-blue-700 hover:text-blue-900 underline cursor-pointer text-xs"
+                      >
+                        Limpar seleção de todos ({selectedItemIds.length} selecionados)
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedItemIds(filteredItems.map(i => i.id))}
+                        className="font-bold text-white bg-[#3483FA] hover:bg-blue-600 px-3 py-1 rounded-lg text-xs transition-colors shadow-2xs cursor-pointer"
+                      >
+                        Selecionar todos os {filteredItems.length.toLocaleString('pt-BR')} pacotes da lista
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="overflow-x-auto max-h-[70vh]">
+                  <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse">
+                    <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
+                      <tr>
+                        <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
+                          <input
+                            type="checkbox"
+                            checked={displayedItems.length > 0 && displayedItems.every(i => selectedItemIdsSet.has(i.id))}
+                            onChange={handleToggleSelectPage}
+                            className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
+                            title="Selecionar/Desmarcar Todos desta página"
+                          />
+                        </th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">#</th>
+                        <th className="py-1 px-1 sm:px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
+                        {listaAtiva.tipo === 'grupos' && (
+                          <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100 text-gray-700">Grupo</th>
+                        )}
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Status</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Bipado por</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Rota</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Saída</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Motivo</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Data / Hora</th>
+                        <th className="py-1 px-1 sm:px-2 text-center border-b border-gray-200 bg-gray-100">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 font-sans">
+                      {displayedItems.map((item, idx) => {
+                        const isSelected = selectedItemIdsSet.has(item.id);
+                        const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
+                        const itemRota = getRotaItem(item);
+                        const hasRota = itemRota && itemRota.trim() !== '' && itemRota.toLowerCase() !== 'sem rota' && itemRota !== '-';
+                        return (
+                          <React.Fragment key={`frag-${item.id}-${idx}`}>
+                          <tr 
+                            className={`transition-all border-b border-gray-200 group ${
+                              isSelected 
+                                ? 'bg-blue-50/90 font-bold' 
+                                : 'bg-white hover:bg-gray-50'
+                            } ${isEditingMotivo ? 'bg-blue-50/40' : ''}`}
+                          >
+                            <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleSelectItem(item.id)}
+                                className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
+                              />
+                            </td>
+                            <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - (startIndex + idx)}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
                             className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
@@ -2444,6 +2819,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </tbody>
                 </table>
               </div>
+              {renderPagination('bottom')}
+            </div>
             ) : (
               <div className="py-12 text-center text-gray-400">
                 <Barcode className="w-10 h-10 mx-auto text-gray-300 mb-2" />
@@ -2463,60 +2840,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             animate={{ opacity: 1, x: 0 }}
             className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA]"
           >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-              <div className="flex items-center gap-2">
-                <Barcode className="w-5 h-5 text-[#3483FA]" />
-                <span className="font-bold text-sm text-[#333333]">Leitor de Pacotes</span>
-              </div>
-
-              <button 
-                type="button" 
-                onClick={() => {
-                  setIsLocked(!isLocked);
-                  if (isLocked) setTimeout(() => inputRef.current?.focus(), 50);
-                }}
-                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border cursor-pointer ${
-                  isLocked 
-                    ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                }`}
-              >
-                {isLocked ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
-              </button>
-            </div>
-
-            {/* Form de Bip */}
-            <form onSubmit={handleBip} className="mt-3">
-              <div className="relative flex items-center">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Barcode className={`h-5 w-5 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
-                </div>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={bipInput}
-                  onChange={(e) => setBipInput(e.target.value)}
-                  onBlur={() => {
-                    if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
-                  }}
-                  disabled={isLocked}
-                  className={`block w-full pl-11 pr-3 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
-                    isLocked 
-                      ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
-                      : 'border-[#3483FA]/40 focus:ring-2 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-400'
-                  }`}
-                  placeholder="ID do pacote..."
-                  autoFocus
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={isLocked || !bipInput.trim()}
-                className="w-full mt-2 py-2.5 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
-              >
-                Registrar Bip
-              </button>
-            </form>
+            <BipScannerForm 
+              onBip={handleBipCode} 
+              isLocked={isLocked} 
+              onToggleLock={() => {
+                setIsLocked(!isLocked);
+                if (isLocked) setTimeout(() => inputRef.current?.focus(), 50);
+              }}
+              inputRef={inputRef}
+            />
 
             {/* Feedback Bip */}
             {lastScanResult && (
@@ -2764,6 +3096,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <option value={10}>10 por vez</option>
                           <option value={20}>20 por vez</option>
                           <option value={50}>50 por vez</option>
+                          <option value={100}>100 por vez</option>
+                          <option value={250}>250 por vez</option>
+                          <option value={500}>500 por vez</option>
                         </select>
                         <button
                           type="button"
@@ -2791,7 +3126,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           )}
                         </button>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={paginaAtualSafe === 0}
+                          onClick={() => {
+                            setVerificarPagina(0);
+                            setCopiedPage(null);
+                          }}
+                          className="p-1.5 bg-white border border-blue-200 text-blue-600 rounded-md disabled:opacity-40 cursor-pointer font-bold hover:bg-blue-50 transition-colors"
+                          title="Primeira página"
+                        >
+                          <ChevronsLeft className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           disabled={paginaAtualSafe === 0}
@@ -2799,9 +3146,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             setVerificarPagina(paginaAtualSafe - 1);
                             setCopiedPage(null);
                           }}
-                          className="px-3 py-1.5 bg-white border border-blue-200 text-blue-600 rounded-md disabled:opacity-40 cursor-pointer font-bold hover:bg-blue-50 transition-colors"
+                          className="px-2.5 py-1.5 bg-white border border-blue-200 text-blue-600 rounded-md disabled:opacity-40 cursor-pointer font-bold hover:bg-blue-50 transition-colors flex items-center gap-1"
                         >
-                          Anterior
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Anterior</span>
                         </button>
                         <button
                           type="button"
@@ -2810,9 +3158,22 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             setVerificarPagina(paginaAtualSafe + 1);
                             setCopiedPage(null);
                           }}
-                          className="px-3 py-1.5 bg-[#3483FA] text-white rounded-md disabled:opacity-40 cursor-pointer font-black hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1"
+                          className="px-2.5 py-1.5 bg-[#3483FA] text-white rounded-md disabled:opacity-40 cursor-pointer font-black hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1"
                         >
-                          Próximo <ChevronRight className="w-4 h-4" />
+                          <span>Próximo</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={paginaAtualSafe >= totalPaginas - 1}
+                          onClick={() => {
+                            setVerificarPagina(Math.max(0, totalPaginas - 1));
+                            setCopiedPage(null);
+                          }}
+                          className="p-1.5 bg-white border border-blue-200 text-blue-600 rounded-md disabled:opacity-40 cursor-pointer font-bold hover:bg-blue-50 transition-colors"
+                          title="Última página"
+                        >
+                          <ChevronsRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>

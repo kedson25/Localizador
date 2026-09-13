@@ -294,27 +294,55 @@ export async function clearColetor(): Promise<boolean> {
 }
 
 
-export async function saveRefugoScans(scans: any[]): Promise<boolean> {
-  try {
-    localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(scans));
-  } catch (err) {
-    console.warn('Falha ao salvar scans localmente:', err);
-  }
+let refugoScansDebounceTimer: any = null;
+let pendingScansData: any[] | null = null;
+
+export async function saveRefugoScans(scans: any[], immediate = false): Promise<boolean> {
+  pendingScansData = scans;
   
-  try {
-    const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
-    await withTimeout(
-      setDoc(refugoScansRef, {
-        scans,
-        updatedAt: serverTimestamp(),
-      }),
-      3500
-    );
-    return true;
-  } catch (error) {
-    console.warn('Aviso: Firestore offline (scans salvos localmente):', error);
-    return true;
+  if (refugoScansDebounceTimer) {
+    clearTimeout(refugoScansDebounceTimer);
+    refugoScansDebounceTimer = null;
   }
+
+  const doSave = async (dataToSave: any[]) => {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(dataToSave));
+    } catch (err) {
+      console.warn('Falha ao salvar scans localmente:', err);
+    }
+    
+    try {
+      const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
+      await withTimeout(
+        setDoc(refugoScansRef, {
+          scans: dataToSave,
+          updatedAt: serverTimestamp(),
+        }),
+        3500
+      );
+      return true;
+    } catch (error) {
+      console.warn('Aviso: Firestore offline (scans salvos localmente):', error);
+      return true;
+    }
+  };
+
+  if (immediate) {
+    return await doSave(scans);
+  }
+
+  return new Promise<boolean>((resolve) => {
+    refugoScansDebounceTimer = setTimeout(async () => {
+      refugoScansDebounceTimer = null;
+      if (pendingScansData) {
+        const res = await doSave(pendingScansData);
+        resolve(res);
+      } else {
+        resolve(true);
+      }
+    }, 350);
+  });
 }
 
 export async function loadRefugoScans(): Promise<any[] | null> {
@@ -440,8 +468,14 @@ function getSortedRamListas(): ColetaLista[] {
   return arr.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
 }
 
+let localStoragePersistTimer: any = null;
+
 function persistRamToLocalStorageAsync() {
-  setTimeout(() => {
+  if (localStoragePersistTimer) {
+    clearTimeout(localStoragePersistTimer);
+  }
+  localStoragePersistTimer = setTimeout(() => {
+    localStoragePersistTimer = null;
     try {
       const sorted = getSortedRamListas();
       localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
@@ -451,7 +485,20 @@ function persistRamToLocalStorageAsync() {
     } catch (err) {
       console.warn('Erro ao salvar no LocalStorage em background:', err);
     }
-  }, 0);
+  }, 800);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (localStoragePersistTimer) {
+      clearTimeout(localStoragePersistTimer);
+      localStoragePersistTimer = null;
+      try {
+        const sorted = getSortedRamListas();
+        localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
+      } catch (_) {}
+    }
+  });
 }
 
 export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {

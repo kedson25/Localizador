@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
-import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { RefugoRow } from '../types';
 import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo } from '../lib/firebase';
 
@@ -13,10 +13,31 @@ interface ScannedItem {
 }
 
 let audioCtx: AudioContext | null = null;
+
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    try {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+    } catch (_) {}
+    window.removeEventListener('pointerdown', unlockAudio);
+    window.removeEventListener('keydown', unlockAudio);
+  };
+  window.addEventListener('pointerdown', unlockAudio, { once: true });
+  window.addEventListener('keydown', unlockAudio, { once: true });
+}
+
 const playBeep = () => {
   try {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
     }
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -30,6 +51,13 @@ const playBeep = () => {
     osc.connect(gain);
     gain.connect(audioCtx.destination);
     
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        gain.disconnect();
+      } catch (_) {}
+    };
+
     osc.start();
     osc.stop(audioCtx.currentTime + 0.15);
   } catch (e) {
@@ -46,6 +74,27 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
   const [baseDate, setBaseDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Paginação para pacotes bipados (suporta 9.000+ IDs sem travar)
+  const [scanPage, setScanPage] = useState<number>(1);
+  const [scanPageSize, setScanPageSize] = useState<number>(100);
+  const [jumpScanPageInput, setJumpScanPageInput] = useState<string>('1');
+
+  const totalScanPages = Math.max(1, Math.ceil(scannedItems.length / scanPageSize));
+
+  useEffect(() => {
+    if (scanPage > totalScanPages) {
+      setScanPage(totalScanPages);
+      setJumpScanPageInput(String(totalScanPages));
+    }
+  }, [totalScanPages, scanPage]);
+
+  const startScanIndex = (scanPage - 1) * scanPageSize;
+  const endScanIndex = Math.min(scannedItems.length, startScanIndex + scanPageSize);
+
+  const displayedScans = useMemo(() => {
+    return scannedItems.slice(startScanIndex, endScanIndex);
+  }, [scannedItems, startScanIndex, endScanIndex]);
 
   useEffect(() => {
     // Listen to real-time refugo base
@@ -107,6 +156,36 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
 
   const cleanDigits = (str: string) => str.replace(/\D/g, '');
 
+  const rowsMap = useMemo(() => {
+    const map = new Map<string, RefugoRow>();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r.id) continue;
+      const id = r.id.trim().toUpperCase();
+      map.set(id, r);
+      const withoutM = id.replace(/m$/i, '');
+      if (!map.has(withoutM)) map.set(withoutM, r);
+      const digits = cleanDigits(id);
+      if (digits && !map.has(digits)) map.set(digits, r);
+    }
+    return map;
+  }, [rows]);
+
+  const scannedMap = useMemo(() => {
+    const map = new Map<string, ScannedItem>();
+    for (let i = 0; i < scannedItems.length; i++) {
+      const s = scannedItems[i];
+      if (!s.id) continue;
+      const id = s.id.trim().toUpperCase();
+      map.set(id, s);
+      const withoutM = id.replace(/m$/i, '');
+      if (!map.has(withoutM)) map.set(withoutM, s);
+      const digits = cleanDigits(id);
+      if (digits && !map.has(digits)) map.set(digits, s);
+    }
+    return map;
+  }, [scannedItems]);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -165,9 +244,12 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
 
     const cleanInput = processedInput.toUpperCase();
     const cleanInputDigits = cleanDigits(cleanInput);
+    const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
     
-    // Check if already scanned
-    const alreadyScanned = scannedItems.find(item => item.id === cleanInput || (cleanInputDigits && cleanDigits(item.id) === cleanInputDigits));
+    // Check if already scanned (O(1))
+    const alreadyScanned = scannedMap.get(cleanInput) || 
+                           scannedMap.get(cleanInputWithoutM) || 
+                           (cleanInputDigits ? scannedMap.get(cleanInputDigits) : undefined);
     
     if (alreadyScanned) {
       if (alreadyScanned.status === 'found') {
@@ -180,11 +262,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
       return;
     }
 
-    const foundRow = rows.find(r => {
-      if (r.id === cleanInput) return true;
-      const rDigits = cleanDigits(r.id);
-      return rDigits && cleanInputDigits && rDigits === cleanInputDigits;
-    });
+    const foundRow = rowsMap.get(cleanInput) || 
+                     rowsMap.get(cleanInputWithoutM) || 
+                     (cleanInputDigits ? rowsMap.get(cleanInputDigits) : undefined);
 
     if (foundRow) {
       const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
@@ -391,36 +471,111 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
               </div>
             </div>
             
+            {/* Controles de Paginação Superior */}
+            {scannedItems.length > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 p-2.5 bg-gray-50 rounded-lg border border-gray-200 text-xs text-gray-600 mb-2">
+                <div className="flex items-center gap-2">
+                  <span>
+                    Mostrando <strong className="text-gray-900 font-mono">{startScanIndex + 1}</strong>–<strong className="text-gray-900 font-mono">{endScanIndex}</strong> de <strong className="text-emerald-700 font-mono">{scannedItems.length.toLocaleString('pt-BR')}</strong>
+                  </span>
+                  <span className="text-gray-300">|</span>
+                  <span>Pág. <strong className="text-gray-800">{scanPage}</strong>/{totalScanPages}</span>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { setScanPage(1); setJumpScanPageInput('1'); }}
+                    disabled={scanPage === 1}
+                    className="p-1 rounded border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    title="Primeira"
+                  >
+                    <ChevronsLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = Math.max(1, scanPage - 1);
+                      setScanPage(next);
+                      setJumpScanPageInput(String(next));
+                    }}
+                    disabled={scanPage === 1}
+                    className="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-xs font-medium flex items-center gap-0.5"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" /> Ant
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = Math.min(totalScanPages, scanPage + 1);
+                      setScanPage(next);
+                      setJumpScanPageInput(String(next));
+                    }}
+                    disabled={scanPage >= totalScanPages}
+                    className="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-xs font-medium flex items-center gap-0.5"
+                  >
+                    Próx <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setScanPage(totalScanPages); setJumpScanPageInput(String(totalScanPages)); }}
+                    disabled={scanPage >= totalScanPages}
+                    className="p-1 rounded border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    title="Última"
+                  >
+                    <ChevronsRight className="w-3.5 h-3.5" />
+                  </button>
+
+                  <select
+                    value={scanPageSize}
+                    onChange={(e) => {
+                      setScanPageSize(Number(e.target.value));
+                      setScanPage(1);
+                      setJumpScanPageInput('1');
+                    }}
+                    className="ml-1 px-1.5 py-1 bg-white border border-gray-300 rounded text-xs font-bold text-gray-700 outline-none cursor-pointer"
+                  >
+                    <option value={50}>50/pág</option>
+                    <option value={100}>100/pág</option>
+                    <option value={250}>250/pág</option>
+                    <option value={500}>500/pág</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
             <div className="overflow-y-auto flex-1 pr-2 space-y-2">
               {scannedItems.length > 0 ? (
-                scannedItems.map((item, idx) => (
-                  <div key={`scan-${idx}`} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${item.status === 'found' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
-                    <div className="flex items-center gap-2">
-                      {item.status === 'found' ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-red-500" />
-                      )}
-                      <span className={`font-mono font-bold text-sm ${item.status === 'found' ? 'text-emerald-900' : 'text-red-900'}`}>{item.id}</span>
-                    </div>
-                    {item.status === 'found' ? (
-                      <div className="flex flex-col items-end">
-                        <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
-                          Rota: {item.rota}
-                        </span>
-                        {item.foundBy && (
-                          <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
-                            Encontrado por: <strong className="text-gray-700">{item.foundBy}</strong>
-                          </span>
+                <>
+                  {displayedScans.map((item, idx) => (
+                    <div key={`scan-${startScanIndex + idx}`} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${item.status === 'found' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                      <div className="flex items-center gap-2">
+                        {item.status === 'found' ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-500" />
                         )}
+                        <span className={`font-mono font-bold text-sm ${item.status === 'found' ? 'text-emerald-900' : 'text-red-900'}`}>{item.id}</span>
                       </div>
-                    ) : (
-                      <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded text-xs font-bold border border-red-200">
-                        SEM ROTA
-                      </span>
-                    )}
-                  </div>
-                ))
+                      {item.status === 'found' ? (
+                        <div className="flex flex-col items-end">
+                          <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
+                            Rota: {item.rota}
+                          </span>
+                          {item.foundBy && (
+                            <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
+                              Encontrado por: <strong className="text-gray-700">{item.foundBy}</strong>
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded text-xs font-bold border border-red-200">
+                          SEM ROTA
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-10 text-center text-gray-500">
                    <Barcode className="w-12 h-12 text-gray-300 mb-3" />

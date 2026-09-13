@@ -54,7 +54,7 @@ export interface ColetaItem {
 export interface ColetaGrupo {
   id: string;
   nome: string;
-  lider: string;
+  lider?: string;
 }
 
 export interface ColetaLista {
@@ -65,6 +65,8 @@ export interface ColetaLista {
   grupoAtivoId?: string;
   rota: string;
   data: string;
+  saida?: string;
+  createdAt?: string;
   responsavel: string;
   status: 'em_andamento' | 'finalizada';
   saidaPadrao: string;
