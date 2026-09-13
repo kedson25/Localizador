@@ -1,6 +1,24 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
-import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { 
+  UploadCloud, 
+  CheckCircle2, 
+  AlertCircle, 
+  Barcode, 
+  Trash2, 
+  Search, 
+  XCircle, 
+  Lock, 
+  Unlock, 
+  Download, 
+  ChevronLeft, 
+  ChevronRight, 
+  ChevronsLeft, 
+  ChevronsRight,
+  User,
+  Clock,
+  Sparkles
+} from 'lucide-react';
 import { RefugoRow } from '../types';
 import { saveRefugo, loadRefugo, clearRefugo, saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo } from '../lib/firebase';
 
@@ -300,7 +318,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
 
   const exportScannedCSV = () => {
     if (scannedItems.length === 0) return;
-    const csvContent = "ID,ROTA\n" + scannedItems.map(r => `${r.id},${r.status === 'found' ? r.rota : 'SEM ROTA'}`).join("\n");
+    const csvContent = "ID,ROTA,ENCONTRADO POR\n" + scannedItems.map(r => `${r.id},${r.status === 'found' ? r.rota : 'SEM ROTA'},${r.foundBy || ''}`).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -431,8 +449,11 @@ export function ControleRefugo({ currentUser }: { currentUser?: any }) {
                   <span className="text-xs font-bold text-gray-400 bg-gray-50 px-2.5 py-1 rounded-md border border-gray-200">
                     Base: {rows.length} {baseDate && <span className="font-normal ml-1">({baseDate})</span>}
                   </span>
-                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-mono text-xs font-bold">
+                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-mono text-xs font-bold flex items-center gap-1.5 shadow-sm">
                     {scannedItems.length} Bipados
+                  </span>
+                  <span className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full font-mono text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                    {scannedItems.filter(i => i.status === 'found').length} Encontradas
                   </span>
                 </div>
               </div>
