@@ -46,7 +46,8 @@ import {
   listenToRefugo,
   listenToListas,
   saveLista,
-  deleteLista as deleteListaFirestore
+  deleteLista as deleteListaFirestore,
+  getListaSortTimestamp
 } from '../lib/firebase';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
@@ -915,6 +916,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const nomeGerado = `${nomeCurto} - ${dataFormatada}`;
       const rotaPadrao = novoTipo === 'grupos' ? 'Multirotas / Grupos' : 'Geral';
 
+      const nowIso = new Date().toISOString();
       const novaLista: ColetaLista = {
         id: 'lista-' + Date.now(),
         nome: nomeGerado,
@@ -923,6 +925,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         grupoAtivoId: '',
         rota: rotaPadrao,
         data: dataFormatada,
+        createdAt: nowIso,
         responsavel: operanteNome, // Criador real
         status: 'em_andamento',
         saidaPadrao: novaSaida, // Ciclo/Saída da lista
@@ -930,7 +933,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         itens: []
       };
 
-      await saveLista(novaLista);
+      await saveLista(novaLista, true);
       setOpeningListaId(novaLista.id);
       setShowModalNovaLista(false);
       navigate(`/listas/${novaLista.id}`);
@@ -1572,6 +1575,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const handleExcluirLista = async (listaId: string) => {
+    // Atualização otimista imediata 0ms na UI
+    setListas(prev => prev.filter(l => l.id !== listaId));
     await deleteListaFirestore(listaId);
     if (activeListaId === listaId) {
       navigate('/listas');
@@ -1667,14 +1672,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // -------------------------------------------------------------
   if (activeListaId && !listaAtiva) {
     return (
-      <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
-        <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
-          <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+      <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
+        <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center shadow-xs text-red-500">
+          <AlertCircle className="w-8 h-8" />
         </div>
-        <div className="text-center">
-          <h3 className="text-base font-bold text-[#333333]">Carregando lista de coleta...</h3>
-          <p className="text-xs text-gray-500 mt-1">Sincronizando dados em tempo real</p>
+        <div className="max-w-md">
+          <h3 className="text-base font-bold text-gray-900">Esta lista não foi encontrada ou foi excluída</h3>
+          <p className="text-xs text-gray-500 mt-1">A lista de coleta que você estava acessando foi excluída ou não existe mais no sistema.</p>
         </div>
+        <button
+          onClick={() => navigate('/listas')}
+          className="mt-2 px-4 py-2 bg-[#3483FA] text-white rounded-xl text-xs font-bold hover:bg-[#2c6ecf] transition-all cursor-pointer shadow-sm flex items-center gap-2"
+        >
+          Voltar para Todas as Listas
+        </button>
       </div>
     );
   }
@@ -1700,17 +1711,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         )
       );
     }).sort((a, b) => {
-      const getPriority = (s: string) => {
-        const u = (s || '').toUpperCase();
-        if (u.includes('AM')) return 1;
-        if (u.includes('SD')) return 2;
-        if (u.includes('PM')) return 3;
-        return 4;
-      };
-      const pA = getPriority(a.saidaPadrao || a.nome);
-      const pB = getPriority(b.saidaPadrao || b.nome);
-      if (pA !== pB) return pA - pB;
-      return b.id.localeCompare(a.id);
+      const tA = getListaSortTimestamp(a);
+      const tB = getListaSortTimestamp(b);
+      if (tA !== tB) return tB - tA; // Mais recente no topo!
+      return (b.id || '').localeCompare(a.id || '');
     });
 
     return (

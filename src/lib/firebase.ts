@@ -448,6 +448,67 @@ const LOCAL_STORAGE_LISTA_PREFIX = 'cached_coleta_lista_';
 const ramListasMap = new Map<string, ColetaLista>();
 const firestoreSaveDebounceMap = new Map<string, any>();
 
+export function getListaSortTimestamp(lista: ColetaLista): number {
+  if (!lista) return 0;
+
+  // 1. Check createdAt (ISO string ou timestamp numérico)
+  if (lista.createdAt) {
+    const t = new Date(lista.createdAt).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+
+  // 2. Check updatedAt (pode ser Firestore Timestamp, string ou number)
+  const anyLista = lista as any;
+  if (anyLista.updatedAt) {
+    if (typeof anyLista.updatedAt?.toMillis === 'function') {
+      return anyLista.updatedAt.toMillis();
+    }
+    if (typeof anyLista.updatedAt?.seconds === 'number') {
+      return anyLista.updatedAt.seconds * 1000;
+    }
+    const t = new Date(anyLista.updatedAt).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+
+  // 3. Extrair timestamp em milissegundos do ID (ex: "lista-1726190000000")
+  if (lista.id) {
+    const match = lista.id.match(/\d{12,}/);
+    if (match) {
+      const num = parseInt(match[0], 10);
+      if (!isNaN(num) && num > 1000000000000) return num;
+    }
+  }
+
+  // 4. Parse da data ("DD/MM/YYYY" ou "YYYY-MM-DD")
+  if (lista.data) {
+    if (lista.data.includes('/')) {
+      const parts = lista.data.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        const t = new Date(year, month, day).getTime();
+        if (!isNaN(t)) return t;
+      }
+    } else if (lista.data.includes('-')) {
+      const t = new Date(lista.data).getTime();
+      if (!isNaN(t)) return t;
+    }
+  }
+
+  return 0;
+}
+
+export function getSortedRamListas(): ColetaLista[] {
+  const arr = Array.from(ramListasMap.values());
+  return arr.sort((a, b) => {
+    const tA = getListaSortTimestamp(a);
+    const tB = getListaSortTimestamp(b);
+    if (tA !== tB) return tB - tA; // Mais recente no topo!
+    return (b.id || '').localeCompare(a.id || '');
+  });
+}
+
 // Initialize RAM cache from LocalStorage on module load
 try {
   const cachedRaw = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
@@ -463,12 +524,23 @@ try {
   console.warn('Erro ao inicializar RAM cache de listas:', e);
 }
 
-function getSortedRamListas(): ColetaLista[] {
-  const arr = Array.from(ramListasMap.values());
-  return arr.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
-}
-
 let localStoragePersistTimer: any = null;
+
+export function persistRamToLocalStorageNow() {
+  if (localStoragePersistTimer) {
+    clearTimeout(localStoragePersistTimer);
+    localStoragePersistTimer = null;
+  }
+  try {
+    const sorted = getSortedRamListas();
+    localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
+    ramListasMap.forEach((lista, id) => {
+      localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${id}`, JSON.stringify(lista));
+    });
+  } catch (err) {
+    console.warn('Erro ao salvar no LocalStorage:', err);
+  }
+}
 
 function persistRamToLocalStorageAsync() {
   if (localStoragePersistTimer) {
@@ -476,58 +548,69 @@ function persistRamToLocalStorageAsync() {
   }
   localStoragePersistTimer = setTimeout(() => {
     localStoragePersistTimer = null;
-    try {
-      const sorted = getSortedRamListas();
-      localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
-      ramListasMap.forEach((lista, id) => {
-        localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${id}`, JSON.stringify(lista));
-      });
-    } catch (err) {
-      console.warn('Erro ao salvar no LocalStorage em background:', err);
-    }
-  }, 800);
+    persistRamToLocalStorageNow();
+  }, 500);
 }
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
-    if (localStoragePersistTimer) {
-      clearTimeout(localStoragePersistTimer);
-      localStoragePersistTimer = null;
-      try {
-        const sorted = getSortedRamListas();
-        localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
-      } catch (_) {}
-    }
+    persistRamToLocalStorageNow();
   });
 }
 
 export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {
   const colRef = collection(db, COLETA_LISTAS_COLLECTION);
   
-  // 1. Immediately emit RAM cache or LocalStorage for 0ms render
+  // 1. Emissão imediata do cache em RAM/LocalStorage para render instantâneo 0ms
   const initial = getSortedRamListas();
   if (initial.length > 0) {
     callback(initial);
   }
 
-  // 2. Realtime listener with intelligent merging
+  // 2. Listener em tempo real com sincronização de exclusão entre múltiplos usuários
   return onSnapshot(colRef, (snap) => {
+    // A) Processar remoções explicitamente notificadas pelo snapshot
+    snap.docChanges().forEach((change) => {
+      if (change.type === 'removed') {
+        const removedId = change.doc.id;
+        ramListasMap.delete(removedId);
+        try {
+          localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${removedId}`);
+        } catch (_) {}
+      }
+    });
+
+    // B) Coletar todos os IDs ativos do Firestore no momento
+    const remoteDocIds = new Set<string>();
+
     snap.forEach((docSnap) => {
+      remoteDocIds.add(docSnap.id);
       const remoteData = { ...docSnap.data(), id: docSnap.id } as ColetaLista;
       const localData = ramListasMap.get(remoteData.id);
 
-      // Prefer local version if it has unsaved rapid scans pending
+      // Preservar itens locais apenas se houver bipagem rápida pendente em debounce
       if (localData && firestoreSaveDebounceMap.has(remoteData.id)) {
         if (localData.itens && remoteData.itens && localData.itens.length > remoteData.itens.length) {
-          return; // Keep unsaved local additions until debounce flushes
+          return; // Manter itens locais até o debounce persistir
         }
       }
 
       ramListasMap.set(remoteData.id, remoteData);
     });
 
+    // C) Purgar da RAM e do LocalStorage qualquer lista que não exista mais no Firestore
+    // (garante que listas excluídas por outro usuário sumam imediatamente)
+    for (const id of Array.from(ramListasMap.keys())) {
+      if (!remoteDocIds.has(id) && !firestoreSaveDebounceMap.has(id)) {
+        ramListasMap.delete(id);
+        try {
+          localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${id}`);
+        } catch (_) {}
+      }
+    }
+
     const sorted = getSortedRamListas();
-    persistRamToLocalStorageAsync();
+    persistRamToLocalStorageNow();
     callback(sorted);
   }, (error) => {
     console.error('Erro ao escutar listas de coleta:', error);
@@ -610,11 +693,10 @@ export async function deleteLista(listaId: string): Promise<boolean> {
     firestoreSaveDebounceMap.delete(listaId);
   }
   ramListasMap.delete(listaId);
-  persistRamToLocalStorageAsync();
-
   try {
     localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${listaId}`);
   } catch (_) {}
+  persistRamToLocalStorageNow();
 
   try {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
