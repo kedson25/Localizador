@@ -742,27 +742,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
             </div>
           </section>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="rounded-xl bg-blue-50 p-2 text-blue-600"><Activity className="h-5 w-5" /></div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-900">Progresso operacional</h3>
-                  <p className="text-xs text-gray-500">Leitura rápida para acompanhamento</p>
-                </div>
-              </div>
-              <div className="space-y-5">
-                <div>
-                  <div className="mb-2 flex justify-between text-xs font-bold text-gray-600"><span>Itens validados</span><span>{taxaValidacao}%</span></div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${taxaValidacao}%` }} /></div>
-                </div>
-                <div>
-                  <div className="mb-2 flex justify-between text-xs font-bold text-gray-600"><span>Listas finalizadas</span><span>{taxaConclusao}%</span></div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-blue-500" style={{ width: `${taxaConclusao}%` }} /></div>
-                </div>
-              </div>
-            </section>
-
+          <div className="grid gap-4 lg:grid-cols-2">
             <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-3">
                 <div className="rounded-xl bg-amber-50 p-2 text-amber-600"><Trophy className="h-5 w-5" /></div>
