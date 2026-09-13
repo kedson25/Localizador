@@ -49,6 +49,8 @@ export interface ColetaItem {
   responsavel?: string;
   grupoId?: string;
   validado?: boolean;
+  timestamp?: number;
+  codigoClean?: string;
 }
 
 export interface ColetaGrupo {
@@ -66,12 +68,19 @@ export interface ColetaLista {
   rota: string;
   data: string;
   saida?: string;
-  createdAt?: string;
+  createdAt?: any;
+  updatedAt?: any;
   responsavel: string;
   status: 'em_andamento' | 'finalizada';
   saidaPadrao: string;
   motivoPadrao: string;
-  itens: ColetaItem[];
+  totalItens?: number;
+  totalValidados?: number;
+  saidasCount?: Record<string, number>;
+  motivosCount?: Record<string, number>;
+  rotasCount?: Record<string, number>;
+  bipsPorOperador?: Record<string, number>;
+  itens?: ColetaItem[];
   porcentagemAcerto?: number;
   fechamentoGaiola?: string;
   itensFaltaram?: number;

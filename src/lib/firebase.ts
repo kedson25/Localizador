@@ -3,17 +3,33 @@ import {
   initializeFirestore,
   getFirestore,
   collection,
+  collectionGroup,
   doc,
   setDoc,
   getDoc,
   getDocs,
+  updateDoc,
   deleteDoc,
   writeBatch,
   serverTimestamp,
   onSnapshot,
-  persistentLocalCache,
-  persistentMultipleTabManager
+  query,
+  where,
+  orderBy,
+  limit,
+  startAfter,
+  endBefore,
+  increment,
+  deleteField,
+  QueryDocumentSnapshot,
+  memoryLocalCache,
+  setLogLevel
 } from 'firebase/firestore';
+
+// Silencia avisos internos de conectividade temporária do SDK do Firestore
+try {
+  setLogLevel('silent');
+} catch (_) {}
 
 const firebaseConfig = {
   apiKey: "AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA",
@@ -28,9 +44,17 @@ const firebaseConfig = {
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-});
+let firestoreInstance;
+try {
+  firestoreInstance = initializeFirestore(app, {
+    localCache: memoryLocalCache(),
+    experimentalForceLongPolling: true
+  });
+} catch (_) {
+  firestoreInstance = getFirestore(app);
+}
+
+export const db = firestoreInstance;
 
 const REFUGO_COLLECTION = 'refugo';
 const MAIN_REFUGO_DOC_ID = 'current_refugo_csv';
@@ -436,28 +460,47 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
 }
 
 /**
- * Persistence for Coleta Listas with high-performance In-Memory RAM Caching,
- * instant local storage backup, and debounced Firestore synchronization.
+ * Server-First Persistence for Coleta Listas:
+ * The Firestore database is the single source of truth.
+ * Lists store lightweight metadata; items/packets are stored in individual
+ * documents in the subcollection `coleta_listas/{listaId}/itens/{itemId}`.
+ * No operational localStorage, no operational IndexedDB, no massive RAM cache.
  */
-import { ColetaLista } from '../types';
+import { ColetaLista, ColetaItem } from '../types';
 
-const LOCAL_STORAGE_LISTAS_KEY = 'cached_coleta_listas';
-const LOCAL_STORAGE_LISTA_PREFIX = 'cached_coleta_lista_';
+function cleanDigits(val: string | undefined | null): string {
+  if (!val) return '';
+  return val.replace(/\D/g, '');
+}
 
-// 🚀 In-Memory RAM Cache Map for instant zero-latency access
-const ramListasMap = new Map<string, ColetaLista>();
-const firestoreSaveDebounceMap = new Map<string, any>();
+export function cleanUndefined(obj: any): any {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefined);
+  }
+  const cleaned: Record<string, any> = {};
+  for (const key of Object.keys(obj)) {
+    if (obj[key] !== undefined) {
+      cleaned[key] = cleanUndefined(obj[key]);
+    }
+  }
+  return cleaned;
+}
 
 export function getListaSortTimestamp(lista: ColetaLista): number {
   if (!lista) return 0;
 
-  // 1. Check createdAt (ISO string ou timestamp numérico)
+  // 1. Check createdAt
   if (lista.createdAt) {
+    if (typeof (lista.createdAt as any)?.toMillis === 'function') {
+      return (lista.createdAt as any).toMillis();
+    }
     const t = new Date(lista.createdAt).getTime();
     if (!isNaN(t) && t > 0) return t;
   }
 
-  // 2. Check updatedAt (pode ser Firestore Timestamp, string ou number)
+  // 2. Check updatedAt
   const anyLista = lista as any;
   if (anyLista.updatedAt) {
     if (typeof anyLista.updatedAt?.toMillis === 'function') {
@@ -470,7 +513,7 @@ export function getListaSortTimestamp(lista: ColetaLista): number {
     if (!isNaN(t) && t > 0) return t;
   }
 
-  // 3. Extrair timestamp em milissegundos do ID (ex: "lista-1726190000000")
+  // 3. Extract timestamp from ID (e.g., "lista-1726190000000")
   if (lista.id) {
     const match = lista.id.match(/\d{12,}/);
     if (match) {
@@ -479,7 +522,7 @@ export function getListaSortTimestamp(lista: ColetaLista): number {
     }
   }
 
-  // 4. Parse da data ("DD/MM/YYYY" ou "YYYY-MM-DD")
+  // 4. Parse date string
   if (lista.data) {
     if (lista.data.includes('/')) {
       const parts = lista.data.split('/');
@@ -499,232 +542,702 @@ export function getListaSortTimestamp(lista: ColetaLista): number {
   return 0;
 }
 
-export function getSortedRamListas(): ColetaLista[] {
-  const arr = Array.from(ramListasMap.values());
-  return arr.sort((a, b) => {
-    const tA = getListaSortTimestamp(a);
-    const tB = getListaSortTimestamp(b);
-    if (tA !== tB) return tB - tA; // Mais recente no topo!
-    return (b.id || '').localeCompare(a.id || '');
-  });
-}
-
-// Initialize RAM cache from LocalStorage on module load
-try {
-  const cachedRaw = localStorage.getItem(LOCAL_STORAGE_LISTAS_KEY);
-  if (cachedRaw) {
-    const parsed = JSON.parse(cachedRaw) as ColetaLista[];
-    if (Array.isArray(parsed)) {
-      parsed.forEach(l => {
-        if (l && l.id) ramListasMap.set(l.id, l);
-      });
-    }
-  }
-} catch (e) {
-  console.warn('Erro ao inicializar RAM cache de listas:', e);
-}
-
-let localStoragePersistTimer: any = null;
-
-export function persistRamToLocalStorageNow() {
-  if (localStoragePersistTimer) {
-    clearTimeout(localStoragePersistTimer);
-    localStoragePersistTimer = null;
-  }
-  try {
-    const sorted = getSortedRamListas();
-    localStorage.setItem(LOCAL_STORAGE_LISTAS_KEY, JSON.stringify(sorted));
-    ramListasMap.forEach((lista, id) => {
-      localStorage.setItem(`${LOCAL_STORAGE_LISTA_PREFIX}${id}`, JSON.stringify(lista));
-    });
-  } catch (err) {
-    console.warn('Erro ao salvar no LocalStorage:', err);
-  }
-}
-
-function persistRamToLocalStorageAsync() {
-  if (localStoragePersistTimer) {
-    clearTimeout(localStoragePersistTimer);
-  }
-  localStoragePersistTimer = setTimeout(() => {
-    localStoragePersistTimer = null;
-    persistRamToLocalStorageNow();
-  }, 500);
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    persistRamToLocalStorageNow();
-  });
-}
-
+/**
+ * Escuta todas as listas (apenas metadados) em tempo real diretamente do Firestore.
+ * Zero uso de LocalStorage ou cache em RAM como fonte.
+ */
 export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {
   const colRef = collection(db, COLETA_LISTAS_COLLECTION);
   
-  // 1. Emissão imediata do cache em RAM/LocalStorage para render instantâneo 0ms
-  const initial = getSortedRamListas();
-  if (initial.length > 0) {
-    callback(initial);
-  }
-
-  // 2. Listener em tempo real com sincronização de exclusão entre múltiplos usuários
   return onSnapshot(colRef, (snap) => {
-    // A) Processar remoções explicitamente notificadas pelo snapshot
-    snap.docChanges().forEach((change) => {
-      if (change.type === 'removed') {
-        const removedId = change.doc.id;
-        ramListasMap.delete(removedId);
-        try {
-          localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${removedId}`);
-        } catch (_) {}
-      }
+    const remoteListas: ColetaLista[] = snap.docs.map(docSnap => {
+      const data = docSnap.data();
+      return {
+        ...data,
+        id: docSnap.id,
+        itens: [], // Empty array to prevent map/length crashes
+        totalItens: typeof data.totalItens === 'number' ? data.totalItens : 0,
+        totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0
+      } as ColetaLista;
     });
 
-    // B) Coletar todos os IDs ativos do Firestore no momento
-    const remoteDocIds = new Set<string>();
-
-    snap.forEach((docSnap) => {
-      remoteDocIds.add(docSnap.id);
-      const remoteData = { ...docSnap.data(), id: docSnap.id } as ColetaLista;
-      const localData = ramListasMap.get(remoteData.id);
-
-      // Preservar itens locais apenas se houver bipagem rápida pendente em debounce
-      if (localData && firestoreSaveDebounceMap.has(remoteData.id)) {
-        if (localData.itens && remoteData.itens && localData.itens.length > remoteData.itens.length) {
-          return; // Manter itens locais até o debounce persistir
-        }
-      }
-
-      ramListasMap.set(remoteData.id, remoteData);
+    remoteListas.sort((a, b) => {
+      const tA = getListaSortTimestamp(a);
+      const tB = getListaSortTimestamp(b);
+      if (tA !== tB) return tB - tA;
+      return (b.id || '').localeCompare(a.id || '');
     });
 
-    // C) Purgar da RAM e do LocalStorage qualquer lista que não exista mais no Firestore
-    // (garante que listas excluídas por outro usuário sumam imediatamente)
-    for (const id of Array.from(ramListasMap.keys())) {
-      if (!remoteDocIds.has(id) && !firestoreSaveDebounceMap.has(id)) {
-        ramListasMap.delete(id);
-        try {
-          localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${id}`);
-        } catch (_) {}
-      }
-    }
-
-    const sorted = getSortedRamListas();
-    persistRamToLocalStorageNow();
-    callback(sorted);
+    callback(remoteListas);
   }, (error) => {
-    console.error('Erro ao escutar listas de coleta:', error);
-    callback(getSortedRamListas());
+    console.error('Erro ao escutar listas de coleta no Firestore:', error);
   });
 }
 
-function cleanUndefined(obj: any): any {
-  if (obj === undefined) return null;
-  if (obj === null || typeof obj !== 'object') return obj;
-  if (Array.isArray(obj)) {
-    return obj.map(cleanUndefined);
+/**
+ * Escuta os itens de uma lista específica em tempo real.
+ */
+export function listenToListaItens(listaId: string, callback: (itens: ColetaItem[]) => void): () => void {
+  if (!listaId) return () => {};
+  const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+  const q = query(colRef, orderBy('timestamp', 'desc'));
+  return onSnapshot(q, (snap) => {
+    const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+    callback(items);
+  }, (err) => {
+    console.error('Erro ao escutar itens da lista:', err);
+  });
+}
+
+/**
+ * Escuta metadados de uma única lista em tempo real.
+ */
+export function listenToActiveLista(listaId: string, callback: (lista: ColetaLista | null) => void): () => void {
+  if (!listaId) {
+    callback(null);
+    return () => {};
   }
-  const cleaned: Record<string, any> = {};
-  for (const key of Object.keys(obj)) {
-    if (obj[key] !== undefined) {
-      cleaned[key] = cleanUndefined(obj[key]);
+  const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+  return onSnapshot(docRef, (snap) => {
+    if (!snap.exists()) {
+      callback(null);
+      return;
     }
-  }
-  return cleaned;
-}
-
-async function performFirestoreSave(lista: ColetaLista): Promise<boolean> {
-  try {
-    const docRef = doc(db, COLETA_LISTAS_COLLECTION, lista.id);
-    const cleanedData = cleanUndefined({
-      ...lista,
-      updatedAt: serverTimestamp(),
-    });
-    await setDoc(docRef, cleanedData, { merge: true });
-    return true;
-  } catch (error) {
-    console.error('Erro ao sincronizar com Firestore (mantido no cache local):', error);
-    return true;
-  }
-}
-
-export async function saveLista(lista: ColetaLista, immediate = false): Promise<boolean> {
-  // 1. Update In-Memory RAM Cache instantly (0ms UI latency)
-  ramListasMap.set(lista.id, lista);
-  persistRamToLocalStorageAsync();
-
-  // Clear existing debounce timer if any
-  if (firestoreSaveDebounceMap.has(lista.id)) {
-    clearTimeout(firestoreSaveDebounceMap.get(lista.id));
-    firestoreSaveDebounceMap.delete(lista.id);
-  }
-
-  if (immediate) {
-    return await performFirestoreSave(lista);
-  }
-
-  // 2. Debounce Firestore sync by 400ms to batch rapid barcode scans
-  return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(async () => {
-      firestoreSaveDebounceMap.delete(lista.id);
-      const success = await performFirestoreSave(lista);
-      resolve(success);
-    }, 400);
-
-    firestoreSaveDebounceMap.set(lista.id, timer);
+    const data = snap.data();
+    callback({
+      ...data,
+      id: snap.id,
+      itens: [], // Empty array to prevent map/length crashes
+      totalItens: typeof data.totalItens === 'number' ? data.totalItens : 0,
+      totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0
+    } as ColetaLista);
+  }, (err) => {
+    console.warn('Erro ao escutar lista ativa:', err);
   });
 }
 
-export async function flushSaveLista(listaId: string): Promise<boolean> {
-  if (firestoreSaveDebounceMap.has(listaId)) {
-    clearTimeout(firestoreSaveDebounceMap.get(listaId));
-    firestoreSaveDebounceMap.delete(listaId);
-  }
-  const lista = ramListasMap.get(listaId);
-  if (lista) {
-    return await performFirestoreSave(lista);
-  }
-  return true;
-}
-
-export async function deleteLista(listaId: string): Promise<boolean> {
-  if (firestoreSaveDebounceMap.has(listaId)) {
-    clearTimeout(firestoreSaveDebounceMap.get(listaId));
-    firestoreSaveDebounceMap.delete(listaId);
-  }
-  ramListasMap.delete(listaId);
-  try {
-    localStorage.removeItem(`${LOCAL_STORAGE_LISTA_PREFIX}${listaId}`);
-  } catch (_) {}
-  persistRamToLocalStorageNow();
-
-  try {
-    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
-    await deleteDoc(docRef);
-    return true;
-  } catch (error) {
-    console.error('Erro ao excluir lista de coleta:', error);
-    return false;
-  }
-}
-
+/**
+ * Busca metadados de uma lista diretamente do Firestore.
+ */
 export async function getListaById(listaId: string): Promise<ColetaLista | null> {
-  if (ramListasMap.has(listaId)) {
-    return ramListasMap.get(listaId)!;
-  }
-
   try {
     const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      const data = { ...snap.data(), id: snap.id } as ColetaLista;
-      ramListasMap.set(listaId, data);
-      persistRamToLocalStorageAsync();
-      return data;
+      const data = snap.data();
+      return {
+        ...data,
+        id: snap.id,
+        itens: undefined,
+        totalItens: typeof data.totalItens === 'number' ? data.totalItens : (Array.isArray(data.itens) ? data.itens.length : 0),
+        totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0
+      } as ColetaLista;
     }
     return null;
   } catch (error) {
-    console.error('Erro ao buscar lista por ID:', error);
+    console.error('Erro ao buscar lista por ID no servidor:', error);
     return null;
+  }
+}
+
+/**
+ * Salva metadados da lista no servidor. Nunca envia o array itens no documento pai.
+ * Se houver itens na chamada (ex: lote inicial), grava na subcoleção itens.
+ */
+export async function saveLista(lista: Partial<ColetaLista> & { id: string }, immediate = false): Promise<boolean> {
+  try {
+    const docRef = doc(db, COLETA_LISTAS_COLLECTION, lista.id);
+    const { itens, ...metaData } = lista as any;
+
+    const cleaned = cleanUndefined({
+      ...metaData,
+      updatedAt: serverTimestamp()
+    });
+
+    await setDoc(docRef, cleaned, { merge: true });
+
+    // Se itens foram passados, salva individualmente na subcoleção e exclui removidos
+    if (Array.isArray(itens)) {
+      // Find items to delete
+      const subColRef = collection(db, COLETA_LISTAS_COLLECTION, lista.id, 'itens');
+      const currentSnap = await getDocs(subColRef);
+      const currentIds = currentSnap.docs.map(d => d.id);
+      const newIds = new Set(itens.map(i => i.id));
+      const toDelete = currentIds.filter(id => !newIds.has(id));
+      
+      if (toDelete.length > 0) {
+        await deleteItemsBatchFromLista(lista.id, toDelete);
+      }
+      
+      if (itens.length > 0) {
+        await addItemsBatchToLista(lista.id, itens);
+      }
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Erro ao salvar metadados da lista no servidor:', error);
+    return false;
+  }
+}
+
+export async function flushSaveLista(listaId: string): Promise<boolean> {
+  return true;
+}
+
+/**
+ * Adiciona um único item na subcoleção `itens` do servidor e atualiza os contadores de metadados.
+ * "O servidor é a única fonte da verdade. Servidor confirma, depois exibe."
+ */
+export async function addItemToLista(
+  listaId: string,
+  item: Omit<ColetaItem, 'id'> & { id?: string }
+): Promise<ColetaItem> {
+  const itemId = item.id || `item-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const itemDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
+  const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+
+  const cleanCod = cleanDigits(item.codigo);
+  const timestamp = item.timestamp || Date.now();
+
+  const itemToSave: ColetaItem = {
+    id: itemId,
+    codigo: item.codigo,
+    codigoClean: cleanCod,
+    rota: item.rota || 'Sem Rota',
+    saida: item.saida || 'Ciclo 2 - Saída PM',
+    motivo: item.motivo || 'Pendente',
+    scannedAt: item.scannedAt || new Date().toLocaleString('pt-BR'),
+    responsavel: item.responsavel || 'Operador',
+    grupoId: item.grupoId || undefined,
+    validado: item.validado !== undefined ? item.validado : false,
+    timestamp
+  };
+
+  // 1. Grava o documento individual do pacote no servidor
+  await setDoc(itemDocRef, cleanUndefined(itemToSave));
+
+  // 2. Atualiza contadores no documento pai no servidor
+  const op = item.responsavel || 'Operador';
+  const saida = item.saida || 'Ciclo 2 - Saída PM';
+  const motivo = item.motivo || 'Pendente';
+
+  const updatePayload: Record<string, any> = {
+    totalItens: increment(1),
+    updatedAt: serverTimestamp(),
+    [`bipsPorOperador.${op}`]: increment(1),
+    [`saidasCount.${saida}`]: increment(1),
+    [`motivosCount.${motivo}`]: increment(1),
+  };
+
+  if (item.validado) {
+    updatePayload.totalValidados = increment(1);
+  }
+
+  try {
+    await updateDoc(listaDocRef, updatePayload);
+  } catch (_) {
+    await setDoc(listaDocRef, updatePayload, { merge: true });
+  }
+
+  return itemToSave;
+}
+
+/**
+ * Atualiza um único item na subcoleção do servidor.
+ */
+export async function updateItemInLista(
+  listaId: string,
+  itemId: string,
+  updates: Partial<ColetaItem>,
+  prevItem?: Partial<ColetaItem>
+): Promise<boolean> {
+  try {
+    const itemDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
+    const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+
+    await updateDoc(itemDocRef, cleanUndefined({
+      ...updates,
+      updatedAt: serverTimestamp()
+    }));
+
+    // Sincroniza contadores agregados se motivo, saída ou validação foram alterados
+    const metaUpdates: Record<string, any> = {
+      updatedAt: serverTimestamp()
+    };
+
+    if (updates.validado !== undefined && prevItem?.validado !== undefined && updates.validado !== prevItem.validado) {
+      metaUpdates.totalValidados = increment(updates.validado ? 1 : -1);
+    }
+    if (updates.motivo && prevItem?.motivo && updates.motivo !== prevItem.motivo) {
+      metaUpdates[`motivosCount.${prevItem.motivo}`] = increment(-1);
+      metaUpdates[`motivosCount.${updates.motivo}`] = increment(1);
+    }
+    if (updates.saida && prevItem?.saida && updates.saida !== prevItem.saida) {
+      metaUpdates[`saidasCount.${prevItem.saida}`] = increment(-1);
+      metaUpdates[`saidasCount.${updates.saida}`] = increment(1);
+    }
+
+    if (Object.keys(metaUpdates).length > 1) {
+      try {
+        await updateDoc(listaDocRef, metaUpdates);
+      } catch (_) {}
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Erro ao atualizar item na lista:', error);
+    return false;
+  }
+}
+
+/**
+ * Exclui um único item do servidor e decrementa contadores.
+ * "Excluir deve funcionar para itens fora da página atual."
+ */
+export async function deleteItemFromLista(
+  listaId: string,
+  itemId: string,
+  itemData?: Partial<ColetaItem>
+): Promise<boolean> {
+  try {
+    const itemDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
+    const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+
+    let itemToDelete = itemData;
+    if (!itemToDelete) {
+      try {
+        const snap = await getDoc(itemDocRef);
+        if (snap.exists()) itemToDelete = snap.data() as ColetaItem;
+      } catch (_) {}
+    }
+
+    // Exclui o documento no servidor
+    await deleteDoc(itemDocRef);
+
+    // Decrementa contadores no servidor
+    const metaUpdates: Record<string, any> = {
+      totalItens: increment(-1),
+      updatedAt: serverTimestamp()
+    };
+
+    if (itemToDelete?.validado) {
+      metaUpdates.totalValidados = increment(-1);
+    }
+    if (itemToDelete?.responsavel) {
+      metaUpdates[`bipsPorOperador.${itemToDelete.responsavel}`] = increment(-1);
+    }
+    if (itemToDelete?.saida) {
+      metaUpdates[`saidasCount.${itemToDelete.saida}`] = increment(-1);
+    }
+    if (itemToDelete?.motivo) {
+      metaUpdates[`motivosCount.${itemToDelete.motivo}`] = increment(-1);
+    }
+
+    try {
+      await updateDoc(listaDocRef, metaUpdates);
+    } catch (_) {}
+
+    return true;
+  } catch (error) {
+    console.error('Erro ao excluir item da lista no servidor:', error);
+    return false;
+  }
+}
+
+/**
+ * Exclui múltiplos itens em lote diretamente no servidor.
+ */
+export async function deleteItemsBatchFromLista(
+  listaId: string,
+  itemIds: string[]
+): Promise<boolean> {
+  if (!itemIds || itemIds.length === 0) return true;
+  try {
+    const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    const chunkSize = 400;
+
+    for (let i = 0; i < itemIds.length; i += chunkSize) {
+      const batch = writeBatch(db);
+      const chunk = itemIds.slice(i, i + chunkSize);
+      chunk.forEach(id => {
+        const itemRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', id);
+        batch.delete(itemRef);
+      });
+      await batch.commit();
+    }
+
+    try {
+      await updateDoc(listaDocRef, {
+        totalItens: increment(-itemIds.length),
+        updatedAt: serverTimestamp()
+      });
+    } catch (_) {}
+
+    return true;
+  } catch (error) {
+    console.error('Erro ao excluir lote de itens:', error);
+    return false;
+  }
+}
+
+/**
+ * Adiciona itens em lote na subcoleção do servidor (chunks seguros de 400).
+ */
+export async function addItemsBatchToLista(listaId: string, items: ColetaItem[]): Promise<boolean> {
+  if (!items || items.length === 0) return true;
+  try {
+    const chunkSize = 400;
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const batch = writeBatch(db);
+      const chunk = items.slice(i, i + chunkSize);
+      chunk.forEach((item, index) => {
+        const itemId = item.id || `item-${Date.now()}-${i + index}`;
+        const ref = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
+        const itemData = cleanUndefined({
+          ...item,
+          id: itemId,
+          codigoClean: cleanDigits(item.codigo),
+          timestamp: item.timestamp || (Date.now() - (i + index) * 10)
+        });
+        batch.set(ref, itemData, { merge: true });
+      });
+      await batch.commit();
+    }
+
+    const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    try {
+      await updateDoc(listaDocRef, {
+        totalItens: increment(items.length),
+        updatedAt: serverTimestamp()
+      });
+    } catch (_) {}
+
+    return true;
+  } catch (error) {
+    console.error('Erro ao adicionar itens em lote no servidor:', error);
+    return false;
+  }
+}
+
+/**
+ * Atualiza motivo de múltiplos itens em lote.
+ */
+export async function updateItemsBatchMotivo(
+  listaId: string,
+  itemIds: string[],
+  novoMotivo: string
+): Promise<boolean> {
+  if (!itemIds || itemIds.length === 0) return true;
+  try {
+    const chunkSize = 400;
+    for (let i = 0; i < itemIds.length; i += chunkSize) {
+      const batch = writeBatch(db);
+      const chunk = itemIds.slice(i, i + chunkSize);
+      chunk.forEach(id => {
+        const ref = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', id);
+        batch.update(ref, {
+          motivo: novoMotivo,
+          updatedAt: serverTimestamp()
+        });
+      });
+      await batch.commit();
+    }
+    return true;
+  } catch (error) {
+    console.error('Erro ao atualizar motivo em lote:', error);
+    return false;
+  }
+}
+
+/**
+ * Paginação real no servidor com limite de 100 por página.
+ * "Implemente paginação real no servidor com limite de 100 por página. Nunca carregue tudo para depois fatiá."
+ */
+export async function getItemsPage(
+  listaId: string,
+  pageSize: number = 100,
+  cursorDoc: QueryDocumentSnapshot | null = null,
+  direction: 'next' | 'prev' = 'next'
+): Promise<{
+  items: ColetaItem[];
+  firstDoc: QueryDocumentSnapshot | null;
+  lastDoc: QueryDocumentSnapshot | null;
+  count: number;
+}> {
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    let q;
+
+    if (!cursorDoc) {
+      q = query(colRef, orderBy('timestamp', 'desc'), limit(pageSize));
+    } else if (direction === 'next') {
+      q = query(colRef, orderBy('timestamp', 'desc'), startAfter(cursorDoc), limit(pageSize));
+    } else {
+      q = query(colRef, orderBy('timestamp', 'desc'), endBefore(cursorDoc), limit(pageSize));
+    }
+
+    const snap = await getDocs(q);
+    const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+    const firstDoc = snap.docs.length > 0 ? snap.docs[0] : null;
+    const lastDoc = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+
+    return {
+      items,
+      firstDoc,
+      lastDoc,
+      count: items.length
+    };
+  } catch (error) {
+    console.error('Erro ao buscar página de itens no servidor:', error);
+    return { items: [], firstDoc: null, lastDoc: null, count: 0 };
+  }
+}
+
+/**
+ * Pesquisa por ID diretamente no servidor, retornando correspondências mesmo fora da página atual.
+ * "Faça pesquisa por ID diretamente no servidor, mesmo que o item esteja fora da página atual."
+ */
+export async function searchItemsInLista(
+  listaId: string,
+  queryText: string,
+  maxResults: number = 100
+): Promise<ColetaItem[]> {
+  const trimmed = queryText.trim().toUpperCase();
+  if (!trimmed) return [];
+
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    const resultsMap = new Map<string, ColetaItem>();
+
+    // 1. Busca exata pelo campo codigo
+    const qExact = query(colRef, where('codigo', '==', trimmed), limit(maxResults));
+    const exactSnap = await getDocs(qExact);
+    exactSnap.docs.forEach(d => resultsMap.set(d.id, { ...d.data(), id: d.id } as ColetaItem));
+
+    // 2. Busca exata por ID do documento
+    try {
+      const docSnap = await getDoc(doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', queryText.trim()));
+      if (docSnap.exists()) {
+        resultsMap.set(docSnap.id, { ...docSnap.data(), id: docSnap.id } as ColetaItem);
+      }
+    } catch (_) {}
+
+    // 3. Busca por dígitos limpos
+    const cleanNum = cleanDigits(trimmed);
+    if (cleanNum && cleanNum !== trimmed && resultsMap.size < maxResults) {
+      const qClean = query(colRef, where('codigoClean', '==', cleanNum), limit(maxResults));
+      const cleanSnap = await getDocs(qClean);
+      cleanSnap.docs.forEach(d => resultsMap.set(d.id, { ...d.data(), id: d.id } as ColetaItem));
+    }
+
+    // 4. Busca por prefixo no código
+    if (resultsMap.size < maxResults) {
+      const qPrefix = query(
+        colRef,
+        where('codigo', '>=', trimmed),
+        where('codigo', '<=', trimmed + '\uf8ff'),
+        limit(maxResults)
+      );
+      const prefixSnap = await getDocs(qPrefix);
+      prefixSnap.docs.forEach(d => resultsMap.set(d.id, { ...d.data(), id: d.id } as ColetaItem));
+    }
+
+    return Array.from(resultsMap.values());
+  } catch (error) {
+    console.error('Erro na pesquisa de itens no servidor:', error);
+    return [];
+  }
+}
+
+/**
+ * Pesquisa múltiplos IDs diretamente no servidor em todas as subcoleções de listas.
+ * Utiliza collectionGroup('itens') para busca ultra-rápida sem transferir dados locais.
+ */
+export async function searchItemsAcrossAllListas(
+  terms: string[]
+): Promise<Map<string, { item: ColetaItem; listaId: string }>> {
+  const results = new Map<string, { item: ColetaItem; listaId: string }>();
+  if (!terms || terms.length === 0) return results;
+
+  const uniqueTerms = Array.from(new Set(terms.map(t => t.trim().toUpperCase()).filter(Boolean)));
+  if (uniqueTerms.length === 0) return results;
+
+  try {
+    const chunkSize = 30; // Limite do operador 'in' do Firestore
+    for (let i = 0; i < uniqueTerms.length; i += chunkSize) {
+      const chunk = uniqueTerms.slice(i, i + chunkSize);
+      const cleanChunk = chunk.map(cleanDigits).filter(Boolean);
+
+      // 1. Busca por codigo
+      const qCodigo = query(
+        collectionGroup(db, 'itens'),
+        where('codigo', 'in', chunk)
+      );
+      const snapCodigo = await getDocs(qCodigo);
+      snapCodigo.docs.forEach(d => {
+        const item = { ...d.data(), id: d.id } as ColetaItem;
+        const listaId = d.ref.parent.parent?.id || '';
+        results.set(item.codigo.toUpperCase(), { item, listaId });
+        if (item.codigoClean) {
+          results.set(item.codigoClean, { item, listaId });
+        }
+      });
+
+      // 2. Busca por codigoClean
+      if (cleanChunk.length > 0) {
+        const qClean = query(
+          collectionGroup(db, 'itens'),
+          where('codigoClean', 'in', cleanChunk)
+        );
+        const snapClean = await getDocs(qClean);
+        snapClean.docs.forEach(d => {
+          const item = { ...d.data(), id: d.id } as ColetaItem;
+          const listaId = d.ref.parent.parent?.id || '';
+          if (!results.has(item.codigo.toUpperCase())) {
+            results.set(item.codigo.toUpperCase(), { item, listaId });
+          }
+          if (item.codigoClean && !results.has(item.codigoClean)) {
+            results.set(item.codigoClean, { item, listaId });
+          }
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Erro ao pesquisar itens em todas as listas no servidor:', error);
+  }
+
+  return results;
+}
+
+/**
+ * Busca todos os itens de uma lista exclusivamente para fins de finalização ou exportação de CSV.
+ */
+export async function getAllItemsForExport(listaId: string): Promise<ColetaItem[]> {
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    const q = query(colRef, orderBy('timestamp', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+  } catch (error) {
+    console.error('Erro ao buscar todos os itens para exportação no servidor:', error);
+    return [];
+  }
+}
+
+/**
+ * Busca itens de um grupo específico no servidor.
+ */
+export async function getItemsOfGrupo(listaId: string, grupoId: string): Promise<ColetaItem[]> {
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    const q = query(colRef, where('grupoId', '==', grupoId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+  } catch (error) {
+    console.error('Erro ao buscar itens do grupo no servidor:', error);
+    return [];
+  }
+}
+
+/**
+ * Exclui a lista e todos os seus itens da subcoleção no servidor.
+ */
+export async function deleteLista(listaId: string): Promise<boolean> {
+  try {
+    // 1. Exclui em lotes todos os itens da subcoleção
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    const snap = await getDocs(colRef);
+    if (!snap.empty) {
+      const chunkSize = 400;
+      for (let i = 0; i < snap.docs.length; i += chunkSize) {
+        const batch = writeBatch(db);
+        snap.docs.slice(i, i + chunkSize).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+    }
+
+    // 2. Exclui o documento pai
+    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    await deleteDoc(docRef);
+    return true;
+  } catch (error) {
+    console.error('Erro ao excluir lista de coleta no servidor:', error);
+    return false;
+  }
+}
+
+/**
+ * Script de migração: transfere qualquer lista antiga que possua o array `itens`
+ * para a nova estrutura de metadados + subcoleção `itens` no servidor.
+ */
+export async function migrateLegacyListasToSubcollections(): Promise<{ migratedLists: number; migratedItems: number }> {
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION);
+    const snap = await getDocs(colRef);
+    let migratedLists = 0;
+    let migratedItems = 0;
+
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data();
+      if (Array.isArray(data.itens) && data.itens.length > 0) {
+        const listaId = docSnap.id;
+        const itens: ColetaItem[] = data.itens;
+
+        // Grava cada item como documento individual na subcoleção
+        const chunkSize = 400;
+        for (let i = 0; i < itens.length; i += chunkSize) {
+          const batch = writeBatch(db);
+          const chunk = itens.slice(i, i + chunkSize);
+          chunk.forEach((item, index) => {
+            const itemId = item.id || `item-${Date.now()}-${i + index}`;
+            const itemRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
+            batch.set(itemRef, cleanUndefined({
+              ...item,
+              id: itemId,
+              codigoClean: cleanDigits(item.codigo),
+              timestamp: item.timestamp || (Date.now() - (i + index) * 10)
+            }), { merge: true });
+          });
+          await batch.commit();
+        }
+
+        const totalItens = itens.length;
+        const totalValidados = itens.filter(i => i.validado).length;
+        const bipsPorOperador: Record<string, number> = {};
+        const saidasCount: Record<string, number> = {};
+        const motivosCount: Record<string, number> = {};
+
+        itens.forEach(item => {
+          const op = item.responsavel || data.responsavel || 'Operador';
+          bipsPorOperador[op] = (bipsPorOperador[op] || 0) + 1;
+          if (item.saida) saidasCount[item.saida] = (saidasCount[item.saida] || 0) + 1;
+          if (item.motivo) motivosCount[item.motivo] = (motivosCount[item.motivo] || 0) + 1;
+        });
+
+        // Remove o array itens do documento pai e salva os totais
+        await updateDoc(docSnap.ref, {
+          itens: deleteField(),
+          totalItens,
+          totalValidados,
+          bipsPorOperador,
+          saidasCount,
+          motivosCount,
+          updatedAt: serverTimestamp()
+        });
+
+        migratedLists++;
+        migratedItems += itens.length;
+      }
+    }
+
+    if (migratedLists > 0) {
+      console.log(`[Migração Concluída] ${migratedLists} listas migradas com ${migratedItems} pacotes para subcoleções.`);
+    }
+
+    return { migratedLists, migratedItems };
+  } catch (error) {
+    console.error('Erro na migração de listas para subcoleção:', error);
+    return { migratedLists: 0, migratedItems: 0 };
   }
 }

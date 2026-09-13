@@ -47,7 +47,8 @@ import {
   listenToListas,
   saveLista,
   deleteLista as deleteListaFirestore,
-  getListaSortTimestamp
+  getListaSortTimestamp,
+  listenToListaItens
 } from '../lib/firebase';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
@@ -268,6 +269,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [dashboardSearchTerm, setDashboardSearchTerm] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [refugoBaseRows, setRefugoBaseRows] = useState<RefugoRow[]>([]);
+  const [isLoadingListas, setIsLoadingListas] = useState(true);
 
   // Configurações do scanner na tela de coleta
   const [selectedSaida, setSelectedSaida] = useState('Ciclo 2 - Saída PM');
@@ -319,6 +321,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Estado para a gaveta de exclusão
   const [listaParaExcluir, setListaParaExcluir] = useState<ColetaLista | null>(null);
   const [listaParaFinalizar, setListaParaFinalizar] = useState<ColetaLista | null>(null);
+  const [juntarComBrancas, setJuntarComBrancas] = useState(true);
 
   // Estados de Carregamento com Círculo Giratório (Spinner)
   const [isLoadingLista, setIsLoadingLista] = useState(false);
@@ -337,7 +340,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const operanteNome = currentUser?.username || 'Usuário Atual';
 
-  const listaAtiva = listas.find(l => l.id === activeListaId);
+  const [activeItens, setActiveItens] = useState<ColetaItem[]>([]);
+
+  useEffect(() => {
+    if (activeListaId) {
+      return listenToListaItens(activeListaId, (itens) => {
+        setActiveItens(itens);
+      });
+    } else {
+      setActiveItens([]);
+    }
+  }, [activeListaId]);
+
+  const rawListaAtiva = listas.find(l => l.id === activeListaId);
+  const listaAtiva = rawListaAtiva ? { ...rawListaAtiva, itens: activeItens } : undefined;
 
   const getModoIndKey = useCallback((listaId: string, username: string) => {
     return `coleta_modo_ind_${listaId}_${username}`;
@@ -394,6 +410,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   useEffect(() => {
     const unsubListas = listenToListas((listasServer) => {
       setListas(listasServer);
+      setIsLoadingListas(false);
     });
 
     // Carregar base de refugo se existir com cache em memória para evitar re-parse pesado
@@ -493,6 +510,45 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
     return map;
   }, [refugoBaseRows]);
+
+  // Lista indexada de IDs sem rota presentes na base de refugo (brancas)
+  const idsBrancasRefugo = useMemo(() => {
+    if (!refugoBaseRows || refugoBaseRows.length === 0) return [];
+    const set = new Set<string>();
+    for (let i = 0; i < refugoBaseRows.length; i++) {
+      const r = refugoBaseRows[i];
+      if (!r || !r.id) continue;
+      const cleanId = String(r.id || '').trim().toUpperCase();
+      if (!cleanId || ['ID', 'CODIGO', 'CÓDIGO', 'PACOTE', 'TRACKING', 'ENVIO'].includes(cleanId)) continue;
+      const isSemRota = !r.rota || 
+                        r.rota.trim() === '' || 
+                        r.rota.toLowerCase() === 'sem rota' || 
+                        r.rota.toLowerCase() === 'sem_rota' || 
+                        r.rota.trim() === '-' || 
+                        r.rota.toLowerCase().includes('branca');
+      if (isSemRota) {
+        set.add(cleanId);
+      }
+    }
+    return Array.from(set);
+  }, [refugoBaseRows]);
+
+  // IDs sem rota da base de refugo (brancas) que não constam fisicamente na lista bipada
+  const idsBrancasNaoNaLista = useMemo(() => {
+    if (!idsBrancasRefugo || idsBrancasRefugo.length === 0 || !listaAtiva) return [];
+    const list = modoIndividual ? itensModoIndividual : (listaAtiva.itens || []);
+    const codigosNaLista = new Set(
+      list.map(i => (i.codigo || '').toString().trim().toUpperCase())
+    );
+    const digitosNaLista = new Set(
+      list.map(i => cleanDigits(i.codigo)).filter(Boolean)
+    );
+
+    return idsBrancasRefugo.filter(id => {
+      const digits = cleanDigits(id);
+      return !codigosNaLista.has(id) && (!digits || !digitosNaLista.has(digits));
+    });
+  }, [idsBrancasRefugo, listaAtiva, modoIndividual, itensModoIndividual]);
 
   // Obter rota oficial baseada estritamente no arquivo de refugo atual (busca ultra-rápida O(1))
   const getRotaItem = useCallback((item: { codigo: string; rota?: string }): string => {
@@ -1120,7 +1176,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const gruposMap = new Map((listaAtiva?.grupos || []).map(g => [g.id, g.nome.toLowerCase()]));
 
     return itemsFiltradosBase.filter(item => {
-      const nomeGrupo = item.grupoId ? (gruposMap.get(item.grupoId) || '') : '';
+      const nomeGrupo = String(item.grupoId ? (gruposMap.get(item.grupoId) || '') : '');
       const rotaCalculada = getRotaItem(item).toLowerCase();
       return item.codigo.toLowerCase().includes(term) || 
              rotaCalculada.includes(term) || 
@@ -1593,30 +1649,70 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
   };
 
-  const handleFinalizarLista = async (listaId: string) => {
+  const handleFinalizarLista = async (listaId: string, unificarBrancas: boolean = false) => {
     const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
-      const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
+      const cleanIdOnly = (code: string) => {
+        if (!code) return '';
+        return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+      };
+
+      // 1. Obter os itens validados da lista (se existirem itens validados, filtra eles; senão considera todos)
+      const itensValidados = lista.itens.some(i => i.validado)
+        ? lista.itens.filter(i => i.validado)
+        : lista.itens;
+
+      const idsValidados = itensValidados.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
+
+      // 2. Se optou por juntar com as brancas do refugo
+      let rowsCsv: string[] = [];
+      let novosItensParaSalvar = [...lista.itens];
+
+      if (unificarBrancas && idsBrancasRefugo.length > 0) {
+        const validadosSet = new Set(idsValidados.map(id => id.toUpperCase()));
+        const brancasAdicionais = idsBrancasRefugo.filter(id => !validadosSet.has(id.toUpperCase()));
+
+        // CSV unificado: validados primeiro, depois as brancas
+        rowsCsv = [...idsValidados, ...brancasAdicionais];
+
+        // Adicionar itens na lista finalizada para registro no histórico
+        const itensBrancasNovos: ColetaItem[] = brancasAdicionais.map((code, idx) => ({
+          id: `branca-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
+          codigo: code,
+          rota: 'Brancas',
+          saida: lista.saidaPadrao || 'Ciclo 2 - Saída PM',
+          motivo: 'Brancas',
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          validado: true
+        }));
+        novosItensParaSalvar = [...lista.itens, ...itensBrancasNovos];
+      } else {
+        rowsCsv = idsValidados;
+      }
+
+      // 3. Atualizar status da lista no banco
+      const updatedLista: ColetaLista = { 
+        ...lista, 
+        status: 'finalizada',
+        itens: novosItensParaSalvar
+      };
       setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
       await saveLista(updatedLista);
 
-      if (lista.itens.length > 0) {
-        const cleanIdOnly = (code: string) => {
-          if (!code) return '';
-          return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
-        };
-
-        // CSV contendo estritamente só com os IDs e mais nada
-        const rowsCsv = lista.itens.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
+      // 4. Download do CSV
+      if (rowsCsv.length > 0) {
         const csvContent = rowsCsv.join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}_IDs.csv`);
+        const sufixoNome = unificarBrancas ? '_Validados_Com_Brancas.csv' : '_Validados.csv';
+        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}${sufixoNome}`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(url);
       }
 
       setListaParaFinalizar(null);
@@ -1693,7 +1789,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   if (!listaAtiva) {
     const totalListas = listas.length;
     const listasAtivas = listas.filter(l => l.status === 'em_andamento').length;
-    const totalItensColetados = listas.reduce((acc, l) => acc + l.itens.length, 0);
+    const totalItensColetados = listas.reduce((acc, l) => acc + (l.totalItens || 0), 0);
 
     const filteredDashboardListas = listas.filter(l => {
       if (!dashboardSearchTerm.trim()) return true;
@@ -1704,7 +1800,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         l.responsavel.toLowerCase().includes(term) ||
         (l.saidaPadrao && l.saidaPadrao.toLowerCase().includes(term)) ||
         (l.motivoPadrao && l.motivoPadrao.toLowerCase().includes(term)) ||
-        l.itens.some(i => 
+        (l.itens || []).some(i => 
           i.codigo.toLowerCase().includes(term) || 
           (i.motivo && i.motivo.toLowerCase().includes(term)) || 
           (i.saida && i.saida.toLowerCase().includes(term))
@@ -1769,7 +1865,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </div>
           </div>
 
-          {filteredDashboardListas.length > 0 ? (
+          {isLoadingListas ? (
+            <div className="space-y-3 py-4">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <div key={n} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl animate-pulse">
+                  <div className="flex items-center gap-4 w-1/3">
+                    <div className="w-6 h-6 bg-gray-200 rounded-full" />
+                    <div className="space-y-2 w-full">
+                      <div className="h-4 bg-gray-200 rounded w-3/4" />
+                      <div className="h-3 bg-gray-200 rounded w-1/2" />
+                    </div>
+                  </div>
+                  <div className="w-1/6 h-4 bg-gray-200 rounded" />
+                  <div className="w-1/6 h-4 bg-gray-200 rounded" />
+                  <div className="w-1/6 h-8 bg-gray-200 rounded-lg" />
+                </div>
+              ))}
+            </div>
+          ) : filteredDashboardListas.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs text-gray-700">
                 <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 font-bold uppercase tracking-wider">
@@ -1788,7 +1901,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <tbody className="divide-y divide-gray-100 font-sans">
                   {filteredDashboardListas.map((lista, idx) => (
                     <tr key={lista.id} className="hover:bg-blue-50/40 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-gray-400">{filteredDashboardListas.length - idx}</td>
+                      <td className="py-3.5 px-4 font-mono font-bold text-gray-400">{idx + 1}</td>
                       <td 
                         onClick={() => handleAbrirLista(lista.id)}
                         className="py-3.5 px-4 font-bold text-[#333333] text-sm cursor-pointer hover:text-[#3483FA] transition-colors"
@@ -1820,7 +1933,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         {lista.responsavel}
                       </td>
                       <td className="py-3.5 px-4 font-mono font-bold text-[#3483FA] text-sm">
-                        {lista.itens.length} pacotes
+                        {lista.totalItens || 0} pacotes
                       </td>
                       <td className="py-3.5 px-4 text-center">
                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
@@ -2061,6 +2174,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
   const totalColetados = listToVerify.length;
+
+  // Contagem de IDs sem rota a somar sem estar na lista
+  const totalBrancasSemRota = idsBrancasNaoNaLista.length;
+  // Total somado exibido no card de IDs Coletados
+  const totalColetadosComBrancas = modoIndividual ? totalColetados : (totalColetados + totalBrancasSemRota);
 
   // Saídas presentes apenas nos IDs que realmente foram inseridos/bipados
   const saídasPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.saida).filter(Boolean)));
@@ -2542,8 +2660,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
             {filteredItems.length > 0 ? (
               <div className="flex flex-col border border-gray-200 rounded-xl shadow-sm overflow-hidden bg-white">
-                {renderPagination('top')}
-
                 {allPageSelected && filteredItems.length > displayedItems.length && (
                   <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 text-xs text-blue-900 flex flex-col sm:flex-row items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
@@ -2886,10 +3002,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             {/* Total de Coletados Card Grande */}
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 p-5 rounded-2xl text-center space-y-3 shadow-inner">
               <div>
-                <p className="text-4xl font-black text-[#3483FA] tracking-tighter">{totalColetados}</p>
+                <p className="text-4xl font-black text-[#3483FA] tracking-tighter">{totalColetadosComBrancas}</p>
                 <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-1">
                   {modoIndividual ? 'IDs Bipados na Sessão Individual' : 'IDs Coletados'}
                 </p>
+                {!modoIndividual && totalBrancasSemRota > 0 && (
+                  <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-white/90 border border-blue-200 rounded-full text-[11px] font-semibold text-gray-700 shadow-2xs">
+                    <span>{totalColetados} na lista</span>
+                    <span className="text-gray-300">•</span>
+                    <span className="text-amber-700 font-bold">+{totalBrancasSemRota} sem rota (brancas)</span>
+                  </div>
+                )}
               </div>
 
               {/* Botões de Ação Direta nas Métricas */}
@@ -2897,7 +3020,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 {listaAtiva.status === 'em_andamento' && !modoIndividual && (
                   <button
                     type="button"
-                    onClick={() => setListaParaFinalizar(listaAtiva)}
+                    onClick={() => {
+                      setJuntarComBrancas(true);
+                      setListaParaFinalizar(listaAtiva);
+                    }}
                     className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4" />
@@ -3529,7 +3655,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <div className="pt-3 border-t border-red-200">
                     <p className="text-[10px] uppercase font-black text-red-500 tracking-wider">Lista Selecionada:</p>
                     <p className="text-base font-black text-red-700">{listaParaExcluir.nome}</p>
-                    <p className="text-xs font-bold text-red-600/70">{listaParaExcluir.data} • {listaParaExcluir.itens.length} itens</p>
+                    <p className="text-xs font-bold text-red-600/70">{listaParaExcluir.data} • {listaParaExcluir.totalItens || 0} itens</p>
                   </div>
                 </div>
 
@@ -3578,88 +3704,175 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
       {/* POPUP DE CONFIRMAÇÃO DE FINALIZAÇÃO DE LISTA */}
       <AnimatePresence>
-        {listaParaFinalizar && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setListaParaFinalizar(null)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden z-10"
-            >
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-emerald-50/50">
-                <div className="flex items-center gap-2 text-emerald-600">
-                  <CheckCircle2 className="w-6 h-6" />
-                  <h3 className="text-lg font-black uppercase tracking-tight">Finalizar Lista</h3>
-                </div>
-                <button 
-                  onClick={() => setListaParaFinalizar(null)}
-                  className="p-2 hover:bg-emerald-100 rounded-full text-emerald-400 transition-colors cursor-pointer"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
+        {listaParaFinalizar && (() => {
+          const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+          const itensValidadosModal = listaParaFinalizar.itens.some(i => i.validado)
+            ? listaParaFinalizar.itens.filter(i => i.validado)
+            : listaParaFinalizar.itens;
+          const codigosValidadosModal = itensValidadosModal.map(i => cleanIdOnly(i.codigo)).filter(Boolean);
+          const codigosValidadosSet = new Set(codigosValidadosModal.map(c => c.toUpperCase()));
+          const brancasDisponiveis = idsBrancasRefugo.filter(id => !codigosValidadosSet.has(id.toUpperCase()));
+          const totalComBrancasModal = codigosValidadosModal.length + brancasDisponiveis.length;
 
-              <div className="p-6 space-y-6">
-                <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 space-y-3">
-                  <p className="text-sm font-bold text-emerald-900 leading-relaxed">
-                    Deseja realmente finalizar esta lista de coleta? Ao confirmar, o arquivo CSV com todos os IDs limpos e corrigidos será baixado automaticamente.
-                  </p>
-                  <div className="pt-3 border-t border-emerald-200">
+          return (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 overflow-y-auto">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setListaParaFinalizar(null)}
+                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden z-10"
+              >
+                <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-emerald-50/60">
+                  <div className="flex items-center gap-2 text-emerald-700">
+                    <CheckCircle2 className="w-5 h-5" />
+                    <h3 className="text-base font-black uppercase tracking-tight">Finalizar Lista e Baixar CSV</h3>
+                  </div>
+                  <button 
+                    onClick={() => setListaParaFinalizar(null)}
+                    className="p-1.5 hover:bg-emerald-100 rounded-full text-emerald-600 transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-5">
+                  <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-4 space-y-2">
                     <p className="text-[10px] uppercase font-black text-emerald-600 tracking-wider">Lista Selecionada:</p>
-                    <p className="text-base font-black text-emerald-800">{listaParaFinalizar.nome}</p>
-                    <p className="text-xs font-bold text-emerald-700/70">{listaParaFinalizar.data} • {listaParaFinalizar.itens.length} itens coletados</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-base font-black text-emerald-900">{listaParaFinalizar.nome}</p>
+                      <span className="text-xs font-bold text-emerald-700 bg-white px-2.5 py-1 rounded-lg border border-emerald-200">
+                        {codigosValidadosModal.length} IDs validados
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* PERGUNTA: JUNTAR COM AS BRANCAS DO REFUGO */}
+                  {brancasDisponiveis.length > 0 ? (
+                    <div className="bg-gradient-to-br from-amber-50/80 to-orange-50/50 border border-amber-200/80 rounded-xl p-4 space-y-3">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-sm font-black text-amber-900">
+                            Deseja juntar a lista validada com as brancas?
+                          </h4>
+                          <p className="text-xs text-amber-800/80 mt-0.5 leading-relaxed">
+                            Foram encontrados <strong>{brancasDisponiveis.length} IDs sem rota (brancas)</strong> na base do refugo.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setJuntarComBrancas(true)}
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                            juntarComBrancas
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm ring-2 ring-emerald-300'
+                              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black flex items-center gap-1.5">
+                              <CheckCircle2 className={`w-4 h-4 ${juntarComBrancas ? 'text-white' : 'text-emerald-600'}`} />
+                              Sim, Juntar Tudo
+                            </span>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${juntarComBrancas ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
+                              {totalComBrancasModal} IDs
+                            </span>
+                          </div>
+                          <span className={`text-[10px] leading-tight ${juntarComBrancas ? 'text-emerald-50' : 'text-gray-500'}`}>
+                            Validados ({codigosValidadosModal.length}) + Brancas ({brancasDisponiveis.length})
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setJuntarComBrancas(false)}
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                            !juntarComBrancas
+                              ? 'bg-[#3483FA] text-white border-blue-600 shadow-sm ring-2 ring-blue-300'
+                              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black flex items-center gap-1.5">
+                              <Square className={`w-4 h-4 ${!juntarComBrancas ? 'text-white' : 'text-[#3483FA]'}`} />
+                              Apenas a Lista
+                            </span>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${!juntarComBrancas ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'}`}>
+                              {codigosValidadosModal.length} IDs
+                            </span>
+                          </div>
+                          <span className={`text-[10px] leading-tight ${!juntarComBrancas ? 'text-blue-50' : 'text-gray-500'}`}>
+                            Apenas os {codigosValidadosModal.length} IDs validados da lista
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-600">
+                      Nenhum ID sem rota (brancas) pendente na base de refugo. O CSV será baixado com os {codigosValidadosModal.length} IDs validados da lista.
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <h4 className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Resumo do Arquivo CSV:</h4>
+                    <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 text-xs space-y-1.5">
+                      <div className="flex justify-between text-gray-600">
+                        <span>IDs validados na lista:</span>
+                        <strong className="text-gray-800">{codigosValidadosModal.length}</strong>
+                      </div>
+                      {brancasDisponiveis.length > 0 && juntarComBrancas && (
+                        <div className="flex justify-between text-amber-700">
+                          <span>+ IDs sem rota (brancas do refugo):</span>
+                          <strong>{brancasDisponiveis.length}</strong>
+                        </div>
+                      )}
+                      <div className="pt-1.5 border-t border-gray-200 flex justify-between text-emerald-800 font-black">
+                        <span>Total de IDs no CSV final:</span>
+                        <span>
+                          {brancasDisponiveis.length > 0 && juntarComBrancas 
+                            ? totalComBrancasModal 
+                            : codigosValidadosModal.length} IDs
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">O que será feito?</h4>
-                  <ul className="space-y-2">
-                    <li className="flex gap-3 items-start">
-                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
-                        <Check className="w-3 h-3 text-emerald-600" />
-                      </div>
-                      <p className="text-xs font-bold text-gray-600 leading-snug">
-                        Todos os IDs serão limpos e corrigidos (removendo espaços extras e caracteres inválidos).
-                      </p>
-                    </li>
-                    <li className="flex gap-3 items-start">
-                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
-                        <Download className="w-3 h-3 text-emerald-600" />
-                      </div>
-                      <p className="text-xs font-bold text-gray-600 leading-snug">
-                        O relatório CSV final será gerado e baixado no seu dispositivo.
-                      </p>
-                    </li>
-                  </ul>
+                <div className="p-5 bg-gray-50 border-t border-gray-100 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setListaParaFinalizar(null)}
+                    className="flex-1 py-3 bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                  >
+                    CANCELAR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFinalizarLista(listaParaFinalizar.id, brancasDisponiveis.length > 0 ? juntarComBrancas : false)}
+                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>
+                      {brancasDisponiveis.length > 0 && juntarComBrancas 
+                        ? `FINALIZAR E BAIXAR (${totalComBrancasModal} IDs)` 
+                        : `FINALIZAR E BAIXAR (${codigosValidadosModal.length} IDs)`}
+                    </span>
+                  </button>
                 </div>
-              </div>
-
-              <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-3">
-                <button
-                  onClick={() => setListaParaFinalizar(null)}
-                  className="flex-1 py-3 bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 font-bold rounded-xl text-xs transition-all cursor-pointer"
-                >
-                  CANCELAR
-                </button>
-                <button
-                  onClick={() => handleFinalizarLista(listaParaFinalizar.id)}
-                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Download className="w-4 h-4" />
-                  SIM, FINALIZAR E BAIXAR
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
 
       {/* Overlay com Círculo Giratório ao abrir ou criar lista */}

@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Coleção de Usuários e Autenticação
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+    
+    // Coleção principal de Listas de Coleta (Metadados leves)
+    match /coleta_listas/{listaId} {
+      allow read, write: if true;
+      
+      // Subcoleção de Itens e Pacotes Individuais
+      // Cada bip salva estritamente um documento nesta subcoleção
+      match /itens/{itemId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Coleção de Refugo e Coletor CSV
+    match /refugo/{docId} {
+      allow read, write: if true;
+    }
+    match /coletor/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

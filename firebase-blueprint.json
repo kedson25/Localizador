@@ -2,7 +2,7 @@
   "entities": {
     "ColetaLista": {
       "title": "ColetaLista",
-      "description": "Uma lista de coleta de pacotes",
+      "description": "Metadados de uma lista de coleta de pacotes",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -14,12 +14,12 @@
         "status": { "type": "string", "enum": ["em_andamento", "finalizada"] },
         "saidaPadrao": { "type": "string" },
         "motivoPadrao": { "type": "string" },
-        "itens": {
-          "type": "array",
-          "items": {
-            "$ref": "#/entities/ColetaItem"
-          }
-        },
+        "totalItens": { "type": "number" },
+        "totalValidados": { "type": "number" },
+        "saidasCount": { "type": "object" },
+        "motivosCount": { "type": "object" },
+        "rotasCount": { "type": "object" },
+        "bipsPorOperador": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -27,16 +27,20 @@
     },
     "ColetaItem": {
       "title": "ColetaItem",
-      "description": "Um item individual bimpado em uma lista de coleta",
+      "description": "Um pacote ou item individual coletado na subcoleção",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "codigo": { "type": "string" },
+        "codigoClean": { "type": "string" },
         "rota": { "type": "string" },
         "saida": { "type": "string" },
         "motivo": { "type": "string" },
         "scannedAt": { "type": "string" },
-        "responsavel": { "type": "string" }
+        "responsavel": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "grupoId": { "type": "string" },
+        "validado": { "type": "boolean" }
       },
       "required": ["id", "codigo", "scannedAt"]
     }
@@ -44,7 +48,11 @@
   "firestore": {
     "/coleta_listas/{listaId}": {
       "schema": "ColetaLista",
-      "description": "Coleção de listas de coleta"
+      "description": "Coleção de metadados das listas de coleta"
+    },
+    "/coleta_listas/{listaId}/itens/{itemId}": {
+      "schema": "ColetaItem",
+      "description": "Subcoleção de pacotes individuais da lista de coleta"
     }
   }
 }

@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Upload, Filter, ListPlus } from 'lucide-react';
 import { CsvRow, LookupMatch, ColetaLista, ColetaItem } from '../types';
-import { searchIdsInRows, cleanDigits } from '../utils/csvParser';
-import { listenToListas } from '../lib/firebase';
+import { cleanDigits } from '../utils/csvParser';
+import { listenToListas, searchItemsAcrossAllListas, getItemsOfGrupo } from '../lib/firebase';
 
 interface IdLookupProps {
   rows: CsvRow[];
@@ -17,6 +17,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [expandedRowIdx, setExpandedRowIdx] = useState<number | null>(null);
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [showGruposModal, setShowGruposModal] = useState(false);
+  const [serverFoundMap, setServerFoundMap] = useState<Map<string, { item: ColetaItem; listaId: string }>>(new Map());
 
   // Paginação da Consulta de IDs para suportar 9.000+ IDs sem travar
   const [lookupPage, setLookupPage] = useState<number>(1);
@@ -27,6 +28,27 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     const unsubscribe = listenToListas((data) => setListas(data));
     return () => unsubscribe();
   }, []);
+
+  // Busca diretamente no servidor Firestore quando os termos de pesquisa mudam
+  useEffect(() => {
+    if (!inputText || !inputText.trim()) {
+      setServerFoundMap(new Map());
+      return;
+    }
+    const rawTerms = inputText
+      .split(/[\n\r,;\t\s]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+
+    if (rawTerms.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      const results = await searchItemsAcrossAllListas(rawTerms);
+      setServerFoundMap(results);
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [inputText]);
 
   const matches: LookupMatch[] = useMemo(() => {
     if (!inputText || !inputText.trim()) return [];
@@ -54,32 +76,19 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
         return false;
       }) : undefined;
 
-      // 2. Procurar em todas as listas de coleta (listas do Firestore)
+      // 2. Procurar nos resultados do servidor Firestore
+      const foundEntry = serverFoundMap.get(term.toUpperCase()) || (cleanTerm ? serverFoundMap.get(cleanTerm) : undefined);
       let foundInLista: { item: ColetaItem; lista: ColetaLista; grupoNome?: string } | null = null;
 
-      for (const lista of listas) {
-        if (!lista.itens || lista.itens.length === 0) continue;
-
-        const item = lista.itens.find((i) => {
-          if (!i.codigo) return false;
-          const cleanCod = cleanDigits(i.codigo);
-          return (
-            i.codigo === term ||
-            (cleanTerm.length > 0 && cleanCod === cleanTerm) ||
-            i.codigo === cleanTerm ||
-            i.codigo.includes(term)
-          );
-        });
-
-        if (item) {
+      if (foundEntry) {
+        const lista = listas.find(l => l.id === foundEntry.listaId);
+        if (lista) {
           let grupoNome = '';
-          if (item.grupoId && lista.grupos) {
-            const g = lista.grupos.find((grp) => grp.id === item.grupoId);
+          if (foundEntry.item.grupoId && lista.grupos) {
+            const g = lista.grupos.find((grp) => grp.id === foundEntry.item.grupoId);
             if (g) grupoNome = g.nome;
           }
-          foundInLista = { item, lista, grupoNome };
-          // Se o item já tem motivo e saída preenchidos, priorizar este
-          if (item.motivo && item.saida) break;
+          foundInLista = { item: foundEntry.item, lista, grupoNome };
         }
       }
 
@@ -862,11 +871,12 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                     </div>
                     <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {lista.grupos?.map(grupo => {
-                        const idsDoGrupo = lista.itens.filter(i => i.grupoId === grupo.id).map(i => i.codigo);
                         return (
                           <button
                             key={grupo.id}
-                            onClick={() => {
+                            onClick={async () => {
+                              const itensDoGrupo = await getItemsOfGrupo(lista.id, grupo.id);
+                              const idsDoGrupo = itensDoGrupo.map(i => i.codigo);
                               if (idsDoGrupo.length > 0) {
                                 const currentInput = inputText.trim();
                                 const newIds = idsDoGrupo.join('\n');
@@ -879,9 +889,6 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                             <div className="flex items-center justify-between w-full">
                               <span className="font-bold text-sm text-purple-900 group-hover:text-purple-700">
                                 {grupo.nome}
-                              </span>
-                              <span className="text-xs font-bold px-2 py-0.5 bg-white text-purple-700 rounded-full border border-purple-200 shadow-sm">
-                                {idsDoGrupo.length}
                               </span>
                             </div>
                             <span className="text-[10px] text-purple-600 font-medium">Líder: {grupo.lider}</span>

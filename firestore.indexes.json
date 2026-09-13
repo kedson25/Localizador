@@ -1,0 +1,27 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "itens",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "itens",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "codigo", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "itens",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "codigoClean", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
