@@ -18,6 +18,11 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [listas, setListas] = useState<ColetaLista[]>([]);
   const [showGruposModal, setShowGruposModal] = useState(false);
 
+  // Paginação da Consulta de IDs para suportar 9.000+ IDs sem travar
+  const [lookupPage, setLookupPage] = useState<number>(1);
+  const [lookupPageSize, setLookupPageSize] = useState<number>(100);
+  const [jumpLookupPageInput, setJumpLookupPageInput] = useState<string>('1');
+
   useEffect(() => {
     const unsubscribe = listenToListas((data) => setListas(data));
     return () => unsubscribe();
@@ -202,11 +207,6 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
       return a.searchTerm.localeCompare(b.searchTerm, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [matches, saidaFilter]);
-
-  // Paginação da Consulta de IDs para suportar 9.000+ IDs sem travar
-  const [lookupPage, setLookupPage] = useState<number>(1);
-  const [lookupPageSize, setLookupPageSize] = useState<number>(100);
-  const [jumpLookupPageInput, setJumpLookupPageInput] = useState<string>('1');
 
   useEffect(() => {
     setLookupPage(1);

@@ -280,6 +280,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [motivoEmMassaEscolha, setMotivoEmMassaEscolha] = useState<string>('');
 
+  // Paginação para exibição de grandes volumes de IDs sem travar
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(100);
+  const [jumpPageInput, setJumpPageInput] = useState<string>('1');
+
   // Modal de Verificação de IDs (Em Rota vs Válidos)
   const [showVerificarModal, setShowVerificarModal] = useState(false);
   const [verificarModo, setVerificarModo] = useState<'10' | 'completo'>('10');
@@ -1099,6 +1104,217 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setSelectedItemIds([]);
   }, [activeListaId]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+    setJumpPageInput('1');
+  }, [activeListaId, searchTerm]);
+
+  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || []);
+
+  const filteredItems = useMemo(() => {
+    if (!searchTerm.trim()) return itemsFiltradosBase;
+    const term = searchTerm.toLowerCase();
+    const gruposMap = new Map((listaAtiva?.grupos || []).map(g => [g.id, g.nome.toLowerCase()]));
+
+    return itemsFiltradosBase.filter(item => {
+      const nomeGrupo = item.grupoId ? (gruposMap.get(item.grupoId) || '') : '';
+      const rotaCalculada = getRotaItem(item).toLowerCase();
+      return item.codigo.toLowerCase().includes(term) || 
+             rotaCalculada.includes(term) || 
+             (item.motivo && item.motivo.toLowerCase().includes(term)) || 
+             (item.saida && item.saida.toLowerCase().includes(term)) ||
+             (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
+             nomeGrupo.includes(term);
+    });
+  }, [itemsFiltradosBase, searchTerm, listaAtiva?.grupos, getRotaItem]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+      setJumpPageInput(String(totalPages));
+    }
+  }, [totalPages, currentPage]);
+
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(filteredItems.length, startIndex + pageSize);
+
+  const displayedItems = useMemo(() => {
+    return filteredItems.slice(startIndex, endIndex);
+  }, [filteredItems, startIndex, endIndex]);
+
+  const selectedItemIdsSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
+  const allPageSelected = displayedItems.length > 0 && displayedItems.every(i => selectedItemIdsSet.has(i.id));
+
+  const handleToggleSelectPage = useCallback(() => {
+    const pageIds = displayedItems.map(i => i.id);
+    const allSelected = pageIds.length > 0 && pageIds.every(id => selectedItemIdsSet.has(id));
+    if (allSelected) {
+      setSelectedItemIds(prev => prev.filter(id => !pageIds.includes(id)));
+    } else {
+      const newSet = new Set([...selectedItemIds, ...pageIds]);
+      setSelectedItemIds(Array.from(newSet));
+    }
+  }, [displayedItems, selectedItemIdsSet, selectedItemIds]);
+
+  const renderPagination = (position: 'top' | 'bottom') => {
+    if (filteredItems.length === 0) return null;
+
+    const delta = 2;
+    const range: number[] = [];
+    for (let i = 1; i <= totalPages; i++) {
+      if (i === 1 || i === totalPages || (i >= currentPage - delta && i <= currentPage + delta)) {
+        range.push(i);
+      }
+    }
+
+    const rangeWithDots: (number | string)[] = [];
+    let prevNum: number | undefined;
+    for (const num of range) {
+      if (prevNum) {
+        if (num - prevNum === 2) {
+          rangeWithDots.push(prevNum + 1);
+        } else if (num - prevNum !== 1) {
+          rangeWithDots.push('...');
+        }
+      }
+      rangeWithDots.push(num);
+      prevNum = num;
+    }
+
+    const handleJump = (e: React.FormEvent) => {
+      e.preventDefault();
+      const p = parseInt(jumpPageInput, 10);
+      if (!isNaN(p) && p >= 1 && p <= totalPages) {
+        setCurrentPage(p);
+      } else {
+        setJumpPageInput(String(currentPage));
+      }
+    };
+
+    return (
+      <div className={`px-4 py-2.5 bg-gray-50 border-gray-200 flex flex-col lg:flex-row items-center justify-between gap-3 text-xs text-gray-600 ${
+        position === 'top' ? 'border-b rounded-t-xl' : 'border-t rounded-b-xl'
+      }`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span>
+            Mostrando <strong className="text-gray-900 font-mono">{filteredItems.length === 0 ? 0 : startIndex + 1}</strong>–<strong className="text-gray-900 font-mono">{endIndex}</strong> de <strong className="text-[#3483FA] font-mono">{filteredItems.length.toLocaleString('pt-BR')}</strong> pacotes
+          </span>
+          <span className="text-gray-300 hidden sm:inline">|</span>
+          <span className="text-gray-500">
+            Pág. <strong className="text-gray-800 font-mono">{currentPage}</strong> de <strong className="text-gray-800 font-mono">{totalPages}</strong>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1 flex-wrap justify-center">
+          <button
+            type="button"
+            onClick={() => { setCurrentPage(1); setJumpPageInput('1'); }}
+            disabled={currentPage === 1}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Primeira página"
+          >
+            <ChevronsLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const nextP = Math.max(1, currentPage - 1);
+              setCurrentPage(nextP);
+              setJumpPageInput(String(nextP));
+            }}
+            disabled={currentPage === 1}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Página anterior"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="hidden sm:flex items-center gap-1">
+            {rangeWithDots.map((p, idx) => {
+              if (p === '...') {
+                return <span key={`ellipsis-${position}-${idx}`} className="px-1 text-gray-400 font-mono select-none">...</span>;
+              }
+              const isCurrent = p === currentPage;
+              return (
+                <button
+                  key={`page-${position}-${p}`}
+                  type="button"
+                  onClick={() => { setCurrentPage(Number(p)); setJumpPageInput(String(p)); }}
+                  className={`min-w-[28px] h-7 px-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                    isCurrent
+                      ? 'bg-[#3483FA] text-white shadow-sm'
+                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const nextP = Math.min(totalPages, currentPage + 1);
+              setCurrentPage(nextP);
+              setJumpPageInput(String(nextP));
+            }}
+            disabled={currentPage >= totalPages}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Próxima página"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => { setCurrentPage(totalPages); setJumpPageInput(String(totalPages)); }}
+            disabled={currentPage >= totalPages}
+            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            title="Última página"
+          >
+            <ChevronsRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] text-gray-500">Por pág:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+                setJumpPageInput('1');
+              }}
+              className="px-2 py-1 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700 outline-none focus:border-[#3483FA] cursor-pointer"
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+              <option value={500}>500</option>
+              <option value={1000}>1000</option>
+            </select>
+          </div>
+
+          <form onSubmit={handleJump} className="flex items-center gap-1">
+            <span className="text-[11px] text-gray-500">Ir:</span>
+            <input
+              type="number"
+              min={1}
+              max={totalPages}
+              value={jumpPageInput}
+              onChange={(e) => setJumpPageInput(e.target.value)}
+              onBlur={handleJump}
+              className="w-12 px-1 py-1 bg-white border border-gray-300 rounded-lg text-xs font-mono font-bold text-center text-gray-800 outline-none focus:border-[#3483FA]"
+            />
+          </form>
+        </div>
+      </div>
+    );
+  };
+
   // Alternar seleção de item individual
   const handleToggleSelectItem = (itemId: string) => {
     setSelectedItemIds(prev => 
@@ -1882,221 +2098,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   ];
 
   const meusItensCount = listToVerify.filter(i => (i.responsavel || listaAtiva.responsavel) === operanteNome).length;
-
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(100);
-  const [jumpPageInput, setJumpPageInput] = useState('1');
-
-  useEffect(() => {
-    setCurrentPage(1);
-    setJumpPageInput('1');
-  }, [activeListaId, searchTerm]);
-
-  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || []);
-
-  const filteredItems = useMemo(() => {
-    if (!searchTerm.trim()) return itemsFiltradosBase;
-    const term = searchTerm.toLowerCase();
-    const gruposMap = new Map((listaAtiva?.grupos || []).map(g => [g.id, g.nome.toLowerCase()]));
-
-    return itemsFiltradosBase.filter(item => {
-      const nomeGrupo = item.grupoId ? (gruposMap.get(item.grupoId) || '') : '';
-      const rotaCalculada = getRotaItem(item).toLowerCase();
-      return item.codigo.toLowerCase().includes(term) || 
-             rotaCalculada.includes(term) || 
-             (item.motivo && item.motivo.toLowerCase().includes(term)) || 
-             (item.saida && item.saida.toLowerCase().includes(term)) ||
-             (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
-             nomeGrupo.includes(term);
-    });
-  }, [itemsFiltradosBase, searchTerm, listaAtiva?.grupos, getRotaItem]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-      setJumpPageInput(String(totalPages));
-    }
-  }, [totalPages, currentPage]);
-
-  const startIndex = (currentPage - 1) * pageSize;
-  const endIndex = Math.min(filteredItems.length, startIndex + pageSize);
-
-  const displayedItems = useMemo(() => {
-    return filteredItems.slice(startIndex, endIndex);
-  }, [filteredItems, startIndex, endIndex]);
-
-  const selectedItemIdsSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
-  const allPageSelected = displayedItems.length > 0 && displayedItems.every(i => selectedItemIdsSet.has(i.id));
-
-  const handleToggleSelectPage = useCallback(() => {
-    const pageIds = displayedItems.map(i => i.id);
-    const allSelected = pageIds.length > 0 && pageIds.every(id => selectedItemIdsSet.has(id));
-    if (allSelected) {
-      setSelectedItemIds(prev => prev.filter(id => !pageIds.includes(id)));
-    } else {
-      const newSet = new Set([...selectedItemIds, ...pageIds]);
-      setSelectedItemIds(Array.from(newSet));
-    }
-  }, [displayedItems, selectedItemIdsSet, selectedItemIds]);
-
-  const renderPagination = (position: 'top' | 'bottom') => {
-    if (filteredItems.length === 0) return null;
-
-    const delta = 2;
-    const range: number[] = [];
-    for (let i = 1; i <= totalPages; i++) {
-      if (i === 1 || i === totalPages || (i >= currentPage - delta && i <= currentPage + delta)) {
-        range.push(i);
-      }
-    }
-
-    const rangeWithDots: (number | string)[] = [];
-    let prevNum: number | undefined;
-    for (const num of range) {
-      if (prevNum) {
-        if (num - prevNum === 2) {
-          rangeWithDots.push(prevNum + 1);
-        } else if (num - prevNum !== 1) {
-          rangeWithDots.push('...');
-        }
-      }
-      rangeWithDots.push(num);
-      prevNum = num;
-    }
-
-    const handleJump = (e: React.FormEvent) => {
-      e.preventDefault();
-      const p = parseInt(jumpPageInput, 10);
-      if (!isNaN(p) && p >= 1 && p <= totalPages) {
-        setCurrentPage(p);
-      } else {
-        setJumpPageInput(String(currentPage));
-      }
-    };
-
-    return (
-      <div className={`px-4 py-2.5 bg-gray-50 border-gray-200 flex flex-col lg:flex-row items-center justify-between gap-3 text-xs text-gray-600 ${
-        position === 'top' ? 'border-b rounded-t-xl' : 'border-t rounded-b-xl'
-      }`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span>
-            Mostrando <strong className="text-gray-900 font-mono">{filteredItems.length === 0 ? 0 : startIndex + 1}</strong>–<strong className="text-gray-900 font-mono">{endIndex}</strong> de <strong className="text-[#3483FA] font-mono">{filteredItems.length.toLocaleString('pt-BR')}</strong> pacotes
-          </span>
-          <span className="text-gray-300 hidden sm:inline">|</span>
-          <span className="text-gray-500">
-            Pág. <strong className="text-gray-800 font-mono">{currentPage}</strong> de <strong className="text-gray-800 font-mono">{totalPages}</strong>
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1 flex-wrap justify-center">
-          <button
-            type="button"
-            onClick={() => { setCurrentPage(1); setJumpPageInput('1'); }}
-            disabled={currentPage === 1}
-            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
-            title="Primeira página"
-          >
-            <ChevronsLeft className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const nextP = Math.max(1, currentPage - 1);
-              setCurrentPage(nextP);
-              setJumpPageInput(String(nextP));
-            }}
-            disabled={currentPage === 1}
-            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
-            title="Página anterior"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-          </button>
-
-          <div className="hidden sm:flex items-center gap-1">
-            {rangeWithDots.map((p, idx) => {
-              if (p === '...') {
-                return <span key={`ellipsis-${position}-${idx}`} className="px-1 text-gray-400 font-mono select-none">...</span>;
-              }
-              const isCurrent = p === currentPage;
-              return (
-                <button
-                  key={`page-${position}-${p}`}
-                  type="button"
-                  onClick={() => { setCurrentPage(Number(p)); setJumpPageInput(String(p)); }}
-                  className={`min-w-[28px] h-7 px-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
-                    isCurrent
-                      ? 'bg-[#3483FA] text-white shadow-sm'
-                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
-                  }`}
-                >
-                  {p}
-                </button>
-              );
-            })}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              const nextP = Math.min(totalPages, currentPage + 1);
-              setCurrentPage(nextP);
-              setJumpPageInput(String(nextP));
-            }}
-            disabled={currentPage >= totalPages}
-            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
-            title="Próxima página"
-          >
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => { setCurrentPage(totalPages); setJumpPageInput(String(totalPages)); }}
-            disabled={currentPage >= totalPages}
-            className="p-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
-            title="Última página"
-          >
-            <ChevronsRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1">
-            <span className="text-[11px] text-gray-500">Por pág:</span>
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
-                setCurrentPage(1);
-                setJumpPageInput('1');
-              }}
-              className="px-2 py-1 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700 outline-none focus:border-[#3483FA] cursor-pointer"
-            >
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={250}>250</option>
-              <option value={500}>500</option>
-              <option value={1000}>1000</option>
-            </select>
-          </div>
-
-          <form onSubmit={handleJump} className="flex items-center gap-1">
-            <span className="text-[11px] text-gray-500">Ir:</span>
-            <input
-              type="number"
-              min={1}
-              max={totalPages}
-              value={jumpPageInput}
-              onChange={(e) => setJumpPageInput(e.target.value)}
-              onBlur={handleJump}
-              className="w-12 px-1 py-1 bg-white border border-gray-300 rounded-lg text-xs font-mono font-bold text-center text-gray-800 outline-none focus:border-[#3483FA]"
-            />
-          </form>
-        </div>
-      </div>
-    );
-  };
 
   return (
     <motion.div 
