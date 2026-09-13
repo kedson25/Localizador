@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Papa from 'papaparse';
 import { 
   Barcode, 
@@ -33,25 +33,18 @@ import {
   Zap,
   Loader2,
   RotateCcw,
-  Save,
-  Calendar
+  Save
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { listenToRefugo, validateAndCleanIds } from '../services/operational.service';
-import {
-  deleteLista,
-  deleteListaItems,
-  getListaById,
+import { 
+  listenToRefugoScans, 
+  saveRefugoScans, 
+  listenToRefugo,
   listenToListas,
-  refreshListas,
   saveLista,
-  saveListaItemsBatch,
-  waitForListaAvailable,
-} from '../lib/coletaSync';
-import { compareListasNewestFirst } from '../lib/listaOrder';
-import { promoteIndividualSession } from '../lib/individualSession';
-import { useIndividualDraft } from './useIndividualDraft';
-import { PageSkeleton, SkeletonOverlay } from './PageSkeleton';
+  deleteLista as deleteListaFirestore
+} from '../lib/firebase';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
 
@@ -78,67 +71,11 @@ const MOTIVOS_DISPONIVEIS = [
   'Aguardando coleta'
 ];
 
-const ITEMS_PER_PAGE = 100;
-const EMPTY_ITEMS: ColetaItem[] = [];
-const cleanDigits = (value: string) => (value || '').replace(/\D/g, '');
-const itemCodeKey = (value: string) => {
-  const normalized = (value || '').trim().toUpperCase().replace(/M$/, '');
-  return cleanDigits(normalized) || normalized;
-};
-const pastedCodeKey = (value: string) => {
-  let normalized = (value || '').trim().replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4');
-  normalized = normalized.replace(/^[^0-9a-zA-Z]+/, '');
-  const tracking = normalized.match(/(47\d+)/);
-  return itemCodeKey(tracking ? tracking[1] : normalized);
-};
-const scanTimeValue = (value: string) => {
-  const brazilian = value.match(/^(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2})(?::(\d{2}))?$/);
-  if (brazilian) return new Date(Number(brazilian[3]), Number(brazilian[2]) - 1, Number(brazilian[1]), Number(brazilian[4]), Number(brazilian[5]), Number(brazilian[6] || 0)).getTime();
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
-};
-
-// Appending keeps existing indexes stable while a session contains new and repeated IDs.
-export function mergeIndividualItems(currentItems: ColetaItem[], sessionItems: ColetaItem[], operator: string) {
-  const items = [...currentItems];
-  const indexes = new Map(items.map((item, index) => [itemCodeKey(item.codigo), index]));
-  let addedCount = 0;
-  let updatedCount = 0;
-  for (const sessionItem of sessionItems) {
-    const key = itemCodeKey(sessionItem.codigo);
-    const index = indexes.get(key);
-    const existing = index === undefined ? undefined : items[index];
-    const updated: ColetaItem = {
-      ...(existing || sessionItem),
-      id: existing?.id || sessionItem.id || `item_${encodeURIComponent(key)}`,
-      validado: sessionItem.validado ?? true,
-      responsavel: operator,
-      scannedAt: sessionItem.scannedAt || new Date().toLocaleString('pt-BR'),
-      saida: sessionItem.saida || existing?.saida || '',
-      motivo: sessionItem.motivo || existing?.motivo || '',
-      rota: sessionItem.rota && sessionItem.rota !== 'Sem Rota'
-        ? sessionItem.rota : (existing?.rota || sessionItem.rota || 'Sem Rota'),
-      syncStatus: 'pendente'
-    };
-    if (index !== undefined) {
-      items[index] = updated;
-      updatedCount++;
-    } else {
-      indexes.set(key, items.length);
-      items.push(updated);
-      addedCount++;
-    }
-  }
-  return { items: [...items.slice(currentItems.length), ...items.slice(0, currentItems.length)], addedCount, updatedCount };
-}
-
 let audioCtx: AudioContext | null = null;
 const playShortBeep = () => {
   try {
     if (!audioCtx) {
-      const AudioContextClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioContextClass) return;
-      audioCtx = new AudioContextClass();
+      audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -163,8 +100,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const params = useParams();
   const navigate = useNavigate();
   const [listas, setListas] = useState<ColetaLista[]>([]);
-  const [listasReady, setListasReady] = useState(false);
-  const [usersReady, setUsersReady] = useState(false);
   const activeListaId = params.id || null;
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   
@@ -172,15 +107,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string, code: string } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const deferredSearchTerm = useDeferredValue(searchTerm);
-  const [itemsPage, setItemsPage] = useState(0);
-  const [storageError, setStorageError] = useState<string | null>(null);
   const [dashboardSearchTerm, setDashboardSearchTerm] = useState('');
-  const [dashboardDateFilter, setDashboardDateFilter] = useState('');
-  const [dashboardStatusFilter, setDashboardStatusFilter] = useState<'todas' | 'em_andamento' | 'finalizada'>('todas');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [refugoBaseRows, setRefugoBaseRows] = useState<RefugoRow[]>([]);
-  const [refugoReady, setRefugoReady] = useState(false);
 
   // Configurações do scanner na tela de coleta
   const [selectedSaida, setSelectedSaida] = useState('Ciclo 2 - Saída PM');
@@ -189,9 +118,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   // Gaveta/Modal para mudar motivo do ID clicado
   const [itemParaMudarMotivo, setItemParaMudarMotivo] = useState<ColetaItem | null>(null);
-
-  // Snapshot de itens para verificar no momento da abertura do modal
-  const [itensVerificarSnap, setItensVerificarSnap] = useState<ColetaItem[]>([]);
 
   // Seleção e Alteração em Massa de Motivos
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -235,28 +161,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [isLoadingLista, setIsLoadingLista] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('Carregando lista...');
   const [openingListaId, setOpeningListaId] = useState<string | null>(null);
-  const [missingListaId, setMissingListaId] = useState<string | null>(null);
-  const [listaLookupError, setListaLookupError] = useState<string | null>(null);
 
   // Modo Individual (Sessão isolada zerada que se unifica na principal ao fechar)
   const [modoIndividual, setModoIndividual] = useState(false);
-  const individualSession = currentUser?.id && activeListaId ? `${currentUser.id}:${activeListaId}` : null;
-  const individualDraft = useIndividualDraft(individualSession, setStorageError);
-  const { items: itensModoIndividual, setItems: setItensModoIndividual } = individualDraft;
-  const [isSavingLista, setIsSavingLista] = useState(false);
-  const savingListaCountRef = useRef(0);
-  const [modoIndFiltroStatus, setModoIndFiltroStatus] = useState<'todos' | 'validados' | 'pendentes'>('todos');
-  const [isSavingUnify, setIsSavingUnify] = useState(false);
+  const [itensModoIndividual, setItensModoIndividual] = useState<ColetaItem[]>([]);
 
   // Ref para itens ativos como cache em memória ultra-rápido prevenindo race-conditions em bips velozes
   const activeItensRef = useRef<ColetaItem[]>([]);
-  const pendingBipsRef = useRef(new Map<string, ColetaItem>());
-  const pendingBipsUntilRef = useRef(0);
-  const pendingRemovalsRef = useRef(new Set<string>());
-  const pendingRemovalsUntilRef = useRef(0);
-  const activeListaIdRef = useRef(activeListaId);
-  activeListaIdRef.current = activeListaId;
-  const pinnedListasRef = useRef(new Map<string, { lista: ColetaLista; expiresAt: number }>());
   const lastRefugoTextRef = useRef<string>('');
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -264,45 +175,42 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const operanteNome = currentUser?.username || 'Usuário Atual';
 
   const listaAtiva = listas.find(l => l.id === activeListaId);
-  const leitorTravado = isLocked || listaAtiva?.status === 'finalizada';
 
-  const pinConfirmedLista = useCallback((confirmed: ColetaLista) => {
-    pinnedListasRef.current.set(confirmed.id, { lista: confirmed, expiresAt: Date.now() + 30000 });
-    setListas(previous => {
-      const next = previous.filter(lista => lista.id !== confirmed.id);
-      next.push(confirmed);
-      return next.sort(compareListasNewestFirst);
-    });
-    if (activeListaIdRef.current === confirmed.id) activeItensRef.current = confirmed.itens;
-    refreshListas();
+  const getModoIndKey = useCallback((listaId: string, username: string) => {
+    return `coleta_modo_ind_${listaId}_${username}`;
   }, []);
 
-  const persistLista = async (lista: ColetaLista, immediate = false): Promise<boolean> => {
-    pinnedListasRef.current.delete(lista.id);
-    savingListaCountRef.current += 1;
-    setIsSavingLista(true);
-    try {
-      const saved = await saveLista(lista, immediate);
-      if (!saved) throw new Error('O servidor não confirmou a alteração. Tente novamente.');
-      setStorageError(null);
-      return true;
-    } catch (error) {
-      setStorageError(error instanceof Error ? error.message : 'Não foi possível salvar no servidor. Tente novamente.');
-      return false;
-    } finally {
-      savingListaCountRef.current -= 1;
-      setIsSavingLista(savingListaCountRef.current > 0);
-    }
-  };
-
+  // Auto-salvar sessão do Modo Individual no LocalStorage sempre que for alterada
   useEffect(() => {
-    setModoIndividual(false);
-    setIsLocked(false);
-    pendingBipsRef.current.clear();
-    pendingBipsUntilRef.current = 0;
-    pendingRemovalsRef.current.clear();
-    pendingRemovalsUntilRef.current = 0;
-  }, [activeListaId]);
+    if (listaAtiva && modoIndividual) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        localStorage.setItem(key, JSON.stringify(itensModoIndividual));
+      } catch (e) {
+        console.warn('Erro ao salvar sessão individual localmente:', e);
+      }
+    }
+  }, [itensModoIndividual, modoIndividual, listaAtiva?.id, operanteNome, getModoIndKey]);
+
+  // Restaurar automaticamente a sessão do Modo Individual se existir para esta lista
+  useEffect(() => {
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItensModoIndividual(parsed);
+            setModoIndividual(true);
+          }
+        }
+      } catch (e) {}
+    } else {
+      setModoIndividual(false);
+      setItensModoIndividual([]);
+    }
+  }, [listaAtiva?.id, operanteNome, getModoIndKey]);
 
   // Buscar usuários registrados no sistema
   useEffect(() => {
@@ -314,94 +222,35 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         }
       } catch (e) {
         console.error("Erro ao buscar usuários do sistema:", e);
-      } finally {
-        setUsersReady(true);
       }
     }
     fetchSystemUsers();
   }, []);
 
-  // Receber listas e base de refugo do Supabase.
+  // Carregar/Salvar listas (AGORA FIRESTORE)
   useEffect(() => {
     const unsubListas = listenToListas((listasServer) => {
-      const activeId = activeListaIdRef.current;
-      const pending = Date.now() < pendingBipsUntilRef.current ? pendingBipsRef.current : new Map<string, ColetaItem>();
-      const pendingRemovals = Date.now() < pendingRemovalsUntilRef.current ? pendingRemovalsRef.current : new Set<string>();
-      if (!pending.size) {
-        pendingBipsRef.current.clear();
-        pendingBipsUntilRef.current = 0;
-      }
-      const merged = listasServer.map(lista => {
-        if (lista.id !== activeId) return lista;
-        const serverItems = new Map(lista.itens.map(item => [item.id, item]));
-        pendingRemovals.forEach(id => serverItems.delete(id));
-        pending.forEach(item => serverItems.set(item.id, item));
-        const pendingIds = new Set(pending.keys());
-        return pending.size || pendingRemovals.size
-          ? { ...lista, itens: [...pending.values(), ...[...serverItems.values()].filter(item => !pendingIds.has(item.id))] }
-          : lista;
-      });
-      for (const [id, pin] of pinnedListasRef.current) {
-        if (Date.now() >= pin.expiresAt) {
-          pinnedListasRef.current.delete(id);
-          continue;
-        }
-        const pinned = pin.lista;
-        const index = merged.findIndex(lista => lista.id === id);
-        if (index < 0) {
-          merged.push(pinned);
-          continue;
-        }
-        const server = merged[index];
-        const serverIds = new Set(server.itens.map(item => item.id));
-        const serverCaughtUp = (server.revision || 0) >= (pinned.revision || 0)
-          && pinned.itens.every(item => serverIds.has(item.id));
-        if (serverCaughtUp) {
-          pinnedListasRef.current.delete(id);
-          continue;
-        }
-        const pinnedIds = new Set(pinned.itens.map(item => item.id));
-        merged[index] = {
-          ...server,
-          ...((pinned.revision || 0) >= (server.revision || 0) ? pinned : {}),
-          itens: [...pinned.itens, ...server.itens.filter(item => !pinnedIds.has(item.id))],
-        };
-      }
-      merged.sort(compareListasNewestFirst);
-      const serverActive = listasServer.find(lista => lista.id === activeId);
-      if (serverActive && pendingRemovals.size) {
-        pendingRemovals.forEach(id => { if (!serverActive.itens.some(item => item.id === id)) pendingRemovals.delete(id); });
-        if (!pendingRemovals.size) pendingRemovalsUntilRef.current = 0;
-      }
-      activeItensRef.current = merged.find(lista => lista.id === activeId)?.itens || [];
-      setListas(merged);
-      setListasReady(true);
-    }, error => {
-      setListasReady(true);
-      setStorageError(error.message);
+      setListas(listasServer);
     });
 
     // Carregar base de refugo se existir com cache em memória para evitar re-parse pesado
     const unsubRefugo = listenToRefugo((data) => {
       if (data && data.rawText) {
         if (data.rawText === lastRefugoTextRef.current) {
-          setRefugoReady(true);
           return; // Já está processado em memória RAM!
         }
         lastRefugoTextRef.current = data.rawText;
 
-        Papa.parse<string[]>(data.rawText, {
-          worker: true,
+        Papa.parse(data.rawText, {
           skipEmptyLines: true,
           complete: (results) => {
-            if (lastRefugoTextRef.current !== data.rawText) return;
-            const parsedRows: RefugoRow[] = results.data.map((row) => {
+            const parsedRows: RefugoRow[] = (results.data as any[]).map((row: any) => {
               const values = Array.isArray(row) ? row : Object.values(row);
               const idRaw = String(values[0] || '').trim().toUpperCase();
               if (!idRaw || idRaw === 'ID' || idRaw === 'CODIGO' || idRaw === 'CÓDIGO' || idRaw === 'PACOTE' || idRaw === 'TRACKING' || idRaw === 'ENVIO') return null;
               const rotaRaw = String(values[1] || 'Sem Rota').trim();
               const rawFieldsObj: Record<string, string> = {};
-              values.forEach((p: string, idx: number) => { rawFieldsObj[idx.toString()] = String(p || ''); });
+              values.forEach((p: any, idx: number) => { rawFieldsObj[idx.toString()] = String(p || ''); });
               return {
                 id: idRaw,
                 rota: rotaRaw || 'Sem Rota',
@@ -409,19 +258,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               };
             }).filter(Boolean) as RefugoRow[];
             setRefugoBaseRows(parsedRows);
-            setRefugoReady(true);
           }
         });
       } else {
         lastRefugoTextRef.current = '';
         setRefugoBaseRows([]);
-        setRefugoReady(true);
       }
-    }, error => {
-      lastRefugoTextRef.current = '';
-      setRefugoBaseRows([]);
-      setRefugoReady(true);
-      setStorageError(error.message);
     });
 
     return () => {
@@ -429,45 +271,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       unsubRefugo();
     };
   }, []);
-
-  // A rota direta só declara uma lista ausente depois de consultá-la pelo ID.
-  // Isso evita o falso "não disponível" enquanto o snapshot geral ainda atualiza.
-  useEffect(() => {
-    if (!activeListaId) {
-      setMissingListaId(null);
-      setListaLookupError(null);
-      return;
-    }
-    if (listaAtiva) {
-      setMissingListaId(null);
-      setListaLookupError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setMissingListaId(null);
-    setListaLookupError(null);
-    void (async () => {
-      try {
-        for (let attempt = 0; attempt < 8 && !cancelled; attempt++) {
-          const found = await getListaById(activeListaId);
-          if (cancelled) return;
-          if (found) {
-            pinConfirmedLista(found);
-            return;
-          }
-          if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 200));
-        }
-        if (!cancelled) setMissingListaId(activeListaId);
-      } catch (error) {
-        if (cancelled) return;
-        setListaLookupError(error instanceof Error ? error.message : 'Não foi possível consultar esta lista no Supabase.');
-        setMissingListaId(activeListaId);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [activeListaId, listaAtiva?.id, pinConfirmedLista]);
 
   // Sincronizar cache em memória da lista ativa para evitar race-conditions
   useEffect(() => {
@@ -481,13 +284,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Quando abre uma lista, ajusta a saída padrão para a Saída do Ciclo definida na lista
   useEffect(() => {
     if (listaAtiva) {
-      setSelectedRotaItem(listaAtiva.rota || 'Geral');
-      if (listaAtiva.saidaPadrao) {
-        setSelectedSaida(listaAtiva.saidaPadrao);
-      }
+      setSelectedRotaItem(listaAtiva.rota);
+      setSelectedSaida(listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM');
       setSelectedMotivo(listaAtiva.motivoPadrao || '');
     }
-  }, [listaAtiva?.id, listaAtiva?.saidaPadrao]);
+  }, [activeListaId]);
 
   // Quando a lista ativa for carregada, encerra o indicador de carregamento
   useEffect(() => {
@@ -500,14 +301,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
   }, [listaAtiva, isLoadingLista]);
 
-  useEffect(() => {
-    if (!listaAtiva || leitorTravado || individualDraft.saving || isSavingUnify) return;
-    const focusScanner = () => inputRef.current?.focus();
-    focusScanner();
-    const timer = setTimeout(focusScanner, 150);
-    return () => clearTimeout(timer);
-  }, [listaAtiva?.id, listaAtiva?.status, listaAtiva?.itens, leitorTravado, isSavingLista, individualDraft.saving, isSavingUnify]);
-
   const handleAbrirLista = (id: string) => {
     setOpeningListaId(id);
     setLoadingMessage('Carregando lista de coleta...');
@@ -515,25 +308,32 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     navigate(`/listas/${id}`);
   };
 
-  // Obter rota oficial baseada estritamente no arquivo de refugo atual
-  const refugoByCode = useMemo(() => {
-    const index = new Map<string, RefugoRow>();
-    for (const row of refugoBaseRows) {
-      const key = itemCodeKey(row.id);
-      if (key && !index.has(key)) index.set(key, row);
-    }
-    return index;
-  }, [refugoBaseRows]);
+  const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
 
+  // Obter rota oficial baseada estritamente no arquivo de refugo atual
   const getRotaItem = useCallback((item: { codigo: string; rota?: string }): string => {
-    const match = refugoByCode.get(itemCodeKey(item.codigo));
-    if (match?.rota && match.rota.trim() !== '' && match.rota.toLowerCase() !== 'sem rota' && match.rota !== '-') {
-      return match.rota.trim();
+    if (refugoBaseRows && refugoBaseRows.length > 0) {
+      const cleanCod = (item.codigo || '').trim().toUpperCase();
+      const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+      const cleanCodDigits = cleanDigits(cleanCod);
+
+      const match = refugoBaseRows.find(r => {
+        if (!r.id) return false;
+        const rId = r.id.trim().toUpperCase();
+        if (rId === cleanCod) return true;
+        if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+        const rDigits = cleanDigits(rId);
+        return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+      });
+
+      if (match && match.rota && match.rota.trim() !== '' && match.rota.toLowerCase() !== 'sem rota' && match.rota !== '-') {
+        return match.rota.trim();
+      }
     }
     return (item.rota && item.rota.trim() !== '' && item.rota.toLowerCase() !== 'sem rota' && item.rota !== '-')
       ? item.rota.trim()
       : 'Sem Rota';
-  }, [refugoByCode]);
+  }, [refugoBaseRows]);
 
   // Sincronizar automaticamente as rotas dos itens da lista ativa com o arquivo de refugo atual
   useEffect(() => {
@@ -551,7 +351,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     if (hasChanges) {
       const updatedLista = { ...listaAtiva, itens: novosItens };
-      void persistLista(updatedLista);
+      activeItensRef.current = novosItens;
+      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+      saveLista(updatedLista).catch(err => console.error('Erro ao sincronizar rotas do refugo:', err));
     }
   }, [refugoBaseRows, listaAtiva?.id, getRotaItem]);
 
@@ -559,18 +361,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleAbrirVerificar = () => {
     if (!listaAtiva) return;
     const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
-    const itensPendentes = listToVerify.filter(i => !i.validado);
-    
-    if (itensPendentes.length === 0) {
-      alert("Não há IDs pendentes para verificar no momento.");
-      return;
-    }
-
-    setItensVerificarSnap(itensPendentes);
-
     const mapInicial: Record<string, 'valido' | 'verificado' | 'em_rota'> = {};
-    itensPendentes.forEach(item => {
-      mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
+    listToVerify.forEach(item => {
+      if (modoIndividual || !item.validado) {
+        mapInicial[item.id] = 'valido'; // por padrão, inicia como Válido
+      }
     });
     setVerificarMap(mapInicial);
     setVerificarModo('10');
@@ -616,7 +411,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     playShortBeep();
 
-    const matchedItem = itensVerificarSnap.find(i => {
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const matchedItem = listToVerify.find(i => {
       if (i.codigo === cleanInput) return true;
       const iDigits = cleanDigits(i.codigo);
       return iDigits && cleanInputDigits && iDigits === cleanInputDigits;
@@ -652,63 +448,57 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const handleProcessarVerificarLote = async () => {
-    if (!listaAtiva || !verificarLoteText.trim() || isImporting) return;
+    if (!listaAtiva || !verificarLoteText.trim()) return;
 
-    setIsImporting(true);
-    setImportProgress(0);
-    setImportStatusText('Processando IDs para validação...');
+    const rawIds = verificarLoteText.split(/[\n\t,;]+/).map(i => i.trim()).filter(Boolean);
+    let processados = 0;
 
-    try {
-      const rawIds = new Set(verificarLoteText.split(/[\n\t,;]+/).map(pastedCodeKey).filter(Boolean));
-      let processados = 0;
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
 
-      const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const itensAtualizados = listToVerify.map(item => {
+      if (item.validado) return item;
 
-      const itensAtualizados = listToVerify.map(item => {
-        if (item.validado) return item;
-
-        const matched = rawIds.has(itemCodeKey(item.codigo));
-
-        if (matched) {
-          processados++;
-          return { ...item, validado: true };
-        }
-        return item;
+      const itemDigits = cleanDigits(item.codigo);
+      const matched = rawIds.some(rawId => {
+        let pId = rawId;
+        pId = pId.replace(/d[çc]?⁴/gi, '4');
+        pId = pId.replace(/d[çc]?4/gi, '4');
+        pId = pId.replace(/^[^0-9a-zA-Z]+/, '');
+        const match47 = pId.match(/(47\d+)/);
+        if (match47) pId = match47[1];
+        else pId = pId.replace(/m$/i, '');
+        
+        const cleanPId = pId.toUpperCase();
+        const pIdDigits = cleanDigits(cleanPId);
+        
+        return item.codigo === cleanPId || (itemDigits && pIdDigits && itemDigits === pIdDigits);
       });
 
-      const changedItems = itensAtualizados.filter((item, index) => item !== listToVerify[index]);
-      if (modoIndividual) {
-        setImportStatusText('Confirmando validações no Supabase...');
-        if (!await setItensModoIndividual(itensAtualizados)) return;
-        setImportProgress(100);
-        setImportStatusText(`${processados} validações confirmadas no Supabase`);
-      } else if (changedItems.length) {
-        const confirmed = await saveListaItemsBatch(listaAtiva.id, changedItems, (current, total, percent) => {
-          setImportProgress(percent);
-          setImportStatusText(`${current} de ${total} validações confirmadas no Supabase`);
-        });
-        pinConfirmedLista(confirmed);
-      } else {
-        setImportProgress(100);
-        setImportStatusText('Nenhuma validação nova para gravar');
+      if (matched) {
+        processados++;
+        return { ...item, validado: true };
       }
+      return item;
+    });
 
-      setShowVerificarLoteModal(false);
-      setVerificarLoteText('');
-      setShowVerificarModal(false); // Fecha o modal principal
-      alert(`${processados} pacotes encontrados e validados com sucesso!`);
-    } catch (error) {
-      setStorageError(error instanceof Error
-        ? `${error.message} O lote de validação foi mantido para tentar novamente.`
-        : 'Não foi possível confirmar o lote de validação no Supabase.');
-    } finally {
-      setIsImporting(false);
+    if (modoIndividual) {
+      setItensModoIndividual(itensAtualizados);
+    } else {
+      const updatedLista = { ...listaAtiva, itens: itensAtualizados };
+      await saveLista(updatedLista);
     }
+    
+    setShowVerificarLoteModal(false);
+    setVerificarLoteText('');
+    setShowVerificarModal(false); // Fecha o modal principal
+    
+    alert(`${processados} pacotes encontrados e validados com sucesso!`);
   };
 
   const handleCopiarIdsVerificacao = () => {
     if (!listaAtiva) return;
-    const itensPendentes = itensVerificarSnap;
+    const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const itensPendentes = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
     if (itensPendentes.length === 0) {
       alert('Não há IDs pendentes para copiar.');
       return;
@@ -730,8 +520,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
     const texto = itensParaCopiar.map(i => {
       const grupoNome = listaAtiva.grupos?.find(g => g.id === i.grupoId)?.nome || '';
-      const saidaExibida = i.saida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
-      return `${i.codigo} | Saída: ${saidaExibida} | Motivo: ${i.motivo || 'N/A'}${grupoNome ? ` | Grupo: ${grupoNome}` : ''}`;
+      return `${i.codigo} | Saída: ${listaAtiva.saidaPadrao} | Motivo: ${i.motivo || 'N/A'}${grupoNome ? ` | Grupo: ${grupoNome}` : ''}`;
     }).join('\n');
 
     navigator.clipboard.writeText(texto).then(() => {
@@ -748,38 +537,119 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const handleEntrarModoIndividual = () => {
-    if (!individualDraft.ready) {
-      setStorageError('Aguarde o carregamento da sessão individual no servidor.');
-      return;
-    }
     setModoIndividual(true);
-    setTimeout(() => inputRef.current?.focus(), 100);
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItensModoIndividual(parsed);
+            setTimeout(() => {
+              inputRef.current?.focus();
+            }, 100);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+    setItensModoIndividual([]);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
   };
 
   const handleFecharEUnificarModoIndividual = async (itensCustom?: ColetaItem[] | React.MouseEvent) => {
-    if (!listaAtiva || !individualSession || individualDraft.saving || isSavingUnify) return;
-    setIsSavingUnify(true);
-    try {
-      if (Array.isArray(itensCustom) && !await setItensModoIndividual(itensCustom)) return;
-      await promoteIndividualSession(individualSession, listaAtiva.id);
-      setStorageError(null);
+    if (!listaAtiva) {
       setModoIndividual(false);
-      setShowVerificarModal(false);
-      alert('Sessão individual unificada na lista principal e confirmada pelo servidor.');
-    } catch (error) {
-      setStorageError(error instanceof Error ? error.message : 'Não foi possível unificar a sessão. Tente novamente.');
-    } finally {
-      setIsSavingUnify(false);
+      return;
     }
+
+    const itensParaUsar = Array.isArray(itensCustom) ? itensCustom : itensModoIndividual;
+
+    if (itensParaUsar.length === 0) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
+      setModoIndividual(false);
+      return;
+    }
+
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : listaAtiva.itens;
+
+    // Mapa de itens existentes por código e dígitos limpos
+    const mapaItens = new Map<string, number>();
+    currentItens.forEach((item, index) => {
+      mapaItens.set(item.codigo, index);
+      const digits = cleanDigits(item.codigo);
+      if (digits) mapaItens.set(digits, index);
+    });
+
+    let novosItens = [...currentItens];
+    let countNovos = 0;
+    let countAtualizados = 0;
+
+    itensParaUsar.forEach(itemInd => {
+      const cleanCod = itemInd.codigo;
+      const cleanCodDigits = cleanDigits(cleanCod);
+
+      const idxExistente = mapaItens.has(cleanCod)
+        ? mapaItens.get(cleanCod)!
+        : (cleanCodDigits && mapaItens.has(cleanCodDigits) ? mapaItens.get(cleanCodDigits)! : -1);
+
+      if (idxExistente !== -1 && idxExistente < novosItens.length) {
+        novosItens[idxExistente] = {
+          ...novosItens[idxExistente],
+          validado: itemInd.validado !== undefined ? itemInd.validado : true,
+          responsavel: operanteNome,
+          scannedAt: itemInd.scannedAt || new Date().toLocaleString('pt-BR')
+        };
+        countAtualizados++;
+      } else {
+        const novoItem: ColetaItem = {
+          ...itemInd,
+          validado: itemInd.validado !== undefined ? itemInd.validado : true,
+          responsavel: operanteNome
+        };
+        novosItens = [novoItem, ...novosItens];
+        mapaItens.set(cleanCod, 0);
+        if (cleanCodDigits) mapaItens.set(cleanCodDigits, 0);
+        countNovos++;
+      }
+    });
+
+    activeItensRef.current = novosItens;
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+    await saveLista(updatedLista, true);
+
+    // Limpar sessão individual salva após unificar
+    const key = getModoIndKey(listaAtiva.id, operanteNome);
+    try { localStorage.removeItem(key); } catch (_) {}
+
+    alert(`${itensParaUsar.length} IDs validados foram unificados com a lista principal com sucesso! (${countAtualizados} validados, ${countNovos} novos)`);
+    setModoIndividual(false);
+    setItensModoIndividual([]);
   };
 
-  const handleCancelarModoIndividual = async () => {
-    if (itensModoIndividual.length > 0 && !confirm('Deseja fechar o Modo Individual sem unificar e descartar os pacotes desta sessão?')) return;
-    if (await individualDraft.discard()) setModoIndividual(false);
+  const handleCancelarModoIndividual = () => {
+    if (itensModoIndividual.length > 0) {
+      if (!confirm('Deseja fechar o Modo Individual sem unificar e descartar os pacotes desta sessão?')) {
+        return;
+      }
+    }
+    if (listaAtiva) {
+      const key = getModoIndKey(listaAtiva.id, operanteNome);
+      try { localStorage.removeItem(key); } catch (_) {}
+    }
+    setModoIndividual(false);
+    setItensModoIndividual([]);
   };
 
-  const handleRemoverItemIndividual = async (itemId: string) => {
-    await setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
+  const handleRemoverItemIndividual = (itemId: string) => {
+    setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
   };
 
   const handleConcluirVerificacao = async () => {
@@ -798,10 +668,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
 
     if (modoIndividual) {
+      setShowVerificarModal(false);
       await handleFecharEUnificarModoIndividual(itensAtualizados);
     } else {
+      activeItensRef.current = itensAtualizados;
       const updatedLista = { ...listaAtiva, itens: itensAtualizados };
-      if (!await persistLista(updatedLista)) return;
+      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+      await saveLista(updatedLista);
       setShowVerificarModal(false);
     }
   };
@@ -811,14 +684,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (!listaAtiva) return;
 
     if (modoIndividual) {
-      await setItensModoIndividual(prev => prev.map(i => {
+      setItensModoIndividual(prev => prev.map(i => {
         if (i.id === itemId) return { ...i, validado: !i.validado };
         return i;
       }));
       return;
     }
 
-    const currentItens = activeItensRef.current;
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : listaAtiva.itens;
 
     const novosItens = currentItens.map(i => {
       if (i.id === itemId) {
@@ -827,8 +702,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       return i;
     });
 
+    activeItensRef.current = novosItens;
     const updatedLista = { ...listaAtiva, itens: novosItens };
-    if (!await persistLista(updatedLista)) return;
+    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+    await saveLista(updatedLista);
   };
 
 
@@ -875,19 +752,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         itens: []
       };
 
-      if (!await persistLista(novaLista, true)) {
-        setIsLoadingLista(false);
-        return;
-      }
-      setLoadingMessage('Confirmando lista no Supabase...');
-      const confirmed = await waitForListaAvailable(novaLista.id);
-      pinConfirmedLista(confirmed);
+      await saveLista(novaLista);
       setOpeningListaId(novaLista.id);
       setShowModalNovaLista(false);
       navigate(`/listas/${novaLista.id}`);
     } catch (err) {
       console.error('Erro ao criar lista:', err);
-      setStorageError(err instanceof Error ? err.message : 'Não foi possível confirmar a criação da lista.');
       setIsLoadingLista(false);
     }
   };
@@ -895,7 +765,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Bipar ID na tela de coleta
   const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bipInput.trim() || !listaAtiva || leitorTravado || individualDraft.saving || isSavingUnify) return;
+    if (!bipInput.trim() || !listaAtiva) return;
 
     let processedInput = bipInput.trim();
     processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
@@ -912,17 +782,28 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
 
     const cleanInput = processedInput.toUpperCase();
-    if (!cleanInput) return;
     const cleanInputDigits = cleanDigits(cleanInput);
 
     // Beep curto de 50ms
     playShortBeep();
 
     // Tentar localizar se existe na base de refugo para puxar a rota exata
-    const rotaItemFinal = getRotaItem({ codigo: cleanInput });
+    const cleanInputWithoutM = cleanInput.replace(/m$/i, '');
+    const refugoMatch = refugoBaseRows.find(r => {
+      if (!r.id) return false;
+      const rId = r.id.trim().toUpperCase();
+      if (rId === cleanInput) return true;
+      if (rId.replace(/m$/i, '') === cleanInputWithoutM) return true;
+      const rDigits = cleanDigits(rId);
+      return Boolean(rDigits && cleanInputDigits && rDigits === cleanInputDigits);
+    });
+
+    const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+      ? refugoMatch.rota.trim()
+      : 'Sem Rota';
 
     // Usar obrigatoriamente a saída do ciclo configurada
-    const saidaItemFinal = listaAtiva.saidaPadrao || selectedSaida || 'Ciclo 2 - Saída PM';
+    const saidaItemFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
 
     // Se estiver no Modo Individual, opera na lista zerada da sessão individual
     if (modoIndividual) {
@@ -952,10 +833,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           scannedAt: new Date().toLocaleString('pt-BR'),
           responsavel: operanteNome,
           grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-          validado: false
+          validado: true
         };
 
-        if (!await setItensModoIndividual(prev => [novoItemIndividual, ...prev])) return;
+        setItensModoIndividual(prev => [novoItemIndividual, ...prev]);
         setLastScanResult({
           status: 'success',
           code: cleanInput,
@@ -969,7 +850,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
 
     // Usar activeItensRef.current para prevenir race-conditions em bips rápidos
-    const currentItens = activeItensRef.current;
+    const currentItens = activeItensRef.current && activeItensRef.current.length > 0
+      ? activeItensRef.current
+      : listaAtiva.itens;
 
     // Verificar se o item já existe nesta lista
     const idx = currentItens.findIndex(
@@ -977,27 +860,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     );
 
     let novosItens = [...currentItens];
-    let scanMessage = '';
 
     if (idx !== -1) {
       // Atualizar item existente
-      const itemAtualizado: ColetaItem = {
+      novosItens[idx] = {
         ...novosItens[idx],
         saida: saidaItemFinal,
-        motivo: selectedMotivo || novosItens[idx].motivo,
-        rota: rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : novosItens[idx].rota,
+        motivo: selectedMotivo,
+        rota: rotaItemFinal,
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
-        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId,
-        syncStatus: 'pendente'
+        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId
       };
-      // O ultimo pacote bipado sempre aparece primeiro, mesmo se ja estava na lista.
-      novosItens = [itemAtualizado, ...novosItens.filter((_, itemIndex) => itemIndex !== idx)];
-      scanMessage = `ID já existente atualizado! (Rota: ${rotaItemFinal})`;
+      setLastScanResult({
+        status: 'success',
+        code: cleanInput,
+        message: `ID já existente atualizado! (Rota: ${rotaItemFinal})`
+      });
     } else {
       // Adicionar novo ID na lista
       const novoItem: ColetaItem = {
-        id: `item_${encodeURIComponent(itemCodeKey(cleanInput))}`,
+        id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
         codigo: cleanInput,
         rota: rotaItemFinal,
         saida: saidaItemFinal, // Mesma saída do ciclo da lista
@@ -1005,24 +888,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
         grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-        validado: false,
-        syncStatus: 'pendente'
+        validado: false
       };
       novosItens = [novoItem, ...novosItens];
-      scanMessage = `Novo ID coletado na lista! (Rota: ${rotaItemFinal})`;
+      setLastScanResult({
+        status: 'success',
+        code: cleanInput,
+        message: `Novo ID coletado na lista! (Rota: ${rotaItemFinal})`
+      });
     }
 
-    const updatedLista = { ...listaAtiva, itens: novosItens };
+    // Salvar no cache em memória imediatamente
     activeItensRef.current = novosItens;
-    pendingBipsRef.current.set(novosItens[0].id, novosItens[0]);
-    pendingBipsUntilRef.current = Date.now() + 5000;
-    setListas(previous => previous.map(lista => lista.id === updatedLista.id ? { ...lista, itens: novosItens } : lista));
-    void persistLista(updatedLista).then(saved => {
-      if (!saved) setLastScanResult({ status: 'error', code: cleanInput, message: 'O servidor não confirmou o bip. Tente novamente.' });
-    });
-    setLastScanResult({ status: 'success', code: cleanInput, message: scanMessage });
+
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+    saveLista(updatedLista).catch(err => console.error('Erro ao salvar no banco:', err));
+
     setBipInput('');
-    setItemsPage(0);
     inputRef.current?.focus();
   };
 
@@ -1031,12 +914,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (!itemParaMudarMotivo || !listaAtiva) return;
 
     if (modoIndividual) {
-      if (!await setItensModoIndividual(prev => prev.map(item => {
+      setItensModoIndividual(prev => prev.map(item => {
         if (item.id === itemParaMudarMotivo.id) {
           return { ...item, motivo: novoMotivoEscolha };
         }
         return item;
-      }))) return;
+      }));
     } else {
       const novosItens = listaAtiva.itens.map(item => {
         if (item.id === itemParaMudarMotivo.id) {
@@ -1046,7 +929,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       });
 
       const updatedLista = { ...listaAtiva, itens: novosItens };
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
 
     setItemParaMudarMotivo(null);
@@ -1069,7 +952,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Selecionar/Desmarcar todos os visíveis
   const handleToggleSelectAll = (visibleItems: ColetaItem[]) => {
     const visibleIds = visibleItems.map(i => i.id);
-    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIdSet.has(id));
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.includes(id));
 
     if (allVisibleSelected) {
       setSelectedItemIds(prev => prev.filter(id => !visibleIds.includes(id)));
@@ -1107,22 +990,22 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
 
     if (modoIndividual) {
-      if (!await setItensModoIndividual(prev => prev.map(item => {
-        if (selectedItemIdSet.has(item.id)) {
+      setItensModoIndividual(prev => prev.map(item => {
+        if (selectedItemIds.includes(item.id)) {
           return { ...item, motivo: novoMotivoEscolha };
         }
         return item;
-      }))) return;
+      }));
     } else {
       const novosItens = listaAtiva.itens.map(item => {
-        if (selectedItemIdSet.has(item.id)) {
+        if (selectedItemIds.includes(item.id)) {
           return { ...item, motivo: novoMotivoEscolha };
         }
         return item;
       });
 
       const updatedLista = { ...listaAtiva, itens: novosItens };
-      if (!await persistLista(updatedLista)) return;
+      await saveLista(updatedLista);
     }
 
     setSelectedItemIds([]);
@@ -1133,24 +1016,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (selectedItemIds.length === 0 || !listaAtiva) return;
     if (window.confirm(`Confirma a exclusão de ${selectedItemIds.length} item(ns) selecionado(s)?`)) {
       if (modoIndividual) {
-        if (!await setItensModoIndividual(prev => prev.filter(i => !selectedItemIdSet.has(i.id)))) return;
+        setItensModoIndividual(prev => prev.filter(i => !selectedItemIds.includes(i.id)));
       } else {
-        const selectedIds = [...selectedItemIds];
-        const novosItens = listaAtiva.itens.filter(i => !selectedItemIdSet.has(i.id));
-        selectedIds.forEach(id => pendingRemovalsRef.current.add(id));
-        pendingRemovalsUntilRef.current = Date.now() + 2000;
-        setListas(previous => previous.map(lista => lista.id === listaAtiva.id ? { ...lista, itens: novosItens } : lista));
+        const novosItens = listaAtiva.itens.filter(i => !selectedItemIds.includes(i.id));
         activeItensRef.current = novosItens;
-        try {
-          await deleteListaItems(listaAtiva.id, selectedIds);
-          selectedIds.forEach(id => pendingRemovalsRef.current.delete(id));
-          if (!pendingRemovalsRef.current.size) pendingRemovalsUntilRef.current = 0;
-        } catch (error) {
-          selectedIds.forEach(id => pendingRemovalsRef.current.delete(id));
-          if (!pendingRemovalsRef.current.size) pendingRemovalsUntilRef.current = 0;
-          setStorageError(error instanceof Error ? error.message : 'Não foi possível excluir todos os IDs.');
-          return;
-        }
+        const updatedLista = { ...listaAtiva, itens: novosItens };
+        setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+        await saveLista(updatedLista);
       }
       setSelectedItemIds([]);
     }
@@ -1162,21 +1034,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const numGrupos = listaAtiva.grupos?.length || 0;
     const novoGrupo = {
       id: 'grp-' + Date.now(),
-      nome: `Grupo ${numGrupos + 1}`,
-      lider: operanteNome
+      nome: `Grupo ${numGrupos + 1}`
     };
     const updatedLista = {
       ...listaAtiva,
       grupos: [...(listaAtiva.grupos || []), novoGrupo],
       grupoAtivoId: novoGrupo.id
     };
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
   const handleSetGrupoAtivo = async (grupoId: string) => {
     if (!listaAtiva) return;
     const updatedLista = { ...listaAtiva, grupoAtivoId: grupoId };
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
   const handleExcluirGrupo = async (grupoId: string) => {
@@ -1191,100 +1062,168 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       grupoAtivoId: novoGrupoAtivoId,
       itens: novosItens
     };
-    if (!await persistLista(updatedLista)) return;
+    await saveLista(updatedLista);
   };
 
   const handleAdicionarLote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loteText.trim() || !listaAtiva || isImporting) return;
+    if (!loteText.trim() || !listaAtiva) return;
 
-    const cleanCodigos = validateAndCleanIds(loteText.split(/[\n\t,;]+/));
-    if (cleanCodigos.length === 0) return;
+    const codigos = loteText.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    if (codigos.length === 0) return;
+
     setIsImporting(true);
     setImportProgress(0);
-    setImportStatusText('Processando IDs...');
+    setImportStatusText('Iniciando processamento do lote...');
 
-    try {
-      const saidaCicloFinal = listaAtiva.saidaPadrao || selectedSaida || 'Ciclo 2 - Saída PM';
-      const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
-      const mainByCode = new Map<string, ColetaItem>(activeItensRef.current.map(item => [itemCodeKey(item.codigo), item]));
-      const existingIndividualCodes = new Set(itensModoIndividual.map(item => itemCodeKey(item.codigo)));
-      const changedItems = new Map<string, ColetaItem>();
-      const scannedAt = new Date().toLocaleString('pt-BR');
+    const saidaCicloFinal = selectedSaida || listaAtiva.saidaPadrao || 'Ciclo 2 - Saída PM';
+    const motivoFinal = loteMotivo || selectedMotivo || 'Desconteinerizado';
 
-      for (let offset = 0; offset < cleanCodigos.length; offset += 250) {
-        const localChunk = cleanCodigos.slice(offset, offset + 250);
-        for (const codigo of localChunk) {
-          const key = itemCodeKey(codigo);
-          if (modoIndividual && existingIndividualCodes.has(key)) continue;
-          existingIndividualCodes.add(key);
-          const existing = mainByCode.get(key);
-          changedItems.set(key, {
-            ...(modoIndividual ? {} : existing),
-            id: modoIndividual ? 'ind_' + encodeURIComponent(key) : (existing?.id || 'item_' + encodeURIComponent(key)),
-            codigo: existing?.codigo || codigo,
-            rota: getRotaItem({ codigo, rota: existing?.rota }),
+    if (modoIndividual) {
+      const codigosSet = new Set(itensModoIndividual.map(i => i.codigo));
+      const novosIndividuais: ColetaItem[] = [];
+
+      codigos.forEach(cod => {
+        let processedCod = cod.replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4').replace(/^[^0-9a-zA-Z]+/, '');
+        const match47 = processedCod.match(/(47\d+)/);
+        if (match47) processedCod = match47[1];
+        else processedCod = processedCod.replace(/m$/i, '');
+
+        const cleanCod = processedCod.toUpperCase();
+        if (!cleanCod || codigosSet.has(cleanCod)) return;
+        codigosSet.add(cleanCod);
+
+        const cleanCodDigits = cleanDigits(cleanCod);
+        const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+        const refugoMatch = refugoBaseRows.find(r => {
+          if (!r.id) return false;
+          const rId = r.id.trim().toUpperCase();
+          if (rId === cleanCod) return true;
+          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+          const rDigits = cleanDigits(rId);
+          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+        });
+        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+          ? refugoMatch.rota.trim()
+          : 'Sem Rota';
+        const itemPrincipal = listaAtiva.itens.find(i => i.codigo === cleanCod || (cleanDigits(i.codigo) === cleanCodDigits && cleanCodDigits !== ''));
+        const rotaParaUsar = rotaItemFinal !== 'Sem Rota' ? rotaItemFinal : (itemPrincipal?.rota || 'Sem Rota');
+
+        novosIndividuais.push({
+          id: 'ind-lote-' + Date.now() + '-' + Math.floor(Math.random() * 100000),
+          codigo: cleanCod,
+          rota: rotaParaUsar,
+          saida: saidaCicloFinal,
+          motivo: motivoFinal,
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          validado: true
+        });
+      });
+
+      setItensModoIndividual(prev => [...novosIndividuais, ...prev]);
+      setIsImporting(false);
+      setShowModalLote(false);
+      setLoteText('');
+      alert(`${novosIndividuais.length} IDs adicionados e validados na sessão individual!`);
+      return;
+    }
+
+    const novosItensMap = new Map<string, ColetaItem>();
+    listaAtiva.itens.forEach(i => novosItensMap.set(i.codigo, i));
+
+    const CHUNK_SIZE = 500;
+    const total = codigos.length;
+
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+      const chunk = codigos.slice(i, i + CHUNK_SIZE);
+
+      chunk.forEach(cod => {
+        let processedCod = cod;
+        processedCod = processedCod.replace(/d[çc]?⁴/gi, '4');
+        processedCod = processedCod.replace(/d[çc]?4/gi, '4');
+        processedCod = processedCod.replace(/^[^0-9a-zA-Z]+/, '');
+        
+        const match47 = processedCod.match(/(47\d+)/);
+        if (match47) {
+          processedCod = match47[1];
+        } else {
+          processedCod = processedCod.replace(/m$/i, '');
+        }
+
+        const cleanCod = processedCod.toUpperCase();
+        const cleanCodDigits = cleanDigits(cleanCod);
+        const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
+
+        const refugoMatch = refugoBaseRows.find(r => {
+          if (!r.id) return false;
+          const rId = r.id.trim().toUpperCase();
+          if (rId === cleanCod) return true;
+          if (rId.replace(/m$/i, '') === cleanCodWithoutM) return true;
+          const rDigits = cleanDigits(rId);
+          return Boolean(rDigits && cleanCodDigits && rDigits === cleanCodDigits);
+        });
+        const rotaItemFinal = (refugoMatch && refugoMatch.rota && refugoMatch.rota.trim() !== '' && refugoMatch.rota.toLowerCase() !== 'sem rota' && refugoMatch.rota !== '-')
+          ? refugoMatch.rota.trim()
+          : 'Sem Rota';
+
+        if (novosItensMap.has(cleanCod)) {
+          const item = novosItensMap.get(cleanCod)!;
+          novosItensMap.set(cleanCod, {
+            ...item,
             saida: saidaCicloFinal,
             motivo: motivoFinal,
-            scannedAt,
+            rota: rotaItemFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
             responsavel: operanteNome,
-            grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : existing?.grupoId,
-            validado: modoIndividual ? false : (existing?.validado ?? false),
-            ...(modoIndividual ? {} : { syncStatus: 'pendente' as const })
+            grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : item.grupoId
+          });
+        } else {
+          novosItensMap.set(cleanCod, {
+            id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000000),
+            codigo: cleanCod,
+            rota: rotaItemFinal,
+            saida: saidaCicloFinal,
+            motivo: motivoFinal,
+            scannedAt: new Date().toLocaleString('pt-BR'),
+            responsavel: operanteNome,
+            grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
           });
         }
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
+      });
 
-      if (modoIndividual) {
-        setImportStatusText('Confirmando IDs no Supabase...');
-        if (!await setItensModoIndividual(previous => {
-          const existingKeys = new Set(previous.map(item => itemCodeKey(item.codigo)));
-          return [...Array.from(changedItems.values()).filter(item => !existingKeys.has(itemCodeKey(item.codigo))), ...previous];
-        })) return;
-        setImportProgress(100);
-        setImportStatusText(`${changedItems.size} IDs confirmados no Supabase`);
-      } else {
-        setImportStatusText(`Enviando 0 de ${changedItems.size} IDs ao Supabase...`);
-        const confirmed = await saveListaItemsBatch(
-          listaAtiva.id,
-          Array.from(changedItems.values()),
-          (current, total, percent) => {
-            setImportProgress(percent);
-            setImportStatusText(`${current} de ${total} IDs confirmados no Supabase`);
-          },
-        );
-        pinConfirmedLista(confirmed);
-      }
-      setItemsPage(0);
-      setLoteText('');
-      setShowModalLote(false);
-    } catch (error) {
-      console.error('Erro ao importar IDs:', error);
-      setStorageError(error instanceof Error
-        ? `${error.message} O texto do lote foi mantido para tentar novamente.`
-        : 'Não foi possível concluir a importação. O texto do lote foi mantido para tentar novamente.');
-    } finally {
-      setIsImporting(false);
+      const percent = Math.min(100, Math.round(((i + chunk.length) / total) * 100));
+      setImportProgress(percent);
+      setImportStatusText(`Carregando IDs na lista... ${percent}% (${i + chunk.length} de ${total})`);
+      
+      // Permitir renderização fluida da UI sem travamentos
+      await new Promise(r => setTimeout(r, 10));
     }
+
+    setImportStatusText('Salvando lista completa sem perdas na nuvem...');
+    const novosItens = Array.from(novosItensMap.values());
+    const updatedLista = { ...listaAtiva, itens: novosItens };
+    await saveLista(updatedLista);
+
+    setIsImporting(false);
+    setLoteText('');
+    setShowModalLote(false);
   };
 
   const handleExcluirLista = async (listaId: string) => {
-    try {
-      if (!await deleteLista(listaId)) throw new Error('O servidor não confirmou a exclusão.');
-      if (activeListaId === listaId) navigate('/listas');
-      setListaParaExcluir(null);
-      setStorageError(null);
-    } catch (error) {
-      setStorageError(error instanceof Error ? error.message : 'Não foi possível excluir a lista. Tente novamente.');
+    await deleteListaFirestore(listaId);
+    if (activeListaId === listaId) {
+      navigate('/listas');
     }
+    setListaParaExcluir(null);
   };
 
   const handleReabrirLista = async (listaId: string) => {
     const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
       const updatedLista: ColetaLista = { ...lista, status: 'em_andamento' };
-      if (!await persistLista(updatedLista)) return;
+      setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
+      await saveLista(updatedLista);
     }
   };
 
@@ -1292,7 +1231,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
       const updatedLista: ColetaLista = { ...lista, status: 'finalizada' };
-      if (!await persistLista(updatedLista)) return;
+      setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
+      await saveLista(updatedLista);
 
       if (lista.itens.length > 0) {
         const cleanIdOnly = (code: string) => {
@@ -1320,11 +1260,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleRemoverItem = async (itemId: string) => {
     if (!listaAtiva) return;
     if (modoIndividual) {
-      await setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
+      setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
     } else {
       const novosItens = listaAtiva.itens.filter(i => i.id !== itemId);
+      activeItensRef.current = novosItens;
       const updatedLista = { ...listaAtiva, itens: novosItens };
-      if (!await persistLista(updatedLista)) return;
+      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
+      await saveLista(updatedLista);
     }
   };
 
@@ -1335,8 +1277,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const exportarApenasIdsCSV = (lista: ColetaLista, itensCustom?: ColetaItem[], sufixoNome?: string) => {
-    const itens = [...(itensCustom || lista.itens)].sort((left, right) =>
-      scanTimeValue(right.scannedAt) - scanTimeValue(left.scannedAt));
+    const itens = itensCustom || lista.itens;
     if (itens.length === 0) {
       alert('Não há itens para exportar.');
       return;
@@ -1360,76 +1301,19 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     exportarApenasIdsCSV(lista);
   };
 
-  const listToVerify = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || EMPTY_ITEMS);
-  const formatScanTime = (value: string) => {
-    const parsed = new Date(scanTimeValue(value));
-    return scanTimeValue(value) ? parsed.toLocaleString('pt-BR') : value;
-  };
-  const orderedListItems = useMemo(() => [...listToVerify].sort((left, right) => {
-    return scanTimeValue(right.scannedAt) - scanTimeValue(left.scannedAt);
-  }), [listToVerify]);
-  const totalColetados = orderedListItems.length;
-  const bipsPorOperador = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of orderedListItems) {
-      const operator = item.responsavel || listaAtiva?.responsavel || 'Operador';
-      counts.set(operator, (counts.get(operator) || 0) + 1);
-    }
-    if (!counts.has(operanteNome)) counts.set(operanteNome, 0);
-    if (listaAtiva?.responsavel && !counts.has(listaAtiva.responsavel)) counts.set(listaAtiva.responsavel, 0);
-    return Array.from(counts, ([nome, total]) => ({ nome, total, isVoce: nome === operanteNome }))
-      .sort((a, b) => b.total - a.total);
-  }, [orderedListItems, listaAtiva?.responsavel, operanteNome]);
-
-  const usuariosSistemaOnline = registeredUsers.length > 0 ? registeredUsers : (currentUser ? [currentUser] : []);
-  const selectedItemIdSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
-  const filteredItems = useMemo(() => {
-    const term = deferredSearchTerm.trim().toLowerCase();
-    const groupNames = new Map<string, string>((listaAtiva?.grupos || []).map(group => [group.id, group.nome.toLowerCase()]));
-    return orderedListItems.filter(item => {
-      if (modoIndividual && modoIndFiltroStatus === 'validados' && !item.validado) return false;
-      if (modoIndividual && modoIndFiltroStatus === 'pendentes' && item.validado) return false;
-      if (!term) return true;
-      return item.codigo.toLowerCase().includes(term) || getRotaItem(item).toLowerCase().includes(term) ||
-        (item.motivo || '').toLowerCase().includes(term) || (item.saida || '').toLowerCase().includes(term) ||
-        (item.responsavel || '').toLowerCase().includes(term) || (groupNames.get(item.grupoId || '') || '').includes(term);
-    });
-  }, [orderedListItems, deferredSearchTerm, modoIndividual, modoIndFiltroStatus, listaAtiva?.grupos, getRotaItem]);
-  const totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
-  const currentItemsPage = Math.min(itemsPage, totalItemPages - 1);
-  const pageOffset = currentItemsPage * ITEMS_PER_PAGE;
-  const visibleItems = filteredItems.slice(pageOffset, pageOffset + ITEMS_PER_PAGE);
-
-  useEffect(() => {
-    setItemsPage(0);
-  }, [activeListaId, deferredSearchTerm, modoIndividual, modoIndFiltroStatus]);
-
-  const storageErrorBanner = storageError ? (
-    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-center justify-between gap-3">
-      <span>{storageError}</span>
-    </div>
-  ) : null;
-
   // -------------------------------------------------------------
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
-  if (!listasReady || !refugoReady || !usersReady) {
-    return <PageSkeleton variant={activeListaId ? 'detail' : 'dashboard'} />;
-  }
-
   if (activeListaId && !listaAtiva) {
-    const checkingLista = missingListaId !== activeListaId;
-    if (checkingLista) return <PageSkeleton variant="detail" />;
     return (
       <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4">
         <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
-          <AlertCircle className="w-8 h-8 text-[#3483FA]" />
+          <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
         </div>
         <div className="text-center">
-          <h3 className="text-base font-bold text-[#333333]">{listaLookupError ? 'Não foi possível carregar a lista' : 'Lista não encontrada'}</h3>
-          <p className="text-xs text-gray-500 mt-1">{listaLookupError || 'A lista foi excluída ou sua conta não tem acesso a ela.'}</p>
+          <h3 className="text-base font-bold text-[#333333]">Carregando lista de coleta...</h3>
+          <p className="text-xs text-gray-500 mt-1">Sincronizando dados em tempo real</p>
         </div>
-        <button onClick={() => navigate('/listas')} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold cursor-pointer">Voltar para listas</button>
       </div>
     );
   }
@@ -1439,55 +1323,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     const listasAtivas = listas.filter(l => l.status === 'em_andamento').length;
     const totalItensColetados = listas.reduce((acc, l) => acc + l.itens.length, 0);
 
-    const handleSetTodayFilter = () => {
-      const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
-      setDashboardDateFilter(prev => prev === todayStr ? '' : todayStr);
-    };
-
-    const handleSetYesterdayFilter = () => {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
-      setDashboardDateFilter(prev => prev === yesterdayStr ? '' : yesterdayStr);
-    };
-
-    const matchesDateFilter = (listaDataStr: string, filterValueStr: string) => {
-      if (!filterValueStr) return true;
-      let filterFormatted = filterValueStr;
-      if (filterValueStr.includes('-')) {
-        const [y, m, d] = filterValueStr.split('-');
-        if (y && m && d) {
-          filterFormatted = `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}`;
-        }
-      }
-      let listaFormatted = listaDataStr;
-      if (listaDataStr && listaDataStr.includes('-')) {
-        const [y, m, d] = listaDataStr.split('-');
-        if (y && m && d) {
-          listaFormatted = `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}`;
-        }
-      }
-      return (
-        listaDataStr === filterValueStr ||
-        listaFormatted === filterFormatted ||
-        listaDataStr?.includes(filterValueStr) ||
-        listaDataStr?.includes(filterFormatted)
-      );
-    };
-
     const filteredDashboardListas = listas.filter(l => {
-      // 1. Filtro de Status
-      if (dashboardStatusFilter !== 'todas' && l.status !== dashboardStatusFilter) {
-        return false;
-      }
-
-      // 2. Filtro de Data
-      if (dashboardDateFilter && !matchesDateFilter(l.data, dashboardDateFilter)) {
-        return false;
-      }
-
-      // 3. Filtro de Texto (Nome, Rota, Criador, Ciclo, Motivo, Data ou IDs)
       if (!dashboardSearchTerm.trim()) return true;
       const term = dashboardSearchTerm.toLowerCase();
       return (
@@ -1496,18 +1332,32 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         l.responsavel.toLowerCase().includes(term) ||
         (l.saidaPadrao && l.saidaPadrao.toLowerCase().includes(term)) ||
         (l.motivoPadrao && l.motivoPadrao.toLowerCase().includes(term)) ||
-        (l.data && l.data.toLowerCase().includes(term)) ||
         l.itens.some(i => 
           i.codigo.toLowerCase().includes(term) || 
           (i.motivo && i.motivo.toLowerCase().includes(term)) || 
           (i.saida && i.saida.toLowerCase().includes(term))
         )
       );
-    }).sort(compareListasNewestFirst);
+    }).sort((a, b) => {
+      const getPriority = (s: string) => {
+        const u = (s || '').toUpperCase();
+        if (u.includes('AM')) return 1;
+        if (u.includes('SD')) return 2;
+        if (u.includes('PM')) return 3;
+        return 4;
+      };
+      const pA = getPriority(a.saidaPadrao || a.nome);
+      const pB = getPriority(b.saidaPadrao || b.nome);
+      if (pA !== pB) return pA - pB;
+      return b.id.localeCompare(a.id);
+    });
 
     return (
-      <div className="listas-coleta w-full space-y-6 pb-12">
-        {storageErrorBanner}
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full space-y-6 pb-12"
+      >
         {/* Header Principal */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -1529,156 +1379,28 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </button>
         </div>
 
-        {/* TABELA DE LISTAS COM FILTROS DE TEXTO, DATA E STATUS */}
+
+
+        {/* TABELA DE LISTAS (EXIBIÇÃO EM LISTA E NÃO EM BLOCOS) */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-gray-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <Layers className="w-5 h-5 text-[#3483FA]" />
-              <h3 className="text-base font-bold text-[#333333]">Listas</h3>
-              <span className="bg-blue-50 text-[#3483FA] border border-blue-200 font-mono text-xs font-black px-2.5 py-0.5 rounded-full">
-                {filteredDashboardListas.length} / {listas.length}
+              <h3 className="text-base font-bold text-[#333333]">Lista</h3>
+              <span className="bg-gray-100 text-gray-700 font-mono text-xs font-bold px-2.5 py-0.5 rounded-full">
+                {listas.length}
               </span>
             </div>
 
-            {/* CONTROLES DE FILTRO */}
-            <div className="flex flex-wrap items-center gap-2.5">
-              {/* Campo de Busca por Texto */}
-              <div className="relative flex-1 sm:w-56 min-w-[200px]">
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
-                <input
-                  type="text"
-                  value={dashboardSearchTerm}
-                  onChange={(e) => setDashboardSearchTerm(e.target.value)}
-                  placeholder="Buscar nome, ciclo ou criador..."
-                  className="w-full pl-8 pr-8 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:border-[#3483FA]"
-                />
-                {dashboardSearchTerm && (
-                  <button
-                    onClick={() => setDashboardSearchTerm('')}
-                    className="absolute right-2 top-2 text-gray-400 hover:text-gray-600 cursor-pointer"
-                    title="Limpar busca"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-
-              {/* Filtro Selecionador de Data */}
-              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
-                <Calendar className="w-3.5 h-3.5 text-gray-500" />
-                <input
-                  type="date"
-                  value={dashboardDateFilter}
-                  onChange={(e) => setDashboardDateFilter(e.target.value)}
-                  className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"
-                  title="Filtrar por data específica"
-                />
-                {dashboardDateFilter && (
-                  <button
-                    onClick={() => setDashboardDateFilter('')}
-                    className="p-0.5 hover:bg-gray-200 rounded text-gray-500 cursor-pointer ml-1"
-                    title="Limpar filtro de data"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-
-              {/* Botões Rápidos (Hoje / Ontem / Todas as Antigas) */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={handleSetTodayFilter}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
-                    dashboardDateFilter === new Date().toISOString().split('T')[0]
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-2xs'
-                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
-                  }`}
-                >
-                  Hoje
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSetYesterdayFilter}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
-                    dashboardDateFilter === (() => {
-                      const d = new Date();
-                      d.setDate(d.getDate() - 1);
-                      return d.toISOString().split('T')[0];
-                    })()
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-2xs'
-                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
-                  }`}
-                >
-                  Ontem
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDashboardDateFilter('')}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
-                    !dashboardDateFilter
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-2xs'
-                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
-                  }`}
-                  title="Exibir listas antigas / todas as datas"
-                >
-                  Todas / Antigas
-                </button>
-              </div>
-
-              {/* Chips de Status (Todas / Ativas / Finalizadas) */}
-              <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg border border-gray-200">
-                <button
-                  type="button"
-                  onClick={() => setDashboardStatusFilter('todas')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-extrabold transition-all cursor-pointer ${
-                    dashboardStatusFilter === 'todas'
-                      ? 'bg-white text-gray-800 shadow-2xs'
-                      : 'text-gray-500 hover:text-gray-800'
-                  }`}
-                >
-                  Todas
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDashboardStatusFilter('em_andamento')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-extrabold transition-all cursor-pointer ${
-                    dashboardStatusFilter === 'em_andamento'
-                      ? 'bg-amber-500 text-white shadow-2xs'
-                      : 'text-gray-500 hover:text-gray-800'
-                  }`}
-                >
-                  Ativas
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDashboardStatusFilter('finalizada')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-extrabold transition-all cursor-pointer ${
-                    dashboardStatusFilter === 'finalizada'
-                      ? 'bg-emerald-600 text-white shadow-2xs'
-                      : 'text-gray-500 hover:text-gray-800'
-                  }`}
-                >
-                  Finalizadas
-                </button>
-              </div>
-
-              {/* Botão de Limpar Filtros Ativos */}
-              {(dashboardSearchTerm || dashboardDateFilter || dashboardStatusFilter !== 'todas') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDashboardSearchTerm('');
-                    setDashboardDateFilter('');
-                    setDashboardStatusFilter('todas');
-                  }}
-                  className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
-                  title="Limpar todos os filtros"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Limpar</span>
-                </button>
-              )}
+            <div className="relative w-full sm:w-64">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
+              <input
+                type="text"
+                value={dashboardSearchTerm}
+                onChange={(e) => setDashboardSearchTerm(e.target.value)}
+                placeholder="Filtrar por nome, rota ou criador..."
+                className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:border-[#3483FA]"
+              />
             </div>
           </div>
 
@@ -1794,26 +1516,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           ) : (
             <div className="py-12 text-center text-gray-400">
               <Package className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-              <p className="font-bold text-gray-600 text-sm">Nenhuma lista encontrada</p>
-              <p className="text-xs text-gray-400 mt-1">
-                {(dashboardSearchTerm || dashboardDateFilter || dashboardStatusFilter !== 'todas')
-                  ? 'Tente alterar ou limpar os filtros de data, busca ou status selecionados.'
-                  : 'Clique em "Criar Nova Lista" para definir uma rota e começar a bipar.'}
-              </p>
-              {(dashboardSearchTerm || dashboardDateFilter || dashboardStatusFilter !== 'todas') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDashboardSearchTerm('');
-                    setDashboardDateFilter('');
-                    setDashboardStatusFilter('todas');
-                  }}
-                  className="mt-3 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#3483FA] border border-blue-200 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Limpar todos os filtros</span>
-                </button>
-              )}
+              <p className="font-bold text-gray-600 text-sm">Nenhuma lista criada ainda</p>
+              <p className="text-xs text-gray-400 mt-1">Clique em "Criar Nova Lista" para definir uma rota e começar a bipar.</p>
             </div>
           )}
         </div>
@@ -1940,9 +1644,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </div>
         )}
 
-        {/* Skeleton ao abrir ou criar lista */}
-        {isLoadingLista && <SkeletonOverlay label={loadingMessage} />}
-      </div>
+        {/* Overlay com Círculo Giratório ao abrir ou criar lista */}
+        {isLoadingLista && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-[9999] animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 flex flex-col items-center gap-4 max-w-xs w-full text-center">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-[#333333]">{loadingMessage}</h4>
+                <p className="text-xs text-gray-500 mt-1">Aguarde um instante...</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </motion.div>
     );
   }
 
@@ -1978,9 +1694,72 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     return 'bg-blue-50 text-blue-700 border-blue-200';
   };
 
+  const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+  const totalColetados = listToVerify.length;
+
+  // Saídas presentes apenas nos IDs que realmente foram inseridos/bipados
+  const saídasPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.saida).filter(Boolean)));
+  const contagemSaidas = saídasPresentes.reduce((acc, s: string) => {
+    acc[s] = listToVerify.filter(i => i.saida === s).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Motivos presentes apenas nos IDs que realmente foram inseridos/bipados
+  const motivosPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.motivo).filter(Boolean)));
+  const contagemMotivos = motivosPresentes.reduce((acc, m: string) => {
+    acc[m] = listToVerify.filter(i => i.motivo === m).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Contagem de bips por operador na lista ativa (reflete em tempo real para todos)
+  const contagemBips: Record<string, number> = {};
+  listToVerify.forEach(item => {
+    const op = item.responsavel || listaAtiva.responsavel || 'Operador';
+    contagemBips[op] = (contagemBips[op] || 0) + 1;
+  });
+  if (operanteNome && contagemBips[operanteNome] === undefined) {
+    contagemBips[operanteNome] = 0;
+  }
+  if (listaAtiva.responsavel && contagemBips[listaAtiva.responsavel] === undefined) {
+    contagemBips[listaAtiva.responsavel] = 0;
+  }
+  const bipsPorOperador = Object.entries(contagemBips)
+    .map(([nome, total]) => ({
+      nome,
+      total,
+      isVoce: nome === operanteNome
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  // Lista de Usuários do Sistema para "Quem está na tela de lista online"
+  const usuariosSistemaOnline = registeredUsers.length > 0 ? registeredUsers : [
+    { id: 'usr-1', username: operanteNome, email: '', isAdmin: true, isApproved: true, allowedGroups: [] }
+  ];
+
+  const meusItensCount = listToVerify.filter(i => (i.responsavel || listaAtiva.responsavel) === operanteNome).length;
+
+  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+
+  const filteredItems = itemsFiltradosBase.filter(item => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase();
+    const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
+    const nomeGrupo = grupo ? grupo.nome.toLowerCase() : '';
+    const rotaCalculada = getRotaItem(item).toLowerCase();
+    return item.codigo.toLowerCase().includes(term) || 
+           rotaCalculada.includes(term) || 
+           item.motivo.toLowerCase().includes(term) || 
+           (item.saida && item.saida.toLowerCase().includes(term)) ||
+           (item.responsavel && item.responsavel.toLowerCase().includes(term)) ||
+           nomeGrupo.includes(term);
+  });
+
   return (
-    <div className="w-full space-y-4 pb-12">
-      {storageErrorBanner}
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="w-full space-y-4 pb-12"
+    >
       {/* Botão de Voltar para Listas */}
       <div className="flex items-center gap-3 mb-2 flex-wrap">
         <button
@@ -2006,19 +1785,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         {listaAtiva && (currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) && (
           <button
             onClick={() => setShowTransferirModal(true)}
-            className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 rounded text-[10px] font-bold uppercase transition-colors shadow-sm cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 rounded text-[10px] font-bold uppercase transition-colors ml-auto shadow-sm cursor-pointer"
           >
             <Users className="w-3 h-3" /> Transferir Admin
           </button>
         )}
-
       </div>
 
       {/* GRID COM TABELA À ESQUERDA E PAINEL DIREITO (SCANNER + MÉTRICAS) */}
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start min-w-0">
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
         
         {/* COLUNA ESQUERDA (3 COLS) — TABELA DE IDS COMPLETA */}
-        <div className="xl:col-span-3 space-y-4 min-w-0">
+        <div className="xl:col-span-3 space-y-4">
           
           {/* PAINEL DE GRUPOS (Se tipo = grupos) */}
           {listaAtiva.tipo === 'grupos' && (
@@ -2121,9 +1899,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         </span>
                       </div>
                       <p className="text-xs text-blue-800 font-bold mt-0.5 flex items-center gap-2 flex-wrap">
-                        <span>{itensModoIndividual.length} {itensModoIndividual.length === 1 ? 'pacote nesta sessão' : 'pacotes nesta sessão'}</span>
+                        <span>{itensModoIndividual.length} {itensModoIndividual.length === 1 ? 'pacote validado' : 'pacotes validados'} nesta sessão</span>
                         <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-bold border border-emerald-200 inline-flex items-center gap-1 shadow-2xs">
-                          <Save className="w-2.5 h-2.5 text-emerald-600" /> {individualDraft.saving ? 'Salvando...' : individualDraft.ready ? 'Confirmado no servidor' : 'Sem conexão com a sessão'}
+                          <Save className="w-2.5 h-2.5 text-emerald-600" /> Salvo no navegador
                         </span>
                       </p>
                     </div>
@@ -2132,21 +1910,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
-                      disabled={isSavingUnify || individualDraft.saving || !individualDraft.ready}
-                      onClick={() => handleFecharEUnificarModoIndividual()}
-                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
+                      onClick={handleFecharEUnificarModoIndividual}
+                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
                     >
-                      {isSavingUnify ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Unificando e Salvando...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 className="w-4 h-4" />
-                          Concluir e Unificar com a Principal
-                        </>
-                      )}
+                      <CheckCircle2 className="w-4 h-4" />
+                      Fechar e Unificar com a Principal
                     </button>
                     <button
                       type="button"
@@ -2157,56 +1925,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                </div>
-
-                {/* PAINEL DE METRICAS E STATUS DE VALIDAÇÃO DO MODO INDIVIDUAL */}
-                <div className="grid grid-cols-3 gap-2 sm:gap-3 my-2">
-                  <button
-                    type="button"
-                    onClick={() => setModoIndFiltroStatus('todos')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      modoIndFiltroStatus === 'todos' 
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                        : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    <div className="text-[10px] uppercase tracking-wider font-bold opacity-80">Total Sessão</div>
-                    <div className="text-base sm:text-lg font-black mt-0.5">{itensModoIndividual.length}</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setModoIndFiltroStatus('validados')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      modoIndFiltroStatus === 'validados' 
-                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
-                        : 'bg-emerald-50/80 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
-                    }`}
-                  >
-                    <div className="text-[10px] uppercase tracking-wider font-bold opacity-90 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Validados
-                    </div>
-                    <div className="text-base sm:text-lg font-black mt-0.5">
-                      {itensModoIndividual.filter(i => i.validado !== false).length}
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setModoIndFiltroStatus('pendentes')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      modoIndFiltroStatus === 'pendentes' 
-                        ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
-                        : 'bg-amber-50/80 border-amber-200 text-amber-900 hover:bg-amber-100'
-                    }`}
-                  >
-                    <div className="text-[10px] uppercase tracking-wider font-bold opacity-90 flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" /> Pendentes
-                    </div>
-                    <div className="text-base sm:text-lg font-black mt-0.5">
-                      {itensModoIndividual.filter(i => i.validado === false).length}
-                    </div>
-                  </button>
                 </div>
 
                 {/* Ações da Lista do Modo Individual (Mesmas Funções da Lista) */}
@@ -2294,7 +2012,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1"
                       >
                         <CheckCheck className="w-3 h-3 text-gray-600" />
-                        {filteredItems.length > 0 && filteredItems.every(i => selectedItemIdSet.has(i.id))
+                        {filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))
                           ? 'Desmarcar Todos'
                           : 'Selecionar Todos'}
                       </button>
@@ -2387,7 +2105,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1"
                   >
                     <CheckCheck className="w-3 h-3 text-gray-600" />
-                    {filteredItems.length > 0 && filteredItems.every(i => selectedItemIdSet.has(i.id))
+                    {filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))
                       ? 'Desmarcar Todos'
                       : 'Selecionar Todos'}
                   </button>
@@ -2474,34 +2192,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             )}
 
             {filteredItems.length > 0 ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600" aria-label="Paginação dos IDs">
-                  <span>Exibindo {pageOffset + 1}–{Math.min(pageOffset + ITEMS_PER_PAGE, filteredItems.length)} de {filteredItems.length} IDs</span>
-                  {totalItemPages > 1 && (
-                    <div className="flex items-center gap-2">
-                      <button type="button" disabled={currentItemsPage === 0} onClick={() => setItemsPage(currentItemsPage - 1)}
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40 cursor-pointer">Anterior</button>
-                      <span>Página {currentItemsPage + 1} de {totalItemPages}</span>
-                      <button type="button" disabled={currentItemsPage + 1 >= totalItemPages} onClick={() => setItemsPage(currentItemsPage + 1)}
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40 cursor-pointer">Próxima</button>
-                    </div>
-                  )}
-                </div>
-                <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
+              <div className="overflow-x-auto border border-gray-200 shadow-sm max-h-[70vh]">
                 <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse">
                   <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                     <tr>
                       <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
                         <input
                           type="checkbox"
-                          checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIdSet.has(i.id))}
+                          checked={filteredItems.length > 0 && filteredItems.every(i => selectedItemIds.includes(i.id))}
                           onChange={() => handleToggleSelectAll(filteredItems)}
                           className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
-                          title="Selecionar/Desmarcar todos os IDs filtrados"
+                          title="Selecionar/Desmarcar Todos os visíveis"
                         />
                       </th>
                       <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">#</th>
-                      <th className="min-w-[150px] py-1 px-2 sm:px-3 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
+                      <th className="py-1 px-1 sm:px-2 text-left border-b border-r border-gray-200 bg-gray-100">ID / Código</th>
                       {listaAtiva.tipo === 'grupos' && (
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100 text-gray-700">Grupo</th>
                       )}
@@ -2515,13 +2220,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 font-sans">
-                    {visibleItems.map((item, idx) => {
-                      const isSelected = selectedItemIdSet.has(item.id);
+                    {filteredItems.map((item, idx) => {
+                      const isSelected = selectedItemIds.includes(item.id);
                       const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
                       const itemRota = getRotaItem(item);
                       const hasRota = itemRota && itemRota.trim() !== '' && itemRota.toLowerCase() !== 'sem rota' && itemRota !== '-';
                       return (
-                        <React.Fragment key={item.id}>
+                        <React.Fragment key={`frag-${item.id}-${idx}`}>
                         <tr 
                           className={`transition-all border-b border-gray-200 group ${
                             isSelected 
@@ -2537,15 +2242,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                               className="w-4 h-4 text-[#3483FA] focus:ring-[#3483FA] cursor-pointer"
                             />
                           </td>
-                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - pageOffset - idx}</td>
+                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - idx}</td>
                           <td 
                             onClick={() => setItemParaMudarMotivo(item)}
-                            className="min-w-[150px] py-1 px-2 sm:px-3 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
                             title="Clique para alterar o motivo deste ID"
                           >
                             <div className="flex items-center gap-1.5 font-mono text-xs">
                               <Barcode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                              <span className="whitespace-nowrap">{item.codigo}</span>
+                              <span>{item.codigo}</span>
                             </div>
                           </td>
 
@@ -2568,33 +2273,30 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </td>
                           )}
 
-                          {/* COLUNA DE STATUS DE VALIDAÇÃO E SINCRONIZAÇÃO */}
+                          {/* COLUNA DE STATUS DE VALIDAÇÃO - TEM COR */}
                           <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
-                            <div className="flex items-center justify-center gap-1 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => handleToggleItemValidado(item.id)}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
-                                  item.validado
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
-                                    : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                                }`}
-                                title="Clique para alternar entre Validado e Pendente"
-                              >
-                                {item.validado ? (
-                                  <>
-                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                    <span>Validado</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <AlertCircle className="w-3 h-3 text-amber-600" />
-                                    <span>Pendente</span>
-                                  </>
-                                )}
-                              </button>
-
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleItemValidado(item.id)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
+                                item.validado
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                                  : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                              }`}
+                              title="Clique para alternar entre Validado e Pendente"
+                            >
+                              {item.validado ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Validado</span>
+                                </>
+                              ) : (
+                                <>
+                                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                                  <span>Pendente</span>
+                                </>
+                              )}
+                            </button>
                           </td>
 
                           {/* COLUNA BIPADO POR - NEUTRA SEM COR */}
@@ -2652,7 +2354,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA DATA / HORA - NEUTRA */}
                           <td className="py-1 px-1 sm:px-2 text-center text-gray-500 text-[11px] border-r border-gray-200">
-                            {formatScanTime(item.scannedAt)}
+                            {item.scannedAt}
                           </td>
                           <td className="py-1 px-1 sm:px-2 text-center">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -2741,13 +2443,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     })}
                   </tbody>
                 </table>
-                </div>
               </div>
             ) : (
               <div className="py-12 text-center text-gray-400">
                 <Barcode className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                <p className="font-bold text-gray-600 text-sm">{listToVerify.length > 0 ? 'Nenhum ID encontrado com este filtro' : 'Nenhum ID nesta lista ainda'}</p>
-                <p className="text-xs text-gray-400 mt-1">{listToVerify.length > 0 ? 'Ajuste a busca para consultar os demais IDs.' : 'Bipe pacotes para dar entrada nesta lista.'}</p>
+                <p className="font-bold text-gray-600 text-sm">Nenhum ID nesta lista ainda</p>
+                <p className="text-xs text-gray-400 mt-1">Bipe pacotes para dar entrada nesta lista.</p>
               </div>
             )}
           </div>
@@ -2757,8 +2458,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         <div className="space-y-6">
           
           {/* Card Bip Scanner (AGORA NA DIREITA PERTO DAS MÉTRICAS) */}
-          <div
-            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA] min-w-0"
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md border-t-8 border-t-[#3483FA]"
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
               <div className="flex items-center gap-2">
@@ -2769,18 +2472,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               <button 
                 type="button" 
                 onClick={() => {
-                  if (listaAtiva.status === 'finalizada') return;
                   setIsLocked(!isLocked);
                   if (isLocked) setTimeout(() => inputRef.current?.focus(), 50);
                 }}
-                disabled={listaAtiva.status === 'finalizada'}
-                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border ${
-                  listaAtiva.status === 'finalizada' ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : leitorTravado
+                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm border cursor-pointer ${
+                  isLocked 
                     ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 cursor-pointer'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                 }`}
               >
-                {leitorTravado ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
+                {isLocked ? <><Lock className="w-3.5 h-3.5" /> Travado</> : <><Unlock className="w-3.5 h-3.5" /> Liberado</>}
               </button>
             </div>
 
@@ -2788,7 +2489,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <form onSubmit={handleBip} className="mt-3">
               <div className="relative flex items-center">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Barcode className={`h-5 w-5 ${leitorTravado ? 'text-gray-300' : 'text-[#3483FA]'}`} />
+                  <Barcode className={`h-5 w-5 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
                 </div>
                 <input
                   ref={inputRef}
@@ -2796,11 +2497,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   value={bipInput}
                   onChange={(e) => setBipInput(e.target.value)}
                   onBlur={() => {
-                    if (!leitorTravado) setTimeout(() => inputRef.current?.focus(), 150);
+                    if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
                   }}
-                  disabled={leitorTravado || individualDraft.saving || isSavingUnify || (modoIndividual && !individualDraft.ready)}
+                  disabled={isLocked}
                   className={`block w-full pl-11 pr-3 py-2.5 border rounded-xl text-lg font-mono font-bold transition-all ${
-                    leitorTravado
+                    isLocked 
                       ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
                       : 'border-[#3483FA]/40 focus:ring-2 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-400'
                   }`}
@@ -2810,7 +2511,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </div>
               <button
                 type="submit"
-                disabled={leitorTravado || !bipInput.trim()}
+                disabled={isLocked || !bipInput.trim()}
                 className="w-full mt-2 py-2.5 bg-[#3483FA] hover:bg-blue-600 disabled:bg-gray-200 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
               >
                 Registrar Bip
@@ -2818,22 +2519,22 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </form>
 
             {/* Feedback Bip */}
-            <div className="mt-3 min-h-[34px]" aria-live="polite">
-              {lastScanResult && (
-                <div className={`h-[34px] px-3 py-2 rounded-lg border text-[10px] flex items-center gap-2 font-bold animate-in slide-in-from-top-1 ${
-                  lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
-                }`}>
-                  {lastScanResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 shrink-0" />}
-                  <div className="truncate">
-                    <span className="font-mono">{lastScanResult.code}</span> — {lastScanResult.message}
-                  </div>
+            {lastScanResult && (
+              <div className={`mt-3 px-3 py-2 rounded-lg border text-[10px] flex items-center gap-2 font-bold animate-in slide-in-from-top-1 ${
+                lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
+              }`}>
+                {lastScanResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 shrink-0" />}
+                <div className="truncate">
+                  <span className="font-mono">{lastScanResult.code}</span> — {lastScanResult.message}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+          </motion.div>
 
           {/* Painel 1: Quantidades e Métricas (APENAS O QUE EXISTE NOS IDS) */}
-          <div
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
             className="bg-white border border-gray-200 rounded-2xl p-6 shadow-md space-y-5"
           >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -2876,10 +2577,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </button>
               </div>
             </div>
-          </div>
+          </motion.div>
 
           {/* Painel: Quem está na tela de lista e quantos bips teve (reflete em tempo real para todos) */}
-          <div
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.05 }}
             className="bg-white border border-gray-200 rounded-2xl p-5 shadow-md space-y-4"
           >
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -2957,7 +2661,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 })
               )}
             </div>
-          </div>
+          </motion.div>
 
         </div>
 
@@ -3025,7 +2729,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </form>
 
               {(() => {
-                const itensNaoValidados = itensVerificarSnap;
+                const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+                const itensNaoValidados = modoIndividual ? listToVerify : listToVerify.filter(i => !i.validado);
                 const totalItens = itensNaoValidados.length;
                 if (totalItens === 0) {
                   return (
@@ -3154,7 +2859,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                                 </div>
                                 <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-500">
                                   <span>Motivo: <strong className="text-gray-700">{item.motivo}</strong></span>
-                                  <span>• {formatScanTime(item.scannedAt)}</span>
+                                  <span>• {item.scannedAt}</span>
                                 </div>
                               </div>
                             </div>
@@ -3237,28 +2942,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <ListPlus className="w-5 h-5 text-[#3483FA]" />
                 Verificação em Lote (Colar IDs Válidos)
               </h3>
-              <button
-                onClick={() => setShowVerificarLoteModal(false)}
-                disabled={isImporting}
-                className="text-gray-400 hover:text-black cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Fechar validação em lote"
-              >
+              <button onClick={() => setShowVerificarLoteModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            {isImporting ? (
-              <div className="py-8 space-y-6 text-center">
-                <Loader2 className="w-10 h-10 mx-auto text-[#3483FA] animate-spin" />
-                <div className="space-y-2">
-                  <h4 className="text-sm font-black text-gray-800">{importStatusText}</h4>
-                  <div className="w-full bg-gray-100 rounded-full h-3.5 overflow-hidden border border-gray-200 p-0.5">
-                    <div className="bg-[#3483FA] h-full transition-all duration-300 rounded-full" style={{ width: `${importProgress}%` }} />
-                  </div>
-                  <p className="text-xs font-black text-[#3483FA]">{importProgress}% Concluído</p>
-                </div>
-                <p className="text-[11px] text-gray-500 font-medium">A janela fechará depois da confirmação completa no banco.</p>
-              </div>
-            ) : (
             <form onSubmit={(e) => { e.preventDefault(); handleProcessarVerificarLote(); }}>
               <div className="space-y-4">
                 <div>
@@ -3296,7 +2983,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 </button>
               </div>
             </form>
-            )}
           </div>
         </div>
       )}
@@ -3310,12 +2996,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <ListPlus className="w-5 h-5 text-[#3483FA]" />
                 Adicionar Lote de IDs na Lista
               </h3>
-              <button
-                onClick={() => setShowModalLote(false)}
-                disabled={isImporting}
-                className="text-gray-400 hover:text-black cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Fechar importação"
-              >
+              <button onClick={() => setShowModalLote(false)} className="text-gray-400 hover:text-black cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -3335,7 +3016,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </div>
                   <p className="text-xs font-black text-[#3483FA]">{importProgress}% Concluído</p>
                 </div>
-                <p className="text-[11px] text-gray-500 font-medium">O percentual só avança depois que cada bloco é confirmado no banco.</p>
+                <p className="text-[11px] text-gray-400 font-medium">Processamento otimizado para carregar todos os IDs sem perdas.</p>
               </div>
             ) : (
               <form onSubmit={handleAdicionarLote} className="space-y-4">
@@ -3374,10 +3055,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </button>
                   <button
                     type="submit"
-                    disabled={isImporting || !loteText.trim()}
-                    className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 disabled:bg-blue-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer transition-all flex items-center gap-1.5"
+                    className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
                   >
-                    {isImporting ? 'Enviando...' : 'Adicionar Lote'}
+                    Adicionar Lote
                   </button>
                 </div>
               </form>
@@ -3431,7 +3111,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   const newAdmin = selectEl?.value;
                   if (newAdmin) {
                     const updatedLista = { ...listaAtiva, responsavel: newAdmin };
-                    if (!await persistLista(updatedLista)) return;
+                    await saveLista(updatedLista);
                     setShowTransferirModal(false);
                   }
                 }}
@@ -3445,15 +3125,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       )}
 
       {/* GAVETA DE CONFIRMAÇÃO DE EXCLUSÃO DE LISTA */}
-      <>
+      <AnimatePresence>
         {listaParaExcluir && (
           <div className="fixed inset-0 z-[60] flex justify-end overflow-hidden">
-            <div
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setListaParaExcluir(null)}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
-            <div
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="relative w-full max-w-sm bg-white shadow-2xl h-full flex flex-col"
             >
               <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-red-50/50">
@@ -3519,21 +3205,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   CANCELAR
                 </button>
               </div>
-            </div>
+            </motion.div>
           </div>
         )}
-      </>
+      </AnimatePresence>
 
       {/* POPUP DE CONFIRMAÇÃO DE FINALIZAÇÃO DE LISTA */}
-      <>
+      <AnimatePresence>
         {listaParaFinalizar && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 overflow-y-auto">
-            <div
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setListaParaFinalizar(null)}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
-            <div
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
               className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden z-10"
             >
               <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-emerald-50/50">
@@ -3599,13 +3291,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   SIM, FINALIZAR E BAIXAR
                 </button>
               </div>
-            </div>
+            </motion.div>
           </div>
         )}
-      </>
+      </AnimatePresence>
 
-      {/* Skeleton ao abrir ou criar lista */}
-      {isLoadingLista && <SkeletonOverlay label={loadingMessage} />}
-      </div>
+      {/* Overlay com Círculo Giratório ao abrir ou criar lista */}
+      {isLoadingLista && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center z-[9999] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 flex flex-col items-center gap-4 max-w-xs w-full text-center">
+            <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
+              <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+            </div>
+            <div>
+              <h4 className="text-base font-bold text-[#333333]">{loadingMessage}</h4>
+              <p className="text-xs text-gray-500 mt-1">Aguarde um instante...</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </motion.div>
   );
 };

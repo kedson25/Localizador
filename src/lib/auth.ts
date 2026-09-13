@@ -1,289 +1,176 @@
-import type { Session } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import { collection, doc, setDoc, getDocs, getDoc, updateDoc, query, where } from 'firebase/firestore';
+import { db } from './firebase';
 
 export interface User {
   id: string;
   username: string;
   email: string;
+  password?: string;
   isAdmin: boolean;
   isApproved: boolean;
   allowedGroups: string[];
 }
 
-interface UserRow {
-  id: string;
-  username: string;
-  email: string;
-  is_admin: boolean;
-  is_approved: boolean;
-  allowed_groups: string[];
-}
+const USERS_COLLECTION = 'users';
+const LOCAL_USERS_KEY = 'app_local_users_backup';
 
-const USER_COLUMNS = 'id,username,email,is_admin,is_approved,allowed_groups';
-const legacyFirebaseApiKey = import.meta.env.VITE_FIREBASE_LEGACY_AUTH_API_KEY?.trim()
-  || 'AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA';
-
-interface LegacyFirebaseUser {
-  localId: string;
-  email: string;
-  displayName?: string;
-}
-
-class LegacyMigrationError extends Error {
-  constructor(message: string, readonly code: string) {
-    super(message);
-    this.name = 'LegacyMigrationError';
-  }
-}
-
-let interactiveAuth: Promise<void> | null = null;
-async function runInteractiveAuth<T>(operation: () => Promise<T>): Promise<T> {
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  interactiveAuth = pending;
+function getLocalUsers(): User[] {
   try {
-    return await operation();
-  } finally {
-    if (interactiveAuth === pending) interactiveAuth = null;
-    release();
-  }
-}
-
-function authErrorCode(error: unknown): string {
-  return typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
-}
-
-function isInvalidCredentials(error: unknown): boolean {
-  return ['invalid_credentials', 'user_not_found'].includes(authErrorCode(error));
-}
-
-async function verifyLegacyFirebaseLogin(email: string, password: string): Promise<LegacyFirebaseUser | null> {
-  let response: Response;
-  try {
-    response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(legacyFirebaseApiKey)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, returnSecureToken: true }),
-      signal: AbortSignal.timeout(15000),
-    });
+    const cached = localStorage.getItem(LOCAL_USERS_KEY);
+    return cached ? JSON.parse(cached) : [];
   } catch {
-    return null;
+    return [];
   }
-
-  const body = await response.json().catch(() => ({})) as {
-    localId?: string;
-    email?: string;
-    displayName?: string;
-    error?: { message?: string };
-  };
-  if (response.ok && body.localId && body.email) {
-    return { localId: body.localId, email: body.email, displayName: body.displayName };
-  }
-
-  const legacyCode = body.error?.message?.split(' : ')[0] || '';
-  if (['INVALID_LOGIN_CREDENTIALS', 'EMAIL_NOT_FOUND', 'INVALID_PASSWORD'].includes(legacyCode)) return null;
-  if (legacyCode === 'USER_DISABLED') throw new LegacyMigrationError('Esta conta antiga está desativada.', 'user_disabled');
-  if (legacyCode.includes('TOO_MANY_ATTEMPTS')) {
-    throw new LegacyMigrationError('Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.', 'over_request_rate_limit');
-  }
-  return null;
 }
 
-async function signInWithPasswordOrMigrate(email: string, password: string): Promise<string> {
-  const firstAttempt = await supabase.auth.signInWithPassword({ email, password });
-  if (!firstAttempt.error) return firstAttempt.data.user.id;
-  if (!isInvalidCredentials(firstAttempt.error)) throw firstAttempt.error;
+function saveLocalUser(user: User) {
+  try {
+    const users = getLocalUsers();
+    const idx = users.findIndex(u => u.id === user.id || u.email === user.email || u.username === user.username);
+    if (idx >= 0) {
+      users[idx] = { ...users[idx], ...user };
+    } else {
+      users.push(user);
+    }
+    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
+  } catch {}
+}
 
-  const legacyUser = await verifyLegacyFirebaseLogin(email, password);
-  if (!legacyUser) throw firstAttempt.error;
+function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('Auth operation timed out')), ms)
+    ),
+  ]);
+}
 
-  const username = legacyUser.displayName?.trim() || legacyUser.email.split('@')[0];
-  const signup = await supabase.auth.signUp({
-    email: legacyUser.email,
+export async function signupUser(username: string, email: string, password: string): Promise<{success: boolean, message?: string}> {
+  const usersRef = collection(db, USERS_COLLECTION);
+  const newDocRef = doc(usersRef);
+  
+  const newUser: User = {
+    id: newDocRef.id,
+    username,
+    email,
     password,
-    options: { data: { username, legacy_firebase_uid: legacyUser.localId } },
-  });
-  if (!signup.error && signup.data.user && signup.data.user.identities?.length !== 0) {
-    if (signup.data.session) return signup.data.user.id;
-    const confirmed = await supabase.auth.signInWithPassword({ email: legacyUser.email, password });
-    if (!confirmed.error) return confirmed.data.user.id;
-    throw confirmed.error;
-  }
-
-  // A simultaneous first login may have created the account between requests.
-  const retry = await supabase.auth.signInWithPassword({ email: legacyUser.email, password });
-  if (!retry.error) return retry.data.user.id;
-  if (signup.error && !['email_exists', 'user_already_exists', 'user_already_registered'].includes(authErrorCode(signup.error))) {
-    throw signup.error;
-  }
-  throw new LegacyMigrationError(
-    'A senha antiga foi validada, mas já existe uma conta Supabase com outra senha. Use a senha cadastrada no Supabase.',
-    'legacy_account_conflict',
-  );
-}
-
-export function authErrorMessage(error: unknown): string {
-  const code = authErrorCode(error);
-  const status = typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0;
-  if (['invalid_credentials', 'user_not_found'].includes(code)) return 'E-mail ou senha inválidos.';
-  if (['email_exists', 'user_already_exists', 'user_already_registered'].includes(code)) return 'E-mail já cadastrado. Faça login para continuar.';
-  if (code === 'email_not_confirmed') return 'Confirme o e-mail enviado pelo Supabase antes de entrar.';
-  if (code === 'weak_password') return 'A senha precisa ter pelo menos 6 caracteres.';
-  if (['over_request_rate_limit', 'over_email_send_rate_limit'].includes(code) || status === 429) return 'Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.';
-  if (code === 'signup_disabled') return 'Novos cadastros estão desativados no Supabase.';
-  if (code === '42501') return 'Você não tem permissão para realizar esta operação.';
-  if (status >= 500) return 'O serviço de autenticação está indisponível. Tente novamente.';
-  if (error instanceof Error && error.message) return error.message;
-  return 'Não foi possível concluir a autenticação. Verifique a conexão e tente novamente.';
-}
-
-function fromUserRow(row: UserRow): User {
-  return {
-    id: row.id,
-    username: row.username,
-    email: row.email,
-    isAdmin: row.is_admin,
-    isApproved: row.is_approved,
-    allowedGroups: row.allowed_groups || [],
+    isAdmin: false,
+    isApproved: false,
+    allowedGroups: ['consulta', 'remover', 'reporte', 'listas', 'upload']
   };
+
+  saveLocalUser(newUser);
+
+  try {
+    // Check if username or email exists
+    const qUser = query(usersRef, where('username', '==', username));
+    const userSnap = await withTimeout(getDocs(qUser), 3000);
+    if (!userSnap.empty) return { success: false, message: 'Usuário já existe' };
+    
+    const qEmail = query(usersRef, where('email', '==', email));
+    const emailSnap = await withTimeout(getDocs(qEmail), 3000);
+    if (!emailSnap.empty) return { success: false, message: 'E-mail já cadastrado' };
+    
+    await withTimeout(setDoc(newDocRef, newUser), 3500);
+    return { success: true };
+  } catch (error: any) {
+    console.warn('Firestore offline/timeout no cadastro (salvo localmente):', error);
+    return { success: true };
+  }
 }
 
-export function normalizeUser(user: User): User {
-  return { ...user, allowedGroups: Array.isArray(user.allowedGroups) ? [...user.allowedGroups] : [] };
-}
+export async function loginUser(emailOrUsername: string, password: string): Promise<{success: boolean, user?: User, message?: string}> {
+  const localUsers = getLocalUsers();
 
-export async function signupUser(username: string, email: string, password: string): Promise<{ success: boolean; message?: string }> {
-  return runInteractiveAuth(async () => {
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: { data: { username: username.trim() } },
-      });
-      if (error) throw error;
-      if (!data.user || data.user.identities?.length === 0) {
-        return { success: false, message: 'E-mail já cadastrado. Faça login para continuar.' };
-      }
-
-      const requiresConfirmation = !data.session;
-      if (data.session) await supabase.auth.signOut();
-      return {
-        success: true,
-        message: requiresConfirmation
-          ? 'Cadastro realizado! Confirme o e-mail enviado pelo Supabase e depois faça login.'
-          : 'Cadastro realizado! Você já pode fazer login.',
-      };
-    } catch (error) {
-      await supabase.auth.signOut();
-      return { success: false, message: authErrorMessage(error) };
+  try {
+    const usersRef = collection(db, USERS_COLLECTION);
+    let q = query(usersRef, where('email', '==', emailOrUsername));
+    let snap = await withTimeout(getDocs(q), 3000);
+    
+    if (snap.empty) {
+      q = query(usersRef, where('username', '==', emailOrUsername));
+      snap = await withTimeout(getDocs(q), 3000);
     }
-  });
-}
+    
+    if (!snap.empty) {
+      const user = snap.docs[0].data() as User;
+      saveLocalUser(user);
 
-export async function loginUser(email: string, password: string): Promise<{ success: boolean; user?: User; message?: string }> {
-  return runInteractiveAuth(async () => {
-    try {
-      const userId = await signInWithPasswordOrMigrate(email.trim().toLowerCase(), password);
-      const user = await getUserById(userId);
-      if (!user) throw new Error('Perfil não encontrado. Crie a conta novamente ou verifique a tabela users.');
+      if (user.password !== password) {
+        return { success: false, message: 'Senha incorreta' };
+      }
+      
       if (!user.isApproved) {
-        await supabase.auth.signOut();
-        return { success: false, message: 'Acesso desativado por um Administrador.' };
+        return { success: false, message: 'Acesso pendente de aprovação por um Administrador.' };
       }
+      
       return { success: true, user };
-    } catch (error) {
-      await supabase.auth.signOut();
-      return { success: false, message: authErrorMessage(error) };
     }
-  });
-}
+  } catch (error: any) {
+    console.warn('Não foi possível conectar ao Firestore para login, verificando cache local:', error);
+  }
 
-export async function logoutUser(): Promise<void> {
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
-}
+  // Fallback to local user cache
+  const localUser = localUsers.find(u => u.email === emailOrUsername || u.username === emailOrUsername);
+  if (localUser) {
+    if (localUser.password !== password) {
+      return { success: false, message: 'Senha incorreta' };
+    }
+    if (!localUser.isApproved) {
+      return { success: false, message: 'Acesso pendente de aprovação por um Administrador.' };
+    }
+    return { success: true, user: localUser };
+  }
 
-export async function getUserById(userId: string): Promise<User | null> {
-  const { data, error } = await supabase.from('users').select(USER_COLUMNS).eq('id', userId).maybeSingle();
-  if (error) throw new Error(authErrorMessage(error));
-  return data ? fromUserRow(data as UserRow) : null;
+  return { success: false, message: 'Usuário não encontrado' };
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const { data, error } = await supabase.rpc('list_visible_users', {});
-  if (error) throw new Error(authErrorMessage(error));
-  return (data as UserRow[]).map(fromUserRow);
+  const localUsers = getLocalUsers();
+  try {
+    const usersRef = collection(db, USERS_COLLECTION);
+    const snap = await withTimeout(getDocs(usersRef), 3000);
+    const remoteUsers = snap.docs.map(doc => doc.data() as User);
+    remoteUsers.forEach(saveLocalUser);
+    return remoteUsers;
+  } catch (error) {
+    console.warn('Firestore offline ao buscar todos os usuários (usando cache local):', error);
+    return localUsers;
+  }
 }
 
 export async function updateUserAdminStatus(userId: string, updates: Partial<User>): Promise<boolean> {
-  const { data, error } = await supabase.rpc('update_user_permissions', {
-    p_user_id: userId,
-    p_is_admin: updates.isAdmin ?? null,
-    p_is_approved: updates.isApproved ?? null,
-    p_allowed_groups: updates.allowedGroups ?? null,
-  });
-  if (error) throw new Error(authErrorMessage(error));
-  return data;
+  const localUsers = getLocalUsers();
+  const found = localUsers.find(u => u.id === userId);
+  if (found) {
+    saveLocalUser({ ...found, ...updates });
+  }
+
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    await withTimeout(updateDoc(userRef, updates), 3000);
+    return true;
+  } catch (error) {
+    console.warn('Firestore offline ao atualizar usuário (atualizado localmente):', error);
+    return true;
+  }
 }
 
-/** Supabase Auth owns the session; profile permissions always come from PostgreSQL. */
-export function subscribeAuthSession(onChange: (user: User | null) => void, onError: (message: string) => void): () => void {
-  let disposed = false;
-  let generation = 0;
-  let activeUserId: string | null = null;
-  let profileChannel: ReturnType<typeof supabase.channel> | null = null;
-  let permissionTimer: ReturnType<typeof setInterval> | null = null;
+export async function getUserById(userId: string): Promise<User | null> {
+  const localUsers = getLocalUsers();
+  const localUser = localUsers.find(u => u.id === userId) || null;
 
-  const clearProfileListener = () => {
-    if (profileChannel) void supabase.removeChannel(profileChannel);
-    profileChannel = null;
-    if (permissionTimer) clearInterval(permissionTimer);
-    permissionTimer = null;
-  };
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    const snap = await withTimeout(getDoc(userRef), 3000);
+    if (snap.exists()) {
+      const user = snap.data() as User;
+      saveLocalUser(user);
+      return user;
+    }
+  } catch (error) {
+    console.warn('Firestore offline ao buscar usuário por ID (usando local):', error);
+  }
 
-  const handleSession = (session: Session | null) => {
-    const thisGeneration = ++generation;
-    activeUserId = session?.user.id ?? null;
-    clearProfileListener();
-    void (async () => {
-      if (interactiveAuth) await interactiveAuth;
-      if (disposed || generation !== thisGeneration || activeUserId !== (session?.user.id ?? null)) return;
-      if (!session) { onChange(null); return; }
-      const userId = session.user.id;
-      const isCurrent = () => !disposed && generation === thisGeneration && activeUserId === userId;
-      const refreshProfile = async () => {
-        try {
-          const profile = await getUserById(userId);
-          if (!isCurrent()) return;
-          onChange(profile?.isApproved ? profile : null);
-          if (!profile?.isApproved) {
-            onError(profile ? 'Acesso desativado por um Administrador.' : 'Perfil não encontrado na tabela users.');
-            await supabase.auth.signOut();
-          }
-        } catch (error) {
-          if (isCurrent()) { onChange(null); onError(authErrorMessage(error)); }
-        }
-      };
-
-      profileChannel = supabase.channel(`user-permissions:${userId}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'users', filter: `id=eq.${userId}` }, () => { void refreshProfile(); })
-        .subscribe();
-      await refreshProfile();
-      if (isCurrent()) permissionTimer = setInterval(() => { void refreshProfile(); }, 60_000);
-    })();
-  };
-
-  const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => handleSession(session));
-  const initialGeneration = generation;
-  void supabase.auth.getSession().then(({ data, error }) => {
-    if (error) { if (!disposed) onError(authErrorMessage(error)); return; }
-    if (!disposed && generation === initialGeneration) handleSession(data.session);
-  });
-
-  return () => {
-    disposed = true;
-    generation += 1;
-    listener.subscription.unsubscribe();
-    clearProfileListener();
-  };
+  return localUser;
 }

@@ -40,12 +40,6 @@ export interface RefugoRow {
 }
 
 export interface ColetaItem {
-  revision?: number;
-  firebase_uid?: string;
-  user_name?: string;
-  user_email?: string;
-  created_at?: string;
-  syncStatus?: 'pendente' | 'sincronizando' | 'sincronizado';
   id: string;
   codigo: string;
   rota: string;
@@ -64,9 +58,6 @@ export interface ColetaGrupo {
 }
 
 export interface ColetaLista {
-  revision?: number;
-  created_at?: string;
-  updated_at?: string;
   id: string;
   nome: string;
   tipo?: 'comum' | 'grupos';
@@ -79,12 +70,9 @@ export interface ColetaLista {
   saidaPadrao: string;
   motivoPadrao: string;
   itens: ColetaItem[];
-  totalItens?: number;
   porcentagemAcerto?: number;
   fechamentoGaiola?: string;
   itensFaltaram?: number;
-  pacotesSemRotaEmFluxo?: number;
-  rotasEncontradas?: number;
 }
 
 export type ActiveTab = 'tools' | 'lookup' | 'remove' | 'report' | 'upload' | 'refugo';

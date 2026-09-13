@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { CsvRow, GroupSummary } from './types';
 import { parseCsvText } from './utils/csvParser';
@@ -14,113 +14,103 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
-import { PageSkeleton, type PageSkeletonVariant } from './components/PageSkeleton';
-import { logoutUser, subscribeAuthSession, User } from './lib/auth';
-import { saveToColetor, listenToColetor, clearColetor } from './services/operational.service';
-import { startListasSync } from './lib/coletaSync';
+import { User } from './lib/auth';
 
-function skeletonVariantForPath(pathname: string): PageSkeletonVariant {
-  if (pathname === '/') return 'hub';
-  if (pathname === '/admin' || pathname === '/listas') return 'dashboard';
-  if (pathname.startsWith('/listas/') || pathname === '/refugo') return 'detail';
-  if (pathname === '/upload' || pathname === '/login') return 'form';
-  return 'table';
-}
+import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const isHome = location.pathname === '/';
 
   const [rawText, setRawText] = useState<string>('');
   const [rows, setRows] = useState<CsvRow[]>([]);
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
-  const [loadingData, setLoadingData] = useState<boolean>(true);
-  const [loadedColetorUserId, setLoadedColetorUserId] = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isAuthenticated = !!currentUser?.isApproved;
-  const canUseListas = isAuthenticated;
-  const canReadColetor = isAuthenticated && (currentUser.isAdmin || currentUser.allowedGroups.some(group => ['consulta', 'remover', 'reporte', 'upload'].includes(group)));
-  const requestedPath = new URLSearchParams(location.search).get('next');
-  const postLoginPath = requestedPath?.startsWith('/') && !requestedPath.startsWith('//')
-    ? requestedPath : '/';
-  const loginPath = `/login?next=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`;
+  const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try { return JSON.parse(localStorage.getItem('currentUser') || 'null'); } catch { return null; }
+  });
+  const isAuthenticated = !!currentUser;
 
   useEffect(() => {
-    if (!canUseListas) return;
-    const stopLists = startListasSync();
-    return () => { stopLists(); };
-  }, [canUseListas, currentUser?.id]);
+    if (currentUser) {
+      const tabName = location.pathname.startsWith('/refugo') ? 'Refugo' :
+                      location.pathname.startsWith('/listas') ? 'Coleta (Listas)' :
+                      location.pathname.startsWith('/consulta') ? 'Consulta' :
+                      location.pathname.startsWith('/remover') ? 'Remover' :
+                      location.pathname.startsWith('/reporte') ? 'Reporte' :
+                      location.pathname.startsWith('/admin') ? 'Admin' : 'Hub / Início';
+      
+      try {
+        const activePresences = JSON.parse(localStorage.getItem('app_active_presences') || '{}');
+        activePresences[currentUser.id || currentUser.username] = {
+          username: currentUser.username,
+          tab: tabName,
+          lastActive: Date.now()
+        };
+        localStorage.setItem('app_active_presences', JSON.stringify(activePresences));
+      } catch {}
+    }
+  }, [location.pathname, currentUser]);
 
+
+
+
+  const showNotification = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  // On mount, load stored CSV from Firebase Firestore
   useEffect(() => {
-    return subscribeAuthSession(user => {
-      setCurrentUser(user);
-      setAuthLoading(false);
-      if (!user) { setRawText(''); setRows([]); setGroups([]); setHeaders([]); }
-    }, message => { setAuthLoading(false); showNotification(message); });
+    async function initFromFirebase() {
+      setLoadingFirebase(true);
+      try {
+        const savedData = await loadFromColetor();
+        if (savedData && savedData.rawText) {
+          setRawText(savedData.rawText);
+          const parsed = parseCsvText(savedData.rawText);
+          setRows(parsed.rows);
+          setGroups(parsed.groups);
+          setHeaders(parsed.headers);
+        }
+      } catch (err) {
+        console.error('Erro ao carregar dados:', err);
+      } finally {
+        setLoadingFirebase(false);
+      }
+    }
+    initFromFirebase();
   }, []);
 
-
-  const showNotification = (message: string) => {
-    if (notificationTimer.current) clearTimeout(notificationTimer.current);
-    setNotification(message);
-    notificationTimer.current = setTimeout(() => { setNotification(null); notificationTimer.current = null; }, 4000);
-  };
-  useEffect(() => () => { if (notificationTimer.current) clearTimeout(notificationTimer.current); }, []);
-
-  useEffect(() => {
-    if (!canReadColetor) {
-      setLoadingData(authLoading); setLoadedColetorUserId(null);
-      setRawText(''); setRows([]); setGroups([]); setHeaders([]); return;
-    }
-    setLoadingData(true);
-    setLoadedColetorUserId(null);
-    const loadingUserId = currentUser?.id || null;
-    let lastRawText: string | undefined;
-    const unsubscribe = listenToColetor(data => {
-      const text = data?.rawText || '';
-      if (text !== lastRawText) {
-        lastRawText = text;
-        setRawText(text);
-        const parsed = text ? parseCsvText(text) : { rows: [], groups: [], headers: [] };
-        setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
-      }
-      setLoadingData(false);
-      setLoadedColetorUserId(loadingUserId);
-    }, () => {
-      setLoadingData(false); setRawText(''); setRows([]); setGroups([]); setHeaders([]);
-      setLoadedColetorUserId(loadingUserId);
-      showNotification('Não foi possível sincronizar a base. Verifique a conexão.');
-    });
-    return () => { unsubscribe(); };
-  }, [canReadColetor, currentUser?.id, authLoading]);
-
   const handleParseAndSave = async (textToParse: string, fileName?: string) => {
-    try {
-      const parsed = parseCsvText(textToParse);
-      const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
-      if (saved) {
-        setRawText(textToParse); setRows(parsed.rows); setGroups(parsed.groups); setHeaders(parsed.headers);
-        showNotification(`Dados confirmados no servidor. (${parsed.rows.length} IDs)`);
-        navigate('/');
-      }
-    } catch (error) {
-      showNotification(error instanceof Error ? error.message : 'Falha ao salvar os dados.');
+    setRawText(textToParse);
+    const parsed = parseCsvText(textToParse);
+    setRows(parsed.rows);
+    setGroups(parsed.groups);
+    setHeaders(parsed.headers);
+
+    // Save to Firebase
+    const saved = await saveToColetor(textToParse, parsed.rows.length, fileName);
+    if (saved) {
+      showNotification(`Dados processados e salvos com sucesso! (${parsed.rows.length} IDs)`);
+    } else {
+      showNotification('Processado localmente.');
     }
   };
 
   const handleClear = async () => {
-    try {
-      await clearColetor();
-      setRawText(''); setRows([]); setGroups([]); setHeaders([]);
-      navigate('/');
-      showNotification('Limpeza confirmada no servidor.');
-    } catch (error) {
-      showNotification(error instanceof Error ? error.message : 'Falha ao limpar os dados.');
-    }
+    setRawText('');
+    setRows([]);
+    setGroups([]);
+    setHeaders([]);
+    navigate('/');
+    
+    // Clear from Firebase
+    await clearColetor();
+    showNotification('Dados zerados com sucesso!');
   };
 
   const getPageTitle = () => {
@@ -156,9 +146,32 @@ export default function App() {
           </div>
         )}
 
-        {authLoading || (canReadColetor && (loadingData || loadedColetorUserId !== currentUser?.id)
-          && ['/', '/consulta', '/remover', '/reporte', '/upload'].includes(location.pathname)) ? (
-          <PageSkeleton variant={skeletonVariantForPath(location.pathname)} className="mx-auto max-w-7xl" />
+        {loadingFirebase && location.pathname !== '/refugo' ? (
+          <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
+            <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
+            <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>
+            
+            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-gray-100 rounded-lg animate-pulse"></div>
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-1/4 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="h-3 w-2/3 bg-gray-100 rounded animate-pulse"></div>
+                </div>
+              </div>
+              <div className="mt-6 space-y-4 border-t border-gray-50 pt-4">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center gap-4">
+                    <div className="w-8 h-8 bg-gray-100 rounded-md animate-pulse"></div>
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 w-1/3 bg-gray-200 rounded animate-pulse"></div>
+                      <div className="h-2 w-1/2 bg-gray-100 rounded animate-pulse"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         ) : (
           <>
             {isAuthenticated && location.pathname !== '/' && location.pathname !== '/login' && !location.pathname.startsWith('/listas/') && (
@@ -182,21 +195,15 @@ export default function App() {
             )}
             <Routes>
             {/* Public Routes */}
+            <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
             <Route path="/login" element={
-              isAuthenticated ? <Navigate to={postLoginPath} replace /> : <Login onLogin={(user) => {
-                setCurrentUser(user);
-                navigate(postLoginPath, { replace: true });
-              }} />
+              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
             } />
             
             {/* Protected Routes */}
             {isAuthenticated && (
               <>
-                <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
-                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} onLogout={() => {
-                  void logoutUser().then(() => { setCurrentUser(null); navigate('/login'); })
-                    .catch(() => showNotification('Não foi possível encerrar sua sessão. Tente novamente.'));
-                }} />} />
+                <Route path="/" element={<ToolsHub totalRows={rows.length} groups={groups} onClear={handleClear} currentUser={currentUser} />} />
                 
                 {currentUser?.isAdmin && (
                   <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
@@ -214,17 +221,21 @@ export default function App() {
                   <Route path="/reporte" element={<WhatsappReport rows={rows} />} />
                 )}
 
-                <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
-                <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
+                {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('listas')) && (
+                  <>
+                    <Route path="/listas" element={<ListasColeta currentUser={currentUser} />} />
+                    <Route path="/listas/:id" element={<ListasColeta currentUser={currentUser} />} />
+                  </>
+                )}
 
                 {(currentUser?.isAdmin || currentUser?.allowedGroups?.includes('upload')) && (
-                  <Route path="/upload" element={<CsvUploader onLoadText={handleParseAndSave} currentTotalRows={rows.length} />} />
+                  <Route path="/upload" element={<CsvUploader onLoadText={(text) => { handleParseAndSave(text); navigate('/'); }} currentTotalRows={rows.length} />} />
                 )}
               </>
             )}
             
             {/* Fallback */}
-            <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to={loginPath} replace />} />
+            <Route path="*" element={isAuthenticated ? <Navigate to="/" replace /> : <Navigate to="/login" replace />} />
           </Routes>
           </>
         )}

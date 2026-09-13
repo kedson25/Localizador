@@ -22,9 +22,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const handleNext = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
-    if (!username.includes('@')) {
-      setErrorMsg('Insira o e-mail cadastrado no Supabase.');
-    } else {
+    if (username.trim()) {
       setStep(2);
     }
   };
@@ -34,6 +32,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setErrorMsg('');
     setIsLoading(true);
     
+    // We allow email or username in the "username" field for login
     const res = await loginUser(username.trim(), password);
     setIsLoading(false);
     
@@ -59,8 +58,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       return;
     }
     
-    if (password.length < 6) {
-      setErrorMsg('Senha deve ter pelo menos 6 caracteres.');
+    if (password.length < 4) {
+      setErrorMsg('Senha deve ter pelo menos 4 caracteres.');
       return;
     }
 
@@ -69,7 +68,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setIsLoading(false);
     
     if (res.success) {
-      setSuccessMsg(res.message || 'Cadastro realizado! Aguarde a aprovação de um Administrador.');
+      setSuccessMsg('Cadastro realizado! Aguarde a aprovação de um Administrador.');
       setMode('login');
       setStep(1);
       setUsername('');
@@ -113,22 +112,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             </div>
           )}
 
-          {isLoading ? (
-            <div role="status" aria-live="polite" className="space-y-4">
-              <span className="sr-only">Validando acesso...</span>
-              <div className="skeleton-shimmer h-3 w-20" />
-              <div className="skeleton-shimmer h-10 w-full" />
-              <div className="skeleton-shimmer h-10 w-full" />
-              <div className="skeleton-shimmer mx-auto h-3 w-36" />
-            </div>
-          ) : mode === 'login' ? (
+          {mode === 'login' ? (
             step === 1 ? (
               <form onSubmit={handleNext} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-[13px] text-gray-600 font-medium">E-mail</label>
+                  <label className="text-[13px] text-gray-600 font-medium">Username ou E-mail</label>
                   <input 
-                    type="email"
-                    autoComplete="email"
+                    type="text" 
                     value={username}
                     onChange={e => { setUsername(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
                     className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"
@@ -194,7 +184,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           ) : (
             <form onSubmit={handleSignup} className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="space-y-1.5">
-                <label className="text-[13px] text-gray-600 font-medium">Nome de usuário</label>
+                <label className="text-[13px] text-gray-600 font-medium">Novo Username</label>
                 <input 
                   type="text" 
                   value={username}
@@ -213,11 +203,10 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[13px] text-gray-600 font-medium">Senha</label>
+                <label className="text-[13px] text-gray-600 font-medium">Nova Senha</label>
                 <div className="relative">
                   <input 
-                    type={showPassword ? "text" : "password"}
-                    autoComplete="new-password"
+                    type={showPassword ? "text" : "password"} 
                     value={password}
                     onChange={e => { setPassword(e.target.value); setErrorMsg(''); setSuccessMsg(''); }}
                     className="w-full bg-white border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none"

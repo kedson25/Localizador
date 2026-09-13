@@ -21,7 +21,6 @@ interface ToolsHubProps {
   groups: GroupSummary[];
   onClear: () => void;
   currentUser?: User | null;
-  onLogout?: () => void;
 }
 
 export const ToolsHub: React.FC<ToolsHubProps> = ({
@@ -29,7 +28,6 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
   groups,
   onClear,
   currentUser,
-  onLogout,
 }) => {
   const navigate = useNavigate();
   const [isBacklogOpen, setIsBacklogOpen] = useState(false);
@@ -79,8 +77,8 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
     }
   ];
 
-  const backlogTools = allBacklogTools.filter(tool =>
-    tool.id === 'listas' || currentUser?.isAdmin || currentUser?.allowedGroups?.includes(tool.id)
+  const backlogTools = allBacklogTools.filter(tool => 
+    currentUser?.isAdmin || currentUser?.allowedGroups?.includes(tool.id)
   );
 
   // Allow uploading if the user has permission to upload
@@ -94,6 +92,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
       tag: 'Auditoria & Leitura',
       description: 'Carregue a planilha de faltantes. Utilize o leitor de código de barras físico para bipar os pacotes localizados.',
       icon: Barcode,
+  ListTodo,
       iconColor: 'text-[#3483FA]',
       badgeBg: 'bg-blue-50 text-[#3483FA] border-blue-200',
     }
@@ -106,7 +105,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
           <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-gray-800 rounded-md text-sm font-bold shadow-xs">
             <span>{currentUser?.username || 'Usuário'}</span>
             <button 
-              onClick={onLogout}
+              onClick={() => { localStorage.removeItem('currentUser'); window.location.reload(); }}
               className="ml-2 text-[10px] text-red-600 hover:underline uppercase cursor-pointer"
             >
               Sair

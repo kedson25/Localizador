@@ -4,20 +4,17 @@ import {
   Shield, ShieldAlert, CheckCircle, XCircle, Users, Activity, Settings2, 
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
   AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check,
-  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw,
-  TrendingUp, Target, Trophy
+  Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { listenToListas, saveLista } from '../lib/coletaSync';
-import { listenToRefugoScans, type RefugoScan } from '../services/operational.service';
-import { compareListasNewestFirst } from '../lib/listaOrder';
+import { listenToListas, saveLista } from '../lib/firebase';
 import { ColetaLista } from '../types';
-import { PageSkeleton } from './PageSkeleton';
 
 const TABS = [
   { id: 'consulta', label: 'Buscar grupos' },
   { id: 'remover', label: 'Remover IDs' },
   { id: 'reporte', label: 'Reporte WhatsApp' },
+  { id: 'listas', label: 'Listas de Coleta' },
   { id: 'upload', label: 'Importar CSV' },
 ];
 
@@ -25,97 +22,20 @@ interface AdminPanelProps {
   currentUser?: User | null;
 }
 
-function parseToYYYYMMDD(dateStr: string | undefined): string | null {
-  if (!dateStr) return null;
-  const trimmed = dateStr.trim();
-
-  // Se já for YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  // Se for DD/MM/YYYY ou DD-MM-YYYY
-  const brMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
-  if (brMatch) {
-    const day = brMatch[1].padStart(2, '0');
-    const month = brMatch[2].padStart(2, '0');
-    const year = brMatch[3];
-    return `${year}-${month}-${day}`;
-  }
-
-  // Tenta buscar padrão DD/MM/YYYY dentro do texto (ex: "Saída PM - 08/09/2026")
-  const brInTextMatch = trimmed.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (brInTextMatch) {
-    const day = brInTextMatch[1].padStart(2, '0');
-    const month = brInTextMatch[2].padStart(2, '0');
-    const year = brInTextMatch[3];
-    return `${year}-${month}-${day}`;
-  }
-
-  return null;
-}
-
-// Gera string de data em fuso horário local no formato YYYY-MM-DD
-function getLocalDateIso(offsetDays = 0): string {
-  const d = new Date();
-  if (offsetDays !== 0) {
-    d.setDate(d.getDate() + offsetDays);
-  }
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-// Extrai a data ISO de uma lista de forma resiliente
-function getListDateIso(l: ColetaLista): string | null {
-  if (!l) return null;
-  const dateFromData = parseToYYYYMMDD(l.data);
-  if (dateFromData) return dateFromData;
-
-  const dateFromNome = parseToYYYYMMDD(l.nome);
-  if (dateFromNome) return dateFromNome;
-
-  if ((l as any).createdAt) {
-    const dateFromCreated = parseToYYYYMMDD((l as any).createdAt);
-    if (dateFromCreated) return dateFromCreated;
-  }
-
-  if (l.id && l.id.startsWith('lista-')) {
-    const ts = parseInt(l.id.replace('lista-', ''), 10);
-    if (!isNaN(ts) && ts > 1000000000000) {
-      const d = new Date(ts);
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-    }
-  }
-
-  return null;
-}
-
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [adminTab, setAdminTab] = useState<'metricas' | 'usuarios'>('metricas');
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [quickFilter, setQuickFilter] = useState<'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual' | 'custom'>('todos');
+  const [calculationDate, setCalculationDate] = useState<string>('');
   const [users, setUsers] = useState<User[]>([]);
   const [listas, setListas] = useState<ColetaLista[]>([]);
-  const [refugoScans, setRefugoScans] = useState<RefugoScan[]>([]);
   const [loading, setLoading] = useState(true);
-  const [listasReady, setListasReady] = useState(false);
   const [isVerifiedAdmin, setIsVerifiedAdmin] = useState(false);
-  const [operationError, setOperationError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Modal de métricas para a lista selecionada
   const [selectedListaForMetrics, setSelectedListaForMetrics] = useState<ColetaLista | null>(null);
   const [formAcerto, setFormAcerto] = useState<string>('100');
-  const [formGaiola, setFormGaiola] = useState<string>('Fechado com Sucesso');
+  const [formGaiola, setFormGaiola] = useState<string>('Fechado');
   const [formFaltaram, setFormFaltaram] = useState<string>('0');
-  const [formStatus, setFormStatus] = useState<'em_andamento' | 'finalizada'>('finalizada');
-  const [formData, setFormData] = useState<string>('');
 
   // Modal de Relatório da Lista (Visualização Não Validada & Completa)
   const [selectedListaForReport, setSelectedListaForReport] = useState<ColetaLista | null>(null);
@@ -125,22 +45,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const [copiedItemId, setCopiedItemId] = useState<string | null>(null);
 
   useEffect(() => {
-    setListasReady(false);
     verifyAndFetch();
-    const unsubListas = listenToListas(data => {
+    const unsubListas = listenToListas((data) => {
       setListas(data);
-      setListasReady(true);
-    }, error => {
-      setListas([]);
-      setListasReady(true);
-      setOperationError(error.message);
     });
-    const unsubRefugo = listenToRefugoScans(scans => {
-      setRefugoScans(scans);
-    }, error => setOperationError(error.message));
     return () => {
       unsubListas();
-      unsubRefugo();
     };
   }, [currentUser]);
 
@@ -152,19 +62,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       return;
     }
     
-    try {
-      const freshUser = await getUserById(currentUser.id);
-      if (freshUser?.isAdmin) {
-        setIsVerifiedAdmin(true);
-        await fetchUsers();
-      } else {
-        setIsVerifiedAdmin(false);
-      }
-      setOperationError(null);
-    } catch (error) {
+    const freshUser = await getUserById(currentUser.id);
+    if ((freshUser && freshUser.isAdmin) || (!freshUser && currentUser.isAdmin)) {
+      setIsVerifiedAdmin(true);
+      await fetchUsers();
+    } else {
       setIsVerifiedAdmin(false);
-      setOperationError(error instanceof Error ? error.message : 'Não foi possível verificar as permissões.');
-    } finally { setLoading(false); }
+    }
+    setLoading(false);
   };
 
   const fetchUsers = async () => {
@@ -172,23 +77,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     setUsers(data);
   };
 
-  const runAdminAction = async (action: () => Promise<void>) => {
-    try { await action(); setOperationError(null); }
-    catch (error) { setOperationError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação.'); }
-  };
-
   const toggleApproval = async (userId: string, currentStatus: boolean) => {
-    await runAdminAction(async () => {
-      await updateUserAdminStatus(userId, { isApproved: !currentStatus });
-      await fetchUsers();
-    });
+    await updateUserAdminStatus(userId, { isApproved: !currentStatus });
+    fetchUsers();
   };
 
   const toggleAdmin = async (userId: string, currentStatus: boolean) => {
-    await runAdminAction(async () => {
-      await updateUserAdminStatus(userId, { isAdmin: !currentStatus });
-      await fetchUsers();
-    });
+    await updateUserAdminStatus(userId, { isAdmin: !currentStatus });
+    fetchUsers();
   };
 
   const toggleTabAccess = async (userId: string, currentGroups: string[], tabId: string) => {
@@ -196,35 +92,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       ? currentGroups.filter(t => t !== tabId)
       : [...currentGroups, tabId];
       
-    await runAdminAction(async () => {
-      await updateUserAdminStatus(userId, { allowedGroups: newGroups });
-      await fetchUsers();
-    });
+    await updateUserAdminStatus(userId, { allowedGroups: newGroups });
+    fetchUsers();
   };
 
   const handleOpenMetricsModal = (lista: ColetaLista) => {
     setSelectedListaForMetrics(lista);
     setFormAcerto(lista.porcentagemAcerto !== undefined ? lista.porcentagemAcerto.toString() : '100');
-    setFormGaiola(lista.fechamentoGaiola || 'Fechado com Sucesso');
+    setFormGaiola(lista.fechamentoGaiola || 'Fechado');
     setFormFaltaram(lista.itensFaltaram !== undefined ? lista.itensFaltaram.toString() : '0');
-    setFormStatus(lista.status || 'finalizada');
-    setFormData(lista.data || getLocalDateIso(0));
   };
 
   const handleSaveMetrics = async () => {
     if (!selectedListaForMetrics) return;
     const updated: ColetaLista = {
       ...selectedListaForMetrics,
-      status: formStatus,
-      data: formData || selectedListaForMetrics.data,
+      status: 'finalizada',
       porcentagemAcerto: parseFloat(formAcerto) || 0,
       fechamentoGaiola: formGaiola,
       itensFaltaram: parseInt(formFaltaram, 10) || 0
     };
-    await runAdminAction(async () => {
-      await saveLista(updated);
-      setSelectedListaForMetrics(null);
-    });
+    await saveLista(updated);
+    setSelectedListaForMetrics(null);
   };
 
   // Manter selectedListaForReport atualizada com listas em tempo real
@@ -248,7 +137,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       ...selectedListaForReport,
       itens: updatedItens
     };
-    await runAdminAction(async () => { await saveLista(updatedLista); });
+    setSelectedListaForReport(updatedLista);
+    await saveLista(updatedLista);
   };
 
   // Validar todos os pendentes de uma vez no relatório do Admin
@@ -263,7 +153,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       ...selectedListaForReport,
       itens: updatedItens
     };
-    await runAdminAction(async () => { await saveLista(updatedLista); });
+    setSelectedListaForReport(updatedLista);
+    await saveLista(updatedLista);
   };
 
   // Copiar IDs Não Validados
@@ -300,8 +191,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
     });
   };
 
-  if (loading || !listasReady) {
-    return <PageSkeleton variant="dashboard" />;
+  if (loading) {
+    return <div className="p-8 text-center text-gray-500">Verificando permissões...</div>;
   }
   
   if (!isVerifiedAdmin) {
@@ -323,106 +214,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
   const approvedUsers = users.filter(u => u.isApproved);
   const pendingUsers = users.filter(u => !u.isApproved);
 
-  // Extrai todas as datas únicas existentes nas listas (formato YYYY-MM-DD)
-  const availableDates: string[] = Array.from(
-    new Set<string>(
-      listas
-        .map(l => getListDateIso(l))
-        .filter((d): d is string => Boolean(d))
-    )
-  ).sort((a, b) => b.localeCompare(a)); // Ordenado do mais recente para o mais antigo
-
-  // Aplicar filtro rápido de atalho (Hoje, Ontem, 7 Dias, etc)
-  const applyPreset = (preset: 'todos' | 'hoje' | 'ontem' | '7dias' | '15dias' | 'mes_atual') => {
-    setQuickFilter(preset);
-    const today = getLocalDateIso(0);
-
-    if (preset === 'todos') {
-      setStartDate('');
-      setEndDate('');
-    } else if (preset === 'hoje') {
-      setStartDate(today);
-      setEndDate(today);
-    } else if (preset === 'ontem') {
-      const yesterday = getLocalDateIso(-1);
-      setStartDate(yesterday);
-      setEndDate(yesterday);
-    } else if (preset === '7dias') {
-      setStartDate(getLocalDateIso(-6));
-      setEndDate(today);
-    } else if (preset === '15dias') {
-      setStartDate(getLocalDateIso(-14));
-      setEndDate(today);
-    } else if (preset === 'mes_atual') {
-      const d = new Date();
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      setStartDate(`${yyyy}-${mm}-01`);
-      setEndDate(today);
-    }
-  };
-
-  // Filtrar listas por período selecionado
+  // Filtrar listas por Data de Cálculo
   const filteredListas = listas.filter(l => {
-    if (!startDate && !endDate) return true;
+    if (!calculationDate) return true;
+    if (l.data === calculationDate) return true;
+    if (l.createdAt && l.createdAt.startsWith(calculationDate)) return true;
+    return false;
+  });
 
-    const listIso = getListDateIso(l);
-    if (!listIso) return true;
-
-    if (startDate && listIso < startDate) return false;
-    if (endDate && listIso > endDate) return false;
-
-    return true;
-  }).sort(compareListasNewestFirst);
-
-  // Cálculos de métricas operacionais filtradas pelo Período de Cálculo
+  // Cálculos de métricas operacionais filtradas pela Data de Cálculo
   const listasFinalizadas = filteredListas.filter(l => l.status === 'finalizada');
   const totalItensColetados = filteredListas.reduce((acc, l) => acc + (l.itens?.length || 0), 0);
   const totalValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => i.validado).length || 0), 0);
   const totalNaoValidadosGeral = filteredListas.reduce((acc, l) => acc + (l.itens?.filter(i => !i.validado).length || 0), 0);
   const totalFaltantesGeral = listasFinalizadas.reduce((acc, l) => acc + (l.itensFaltaram || 0), 0);
-  const countRotasBrancas = (lista: ColetaLista) => (lista.itens || []).filter(item =>
-    (item.rota || '').trim().toLowerCase().includes('branca')
-  ).length;
-  const totalBrancasEmFluxo = filteredListas.reduce((acc, lista) => acc + countRotasBrancas(lista), 0);
-  const totalRotasEncontradas = refugoScans.filter(scan => {
-    if (scan.status !== 'found') return false;
-    const scanDate = new Date(scan.scannedAt);
-    if (Number.isNaN(scanDate.getTime())) return false;
-    const scanIso = `${scanDate.getFullYear()}-${String(scanDate.getMonth() + 1).padStart(2, '0')}-${String(scanDate.getDate()).padStart(2, '0')}`;
-    return (!startDate || scanIso >= startDate) && (!endDate || scanIso <= endDate);
-  }).length;
   const mediaAcertoGeral = listasFinalizadas.length > 0 
     ? (listasFinalizadas.reduce((acc, l) => acc + (l.porcentagemAcerto ?? 100), 0) / listasFinalizadas.length).toFixed(1)
-    : '0.0';
-  const listasEmAndamento = filteredListas.length - listasFinalizadas.length;
-  const taxaValidacao = totalItensColetados > 0
-    ? Math.round((totalValidadosGeral / totalItensColetados) * 100) : 0;
-  const taxaConclusao = filteredListas.length > 0
-    ? Math.round((listasFinalizadas.length / filteredListas.length) * 100) : 0;
-  const mediaItensPorLista = filteredListas.length > 0
-    ? Math.round(totalItensColetados / filteredListas.length) : 0;
-  const operatorRanking = Array.from(filteredListas.reduce((ranking, lista) => {
-    for (const item of lista.itens || []) {
-      const operator = item.responsavel?.trim() || lista.responsavel?.trim() || 'Sem responsável';
-      ranking.set(operator, (ranking.get(operator) || 0) + 1);
-    }
-    return ranking;
-  }, new Map<string, number>()), ([name, total]) => ({ name, total }))
-    .sort((left, right) => right.total - left.total || left.name.localeCompare(right.name))
-    .slice(0, 5);
-  const maxOperatorTotal = operatorRanking[0]?.total || 1;
-  const listasComAtencao = filteredListas.filter(lista =>
-    lista.status !== 'finalizada' || (lista.itens || []).some(item => !item.validado) || (lista.itensFaltaram || 0) > 0);
-  const listaMaisRecente = filteredListas[0];
+    : '100.0';
+
+  const todayISO = new Date().toISOString().split('T')[0];
+  const yesterdayISO = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
   return (
-    <div className="admin-presentation space-y-6 animate-in pb-12">
-      {operationError && (
-        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
-          {operationError}
-        </div>
-      )}
+    <div className="space-y-6 animate-in pb-12">
       {/* NAVEGAÇÃO DE ABAS DO PAINEL ADMIN */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-200 bg-white p-2 rounded-2xl shadow-sm gap-3">
         <div className="flex items-center gap-2 flex-wrap">
@@ -437,9 +251,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
           >
             <BarChart3 className="w-4 h-4" />
             <span>Métricas & Fechamentos</span>
-            {(startDate || endDate) && (
+            {calculationDate && (
               <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] font-black">
-                {startDate === endDate ? startDate.split('-').reverse().join('/') : 'Período Filtrado'}
+                {calculationDate.split('-').reverse().join('/')}
               </span>
             )}
           </button>
@@ -473,302 +287,130 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       {/* ABA 1: MÉTRICAS & CÁLCULOS */}
       {adminTab === 'metricas' && (
         <div className="space-y-6 animate-in fade-in">
-          {/* SELETOR DE PERÍODO & DATA DE CÁLCULO */}
-          <div className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col gap-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-gray-100 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-blue-50 text-[#3483FA] rounded-xl border border-blue-100">
-                  <Calendar className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight flex items-center gap-2">
-                    <span>Período & Data de Cálculo</span>
-                    {(startDate || endDate) && (
-                      <span className="bg-blue-100 text-[#3483FA] px-2 py-0.5 rounded text-[10px] font-bold">
-                        Filtrado
-                      </span>
-                    )}
-                  </h3>
-                </div>
+          {/* SELETOR DE DATA DE CÁLCULO */}
+          <div className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-blue-50 text-[#3483FA] rounded-xl border border-blue-100">
+                <Calendar className="w-5 h-5" />
               </div>
-
-              {/* BOTOES DE ATALHO RÁPIDO */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => applyPreset('todos')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'todos' && !startDate && !endDate
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Todas as Datas
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('hoje')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'hoje'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Hoje
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('ontem')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'ontem'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Ontem
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('7dias')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === '7dias'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Última Semana (7d)
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('15dias')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === '15dias'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  15 Dias
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('mes_atual')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
-                    quickFilter === 'mes_atual'
-                      ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  Mês Atual
-                </button>
+              <div>
+                <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight flex items-center gap-2">
+                  <span>Data de Cálculo das Métricas</span>
+                  {calculationDate && (
+                    <span className="bg-blue-100 text-[#3483FA] px-2 py-0.5 rounded text-[10px] font-bold">
+                      Filtrado
+                    </span>
+                  )}
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {calculationDate 
+                    ? `Métricas operacionais calculadas exclusivamente para ${calculationDate.split('-').reverse().join('/')}` 
+                    : 'Exibindo acumulado geral de todas as datas de coleta registradas'}
+                </p>
               </div>
             </div>
 
-            {/* BARRA DE INTERVALO CUSTOMIZADO DE DATAS */}
-            <div className="flex items-center gap-3 flex-wrap pt-1">
-              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
-                <span className="text-[10px] font-black text-gray-500 uppercase">De:</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setCalculationDate('')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                  !calculationDate 
+                    ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                Todas as Datas
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCalculationDate(todayISO)}
+                className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                  calculationDate === todayISO
+                    ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                Hoje
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCalculationDate(yesterdayISO)}
+                className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                  calculationDate === yesterdayISO
+                    ? 'bg-[#3483FA] text-white border-[#3483FA] shadow-xs' 
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                Ontem
+              </button>
+
+              <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-xl px-3 py-1 shadow-2xs">
+                <span className="text-[10px] font-black text-gray-400 uppercase">Data:</span>
                 <input
                   type="date"
-                  value={startDate}
-                  onChange={(e) => {
-                    setStartDate(e.target.value);
-                    setQuickFilter('custom');
-                  }}
+                  value={calculationDate}
+                  onChange={(e) => setCalculationDate(e.target.value)}
                   className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer"
                 />
-              </div>
-
-              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
-                <span className="text-[10px] font-black text-gray-500 uppercase">Até:</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => {
-                    setEndDate(e.target.value);
-                    setQuickFilter('custom');
-                  }}
-                  className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer"
-                />
-              </div>
-
-              {availableDates.length > 0 && (
-                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 shadow-2xs">
-                  <span className="text-[10px] font-black text-gray-500 uppercase">Data com Lista:</span>
-                  <select
-                    value={startDate === endDate ? startDate : ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setStartDate(val);
-                      setEndDate(val);
-                      setQuickFilter('custom');
-                    }}
-                    className="text-xs font-bold text-gray-800 bg-transparent focus:outline-none cursor-pointer max-w-[160px]"
+                {calculationDate && (
+                  <button
+                    type="button"
+                    onClick={() => setCalculationDate('')}
+                    title="Limpar filtro de data"
+                    className="text-gray-400 hover:text-red-500 font-bold px-1"
                   >
-                    <option value="">Todas com registro...</option>
-                    {availableDates.map(dateIso => {
-                      const brDisplay = dateIso.split('-').reverse().join('/');
-                      return (
-                        <option key={dateIso} value={dateIso}>
-                          {brDisplay}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
-
-              {(startDate || endDate) && (
-                <button
-                  type="button"
-                  onClick={() => applyPreset('todos')}
-                  className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Limpar Filtros</span>
-                </button>
-              )}
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* VISÃO GERAL */}
-          <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 text-white shadow-xl">
-            <div className="border-b border-white/10 p-6">
-              <h2 className="text-xl font-black tracking-tight">Visão geral</h2>
+          {/* PAINEL DE CARDS DE MÉTRICAS */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Activity className="w-6 h-6 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">Resultado Operacional de Cálculo</h2>
+                  <p className="text-xs text-gray-500">Métricas geradas em tempo real com base na data selecionada</p>
+                </div>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-px bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="bg-slate-950 p-5">
-                <div className="mb-3 flex items-center justify-between text-blue-300">
-                  <span className="text-[11px] font-black uppercase tracking-widest">Volume coletado</span>
-                  <Package className="h-4 w-4" />
-                </div>
-                <div className="text-3xl font-black tabular-nums">{totalItensColetados.toLocaleString('pt-BR')}</div>
-                <p className="mt-1 text-xs text-slate-400">{mediaItensPorLista.toLocaleString('pt-BR')} itens por lista, em média</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-blue-700">{totalItensColetados}</div>
+                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Total Coletado</div>
               </div>
-              <div className="bg-slate-950 p-5">
-                <div className="mb-3 flex items-center justify-between text-emerald-300">
-                  <span className="text-[11px] font-black uppercase tracking-widest">Taxa de validação</span>
-                  <Target className="h-4 w-4" />
-                </div>
-                <div className="text-3xl font-black tabular-nums">{taxaValidacao}%</div>
-                <p className="mt-1 text-xs text-slate-400">{totalValidadosGeral.toLocaleString('pt-BR')} confirmados de {totalItensColetados.toLocaleString('pt-BR')}</p>
+              <div className="bg-emerald-50/80 border border-emerald-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-emerald-700">{totalValidadosGeral}</div>
+                <div className="text-xs text-emerald-600 font-bold uppercase mt-1">Validados</div>
               </div>
-              <div className="bg-slate-950 p-5">
-                <div className="mb-3 flex items-center justify-between text-violet-300">
-                  <span className="text-[11px] font-black uppercase tracking-widest">Listas concluídas</span>
-                  <CheckCircle2 className="h-4 w-4" />
+              <div className={`p-4 rounded-xl border ${
+                totalNaoValidadosGeral > 0 
+                  ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200' 
+                  : 'bg-gray-50 border-gray-100'
+              }`}>
+                <div className="text-2xl font-black text-amber-800">{totalNaoValidadosGeral}</div>
+                <div className="text-xs text-amber-700 font-bold uppercase mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                  Não Validados
                 </div>
-                <div className="text-3xl font-black tabular-nums">{listasFinalizadas.length}<span className="text-lg text-slate-500">/{filteredListas.length}</span></div>
-                <p className="mt-1 text-xs text-slate-400">{taxaConclusao}% do período encerrado</p>
               </div>
-              <div className="bg-slate-950 p-5">
-                <div className="mb-3 flex items-center justify-between text-amber-300">
-                  <span className="text-[11px] font-black uppercase tracking-widest">Média de acerto</span>
-                  <TrendingUp className="h-4 w-4" />
-                </div>
-                <div className="text-3xl font-black tabular-nums">{mediaAcertoGeral}%</div>
-                <p className="mt-1 text-xs text-slate-400">Baseada nas listas finalizadas</p>
+              <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-blue-800">{mediaAcertoGeral}%</div>
+                <div className="text-xs text-blue-600 font-bold uppercase mt-1">Média de Acerto</div>
               </div>
-              <div className="bg-slate-950 p-5">
-                <div className="mb-3 flex items-center justify-between text-rose-300">
-                  <span className="text-[11px] font-black uppercase tracking-widest">Rotas brancas</span>
-                  <AlertCircle className="h-4 w-4" />
-                </div>
-                <div className="text-3xl font-black tabular-nums">{totalBrancasEmFluxo.toLocaleString('pt-BR')}</div>
-                <p className="mt-1 text-xs text-slate-400">Brancas encaminhadas no período</p>
-              </div>
-              <div className="bg-slate-950 p-5">
-                <div className="mb-3 flex items-center justify-between text-cyan-300">
-                  <span className="text-[11px] font-black uppercase tracking-widest">Rotas encontradas</span>
-                  <Target className="h-4 w-4" />
-                </div>
-                <div className="text-3xl font-black tabular-nums">{totalRotasEncontradas.toLocaleString('pt-BR')}</div>
-                <p className="mt-1 text-xs text-slate-400">Pacotes localizados no Controle Refugo</p>
+              <div className="bg-purple-50/80 border border-purple-100 p-4 rounded-xl">
+                <div className="text-2xl font-black text-purple-700">{listasFinalizadas.length} / {filteredListas.length}</div>
+                <div className="text-xs text-purple-600 font-bold uppercase mt-1">Finalizadas</div>
               </div>
             </div>
-          </section>
-
-          <div className="grid gap-4 lg:grid-cols-3">
-            <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="rounded-xl bg-blue-50 p-2 text-blue-600"><Activity className="h-5 w-5" /></div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-900">Progresso operacional</h3>
-                  <p className="text-xs text-gray-500">Leitura rápida para acompanhamento</p>
-                </div>
-              </div>
-              <div className="space-y-5">
-                <div>
-                  <div className="mb-2 flex justify-between text-xs font-bold text-gray-600"><span>Itens validados</span><span>{taxaValidacao}%</span></div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${taxaValidacao}%` }} /></div>
-                </div>
-                <div>
-                  <div className="mb-2 flex justify-between text-xs font-bold text-gray-600"><span>Listas finalizadas</span><span>{taxaConclusao}%</span></div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-blue-500" style={{ width: `${taxaConclusao}%` }} /></div>
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center gap-3">
-                <div className="rounded-xl bg-amber-50 p-2 text-amber-600"><Trophy className="h-5 w-5" /></div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-900">Destaques do período</h3>
-                  <p className="text-xs text-gray-500">Dados para abertura da reunião</p>
-                </div>
-              </div>
-              <dl className="divide-y divide-gray-100 text-sm">
-                <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-gray-500">Maior volume</dt><dd className="max-w-[55%] truncate font-black text-gray-900">{operatorRanking[0]?.name || 'Sem dados'}</dd></div>
-                <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-gray-500">Média por lista</dt><dd className="font-black text-gray-900">{mediaItensPorLista.toLocaleString('pt-BR')} itens</dd></div>
-                <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-gray-500">Lista mais recente</dt><dd className="max-w-[55%] truncate font-black text-gray-900">{listaMaisRecente?.nome || 'Sem dados'}</dd></div>
-              </dl>
-            </section>
-
-            <section className={`rounded-2xl border p-5 shadow-sm ${listasComAtencao.length > 0 ? 'border-amber-200 bg-amber-50/60' : 'border-emerald-200 bg-emerald-50/60'}`}>
-              <div className="mb-4 flex items-center gap-3">
-                <div className={`rounded-xl p-2 ${listasComAtencao.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                  {listasComAtencao.length > 0 ? <AlertTriangle className="h-5 w-5" /> : <CheckCircle className="h-5 w-5" />}
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-900">Pontos de atenção</h3>
-                  <p className="text-xs text-gray-600">Pendências que pedem decisão</p>
-                </div>
-              </div>
-              <dl className="grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl bg-white/80 p-3"><dd className="text-xl font-black text-amber-800">{listasEmAndamento}</dd><dt className="mt-1 text-[10px] font-bold uppercase text-gray-500">Em andamento</dt></div>
-                <div className="rounded-xl bg-white/80 p-3"><dd className="text-xl font-black text-amber-800">{totalNaoValidadosGeral}</dd><dt className="mt-1 text-[10px] font-bold uppercase text-gray-500">Não validados</dt></div>
-                <div className="rounded-xl bg-white/80 p-3"><dd className="text-xl font-black text-red-700">{totalFaltantesGeral}</dd><dt className="mt-1 text-[10px] font-bold uppercase text-gray-500">Faltantes</dt></div>
-              </dl>
-            </section>
           </div>
-
-          {operatorRanking.length > 0 && (
-            <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-              <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h3 className="text-base font-black text-gray-900">Participação por responsável</h3>
-                  <p className="text-xs text-gray-500">Cinco maiores volumes de leitura no período selecionado</p>
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">Total de itens registrados</span>
-              </div>
-              <div className="grid gap-x-8 gap-y-4 lg:grid-cols-2">
-                {operatorRanking.map((operator, index) => (
-                  <div key={operator.name} className="space-y-2">
-                    <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="flex min-w-0 items-center gap-2 font-bold text-gray-700"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] text-white">{index + 1}</span><span className="truncate">{operator.name}</span></span>
-                      <span className="font-black tabular-nums text-gray-900">{operator.total.toLocaleString('pt-BR')}</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" style={{ width: `${Math.max(6, Math.round((operator.total / maxOperatorTotal) * 100))}%` }} /></div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
 
           {/* TABELA DE LISTAS DA DATA DE CÁLCULO */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
@@ -777,6 +419,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                 <Package className="w-6 h-6 text-[#3483FA]" />
                 <div>
                   <h2 className="text-lg font-bold text-gray-800">Listas de Coleta do Período</h2>
+                  <p className="text-xs text-gray-500">
+                    {calculationDate 
+                      ? `Exibindo listas criadas em ${calculationDate.split('-').reverse().join('/')}` 
+                      : 'Todas as listas cadastradas no sistema'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -794,8 +441,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <th className="py-3 px-4 text-center">Acerto (%)</th>
                     <th className="py-3 px-4 text-center">Gaiola</th>
                     <th className="py-3 px-4 text-center">Faltaram</th>
-                    <th className="py-3 px-4 text-center">Rotas brancas</th>
-                    <th className="py-3 px-4 text-center">Rotas encontradas</th>
                     <th className="py-3 px-4 text-center">Ações</th>
                   </tr>
                 </thead>
@@ -865,26 +510,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                       <td className="py-3.5 px-4 text-center font-bold text-red-600">
                         {lista.itensFaltaram !== undefined ? lista.itensFaltaram : '-'}
                       </td>
-                      <td className="py-3.5 px-4 text-center font-bold text-rose-700">
-                        {countRotasBrancas(lista).toLocaleString('pt-BR')}
-                      </td>
-                      <td className="py-3.5 px-4 text-center font-bold text-cyan-700">
-                        {(lista.rotasEncontradas || 0).toLocaleString('pt-BR')}
-                      </td>
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
-                            type="button"
-                            onClick={() => handleOpenMetricsModal(lista)}
-                            className="px-3 py-1.5 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border bg-[#3483FA] hover:bg-blue-600 text-white border-blue-600"
-                            title="Editar métricas (Acerto %, Gaiola, Faltaram, Status, Data)"
-                          >
-                            <Edit3 className="w-3.5 h-3.5 text-white" />
-                            <span>Editar Métricas</span>
-                          </button>
-
-                          <button
-                            type="button"
                             onClick={() => {
                               setSelectedListaForReport(lista);
                               setReportTab(naoValidadosCount > 0 ? 'nao_validados' : 'todos');
@@ -900,6 +528,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                             <FileText className="w-3.5 h-3.5 text-amber-700" />
                             <span>Relatório {naoValidadosCount > 0 ? `(${naoValidadosCount})` : ''}</span>
                           </button>
+
+                          <button
+                            onClick={() => handleOpenMetricsModal(lista)}
+                            className="px-3 py-1.5 bg-[#3483FA] hover:bg-blue-600 text-white font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            {lista.status === 'finalizada' ? 'Métricas' : 'Finalizar'}
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -908,7 +544,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                   {filteredListas.length === 0 && (
                     <tr>
                       <td colSpan={10} className="py-12 text-center text-gray-400 font-medium">
-                        Nenhuma lista de coleta encontrada para o período selecionado.
+                        Nenhuma lista de coleta encontrada para a data selecionada ({calculationDate.split('-').reverse().join('/')}).
                       </td>
                     </tr>
                   )}
@@ -1054,9 +690,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
 
                       <td className="px-4 py-4">
                         <div className="flex flex-wrap gap-1.5">
-                          <span className="px-2.5 py-1 border rounded-lg text-[11px] font-bold bg-emerald-50 border-emerald-200 text-emerald-700">
-                            Listas de Coleta · Todos
-                          </span>
                           {TABS.map(tab => (
                             <button
                               key={tab.id}
@@ -1103,30 +736,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                 <p className="text-xs font-bold text-gray-400 uppercase">Lista Selecionada</p>
                 <p className="text-base font-black text-gray-800">{selectedListaForMetrics.nome}</p>
                 <p className="text-xs font-bold text-gray-600 mt-1">Total de Bips Coletados: <span className="text-[#3483FA]">{selectedListaForMetrics.itens?.length || 0} itens</span></p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <label className="text-xs font-black uppercase text-gray-600">Status da Lista</label>
-                  <select
-                    value={formStatus}
-                    onChange={(e) => setFormStatus(e.target.value as 'em_andamento' | 'finalizada')}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3483FA]"
-                  >
-                    <option value="em_andamento">Em Andamento</option>
-                    <option value="finalizada">Finalizada</option>
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-black uppercase text-gray-600">Data da Lista</label>
-                  <input
-                    type="date"
-                    value={formData}
-                    onChange={(e) => setFormData(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3483FA]"
-                  />
-                </div>
               </div>
 
               <div className="space-y-2">
@@ -1241,7 +850,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <p className="text-xs text-gray-500 mt-1 flex items-center gap-3 font-medium">
                       <span>Data: <strong className="text-gray-700">{selectedListaForReport.data}</strong></span>
                       <span>•</span>
-                      <span>Saída: <strong className="text-gray-700">{selectedListaForReport.saidaPadrao}</strong></span>
+                      <span>Saída: <strong className="text-gray-700">{selectedListaForReport.saida}</strong></span>
                       <span>•</span>
                       <span>Responsável: <strong className="text-gray-700">{selectedListaForReport.responsavel || 'Operador'}</strong></span>
                     </p>

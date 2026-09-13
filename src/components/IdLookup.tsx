@@ -1,26 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Search, Copy, Check, AlertCircle, Layers, X, ChevronDown, ChevronUp, Upload, Filter, ListPlus } from 'lucide-react';
 import { CsvRow, LookupMatch, ColetaLista, ColetaItem } from '../types';
-import { cleanDigits } from '../utils/csvParser';
-import { listenToListas } from '../lib/coletaSync';
-import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
-import { PageSkeleton } from './PageSkeleton';
-
-const naturalOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-
-function localDateKey(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function listaDateKey(value: string): string {
-  const normalized = String(value || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
-  const match = normalized.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
-  return match ? `${match[3]}-${match[2]}-${match[1]}` : normalized;
-}
+import { searchIdsInRows, cleanDigits } from '../utils/csvParser';
+import { listenToListas } from '../lib/firebase';
 
 interface IdLookupProps {
   rows: CsvRow[];
@@ -31,61 +13,18 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
   const [inputText, setInputText] = useState<string>('');
   const [saidaFilter, setSaidaFilter] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
-  const [copiedDetailId, setCopiedDetailId] = useState<string | null>(null);
-  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [copiedDetailIdx, setCopiedDetailIdx] = useState<number | null>(null);
+  const [expandedRowIdx, setExpandedRowIdx] = useState<number | null>(null);
   const [listas, setListas] = useState<ColetaLista[]>([]);
-  const [listasReady, setListasReady] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
   const [showGruposModal, setShowGruposModal] = useState(false);
-  const [page, setPage] = useState(0);
-  const listasDeGruposDoDia = useMemo(() => {
-    const today = localDateKey();
-    return listas.filter(lista => listaDateKey(lista.data) === today && lista.tipo === 'grupos' && lista.grupos?.length);
-  }, [listas]);
 
   useEffect(() => {
-    const unsubscribe = listenToListas(data => { setListas(data); setListasReady(true); setSyncError(null); }, error => {
-      setListas([]); setListasReady(true); setSyncError(error.message);
-    });
+    const unsubscribe = listenToListas((data) => setListas(data));
     return () => unsubscribe();
   }, []);
 
-  // Reuse the base index while typing; rebuild only when the base changes.
-  const rowMap = useMemo(() => {
-    const rowMap = new Map<string, CsvRow>();
-    if (rows && rows.length > 0) {
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        if (r.id) rowMap.set(r.id, r);
-        if (r.originalId) rowMap.set(r.originalId, r);
-        if (r.cleanId) rowMap.set(r.cleanId, r);
-        if (r.concat) rowMap.set(r.concat, r);
-      }
-    }
-    return rowMap;
-  }, [rows]);
-
-  const listaItemMap = useMemo(() => {
-    const listaItemMap = new Map<string, { item: ColetaItem; lista: ColetaLista; grupoNome?: string }>();
-    if (listas && listas.length > 0) {
-      for (const lista of listas) {
-        if (!lista.itens) continue;
-        const groupNames = new Map<string, string>((lista.grupos || []).map((grupo) => [grupo.id, grupo.nome]));
-        for (const item of lista.itens) {
-          if (!item.codigo) continue;
-          const cleanCod = cleanDigits(item.codigo);
-          const grupoNome = item.grupoId ? groupNames.get(item.grupoId) || '' : '';
-          const entry = { item, lista, grupoNome };
-          listaItemMap.set(item.codigo, entry);
-          if (cleanCod) listaItemMap.set(cleanCod, entry);
-        }
-      }
-    }
-    return listaItemMap;
-  }, [listas]);
-
   const matches: LookupMatch[] = useMemo(() => {
-    if (!inputText.trim()) return [];
+    if (!inputText || !inputText.trim()) return [];
 
     const rawTerms = inputText
       .split(/[\n\r,;\t\s]+/)
@@ -101,9 +40,43 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
 
       const cleanTerm = cleanDigits(term);
 
-      // O(1) Hash Map lookups
-      const matchedRow = rowMap.get(term) || (cleanTerm ? rowMap.get(cleanTerm) : undefined);
-      const foundInLista = listaItemMap.get(term) || (cleanTerm ? listaItemMap.get(cleanTerm) : null);
+      // 1. Procurar nas linhas da base carregada via CSV (se houver)
+      const matchedRow = rows && rows.length > 0 ? rows.find((r) => {
+        if (r.id === term || r.originalId === term) return true;
+        if (cleanTerm.length > 0 && r.cleanId === cleanTerm) return true;
+        if (r.id.includes(term)) return true;
+        if (r.concat && (r.concat === term || cleanDigits(r.concat) === cleanTerm)) return true;
+        return false;
+      }) : undefined;
+
+      // 2. Procurar em todas as listas de coleta (listas do Firestore)
+      let foundInLista: { item: ColetaItem; lista: ColetaLista; grupoNome?: string } | null = null;
+
+      for (const lista of listas) {
+        if (!lista.itens || lista.itens.length === 0) continue;
+
+        const item = lista.itens.find((i) => {
+          if (!i.codigo) return false;
+          const cleanCod = cleanDigits(i.codigo);
+          return (
+            i.codigo === term ||
+            (cleanTerm.length > 0 && cleanCod === cleanTerm) ||
+            i.codigo === cleanTerm ||
+            i.codigo.includes(term)
+          );
+        });
+
+        if (item) {
+          let grupoNome = '';
+          if (item.grupoId && lista.grupos) {
+            const g = lista.grupos.find((grp) => grp.id === item.grupoId);
+            if (g) grupoNome = g.nome;
+          }
+          foundInLista = { item, lista, grupoNome };
+          // Se o item já tem motivo e saída preenchidos, priorizar este
+          if (item.motivo && item.saida) break;
+        }
+      }
 
       // Extrair dados da lista de coleta encontrada
       const motivoLista = foundInLista?.item.motivo || foundInLista?.lista.motivoPadrao || '';
@@ -180,7 +153,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     }
 
     return results;
-  }, [inputText, rowMap, listaItemMap]);
+  }, [inputText, rows, listas]);
 
   // Extract unique Saída values from found search matches (or loaded rows if no search)
   const availableSaidas = useMemo(() => {
@@ -214,25 +187,21 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
 
       // Both found: sort by Group numerically (1, 2, 3...), then ID
       if (a.found && b.found && a.row && b.row) {
-        const groupComparison = naturalOrder.compare(a.row.group || '', b.row.group || '');
+        const groupComparison = (a.row.group || '').localeCompare(b.row.group || '', undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
         if (groupComparison !== 0) return groupComparison;
 
         const idA = a.row.id || a.row.cleanId || a.searchTerm;
         const idB = b.row.id || b.row.cleanId || b.searchTerm;
-        return naturalOrder.compare(idA, idB);
+        return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
       }
 
       // Both not found: sort by search term
-      return naturalOrder.compare(a.searchTerm, b.searchTerm);
+      return a.searchTerm.localeCompare(b.searchTerm, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [matches, saidaFilter]);
-
-  useEffect(() => {
-    setPage(0);
-  }, [inputText, saidaFilter]);
-
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(filteredMatches.length / RESULTS_PAGE_SIZE) - 1));
-  const pageMatches = filteredMatches.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE);
 
   // Group breakdown for matched IDs in numeric order (1, 2, 3...)
   const foundGroupCounts = useMemo(() => {
@@ -249,7 +218,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
       .sort((a, b) => {
         if (a.name === 'ERROS') return 1;
         if (b.name === 'ERROS') return -1;
-        return naturalOrder.compare(a.name, b.name);
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
       });
   }, [filteredMatches]);
 
@@ -268,7 +237,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCopySingleRowDetail = (match: LookupMatch) => {
+  const handleCopySingleRowDetail = (match: LookupMatch, idx: number) => {
     const groupText = match.found && match.row ? match.row.group : 'NÃO ENCONTRADO';
     const saidaText = match.found && match.row ? (match.row.saida || '') : '';
     const motivoText = match.found && match.row ? (match.row.motivo || '') : '';
@@ -276,8 +245,8 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     const row = [match.searchTerm, groupText, saidaText, motivoText].join('\t');
 
     navigator.clipboard.writeText(`${header}\n${row}`);
-    setCopiedDetailId(match.searchTerm);
-    setTimeout(() => setCopiedDetailId(null), 2000);
+    setCopiedDetailIdx(idx);
+    setTimeout(() => setCopiedDetailIdx(null), 2000);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -316,11 +285,8 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
     e.target.value = '';
   };
 
-  if (!listasReady) return <PageSkeleton variant="table" />;
-
   return (
     <div className="space-y-4">
-      {syncError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{syncError}</div>}
       {/* Top Search Input Box */}
       <div className="bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
         {/* Beautiful Header */}
@@ -397,7 +363,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-amber-900 text-xs">
               <div className="flex items-start sm:items-center gap-3">
                 <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
-                <p className="leading-relaxed font-medium">Nenhum CSV base carregado. A consulta está buscando nas listas de coleta. Carregue a base para cruzar também os dados do CSV.</p>
+                <p className="leading-relaxed font-medium">Nenhum CSV base carregado. A consulta precisa da base principal para cruzar os dados.</p>
               </div>
               <button
                 onClick={onNavigateToUpload}
@@ -531,11 +497,10 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 text-gray-800 text-[11px]">
-                {pageMatches.map((match, pageIndex) => {
-                  const idx = currentPage * RESULTS_PAGE_SIZE + pageIndex;
-                  const isExpanded = expandedRowId === match.searchTerm;
+                {filteredMatches.map((match, idx) => {
+                  const isExpanded = expandedRowIdx === idx;
                   return (
-                    <React.Fragment key={match.searchTerm}>
+                    <React.Fragment key={`${match.searchTerm}-${idx}`}>
                       <tr
                         className={`hover:bg-amber-50/50 transition-colors ${
                           !match.found ? 'bg-red-50/30' : idx % 2 === 1 ? 'bg-gray-50/40' : 'bg-white'
@@ -602,11 +567,11 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
                         <td className="py-2 px-3 whitespace-nowrap text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
-                              onClick={() => handleCopySingleRowDetail(match)}
+                              onClick={() => handleCopySingleRowDetail(match, idx)}
                               className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-300 text-[10px] font-mono font-medium transition-colors"
                               title="Copiar ID, Grupo e Saída"
                             >
-                              {copiedDetailId === match.searchTerm ? (
+                              {copiedDetailIdx === idx ? (
                                 <span className="text-green-600 font-bold">Copiado</span>
                               ) : (
                                 <span>Copiar</span>
@@ -615,7 +580,7 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
 
                             {match.found && match.row && (
                               <button
-                                onClick={() => setExpandedRowId(isExpanded ? null : match.searchTerm)}
+                                onClick={() => setExpandedRowIdx(isExpanded ? null : idx)}
                                 className="p-1 text-gray-400 hover:text-gray-700 bg-gray-50 hover:bg-gray-100 rounded border border-gray-200"
                                 title="Detalhes completos"
                               >
@@ -676,7 +641,6 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
               </tbody>
             </table>
           </div>
-          <ResultPagination total={filteredMatches.length} page={currentPage} onPageChange={setPage} />
         </div>
       ) : null}
 
@@ -698,13 +662,13 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             </div>
 
             <div className="overflow-y-auto pr-1 space-y-4">
-              {listasDeGruposDoDia.length === 0 ? (
+              {listas.filter(l => l.tipo === 'grupos' && l.grupos && l.grupos.length > 0).length === 0 ? (
                 <div className="p-8 text-center bg-gray-50 rounded-xl border border-dashed border-gray-300">
                   <Layers className="w-8 h-8 text-gray-300 mx-auto mb-3" />
-                  <p className="text-gray-500 text-sm font-medium">Nenhuma lista de grupos encontrada para hoje.</p>
+                  <p className="text-gray-500 text-sm font-medium">Nenhuma Lista com Grupos encontrada.</p>
                 </div>
               ) : (
-                listasDeGruposDoDia.map(lista => (
+                listas.filter(l => l.tipo === 'grupos' && l.grupos && l.grupos.length > 0).map(lista => (
                   <div key={lista.id} className="border border-gray-200 rounded-xl overflow-hidden">
                     <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
                       <span className="font-bold text-sm text-gray-800">{lista.nome}</span>

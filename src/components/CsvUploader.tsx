@@ -1,9 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { Upload } from 'lucide-react';
-import { PageSkeleton } from './PageSkeleton';
 
 interface CsvUploaderProps {
-  onLoadText: (rawText: string, fileName?: string) => void | Promise<void>;
+  onLoadText: (rawText: string) => void;
   currentTotalRows: number;
 }
 
@@ -12,40 +11,40 @@ export const CsvUploader: React.FC<CsvUploaderProps> = ({
   currentTotalRows,
 }) => {
   const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const loadFile = async (file: File) => {
-    setIsLoading(true);
-    setFileError(null);
-    try {
-      const text = await file.text();
-      if (text) await onLoadText(text, file.name);
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : 'Não foi possível ler o arquivo selecionado.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) void loadFile(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (text) {
+          onLoadText(text);
+        }
+      };
+      reader.readAsText(file);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     const file = e.dataTransfer.files?.[0];
-    if (file) void loadFile(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (text) {
+          onLoadText(text);
+        }
+      };
+      reader.readAsText(file);
+    }
   };
-
-  if (isLoading) return <PageSkeleton variant="form" />;
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
-      {fileError && <div role="alert" className="border border-red-200 bg-red-50 p-3 text-sm text-red-700">{fileError}</div>}
       {/* File Upload Dropzone */}
       <div
         onDragOver={(e) => {
