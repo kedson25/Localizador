@@ -157,7 +157,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       return;
     }
     const generation = scanGeneration.current;
-    if (generation === null) { setSyncError('Aguarde a sincronização do histórico antes de bipar.'); return; }
+    if (!scansReady) { setSyncError('Aguarde a sincronização do histórico antes de bipar.'); return; }
     const foundRow = rowByCode.get(codeKey(cleanInput));
     await runOperation(async () => {
       await saveRefugoScan({
