@@ -204,7 +204,7 @@ export interface ColetorData {
 /**
  * Helper to prevent Firebase calls from hanging indefinitely on network issues
  */
-function withTimeout<T>(promise: Promise<T>, ms: number = 25000): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
@@ -543,7 +543,7 @@ export function getListaSortTimestamp(lista: ColetaLista): number {
 }
 
 /**
- * Escuta todas las listas (apenas metadados) em tempo real diretamente do Firestore.
+ * Escuta todas as listas (apenas metadados) em tempo real diretamente do Firestore.
  * Zero uso de LocalStorage ou cache em RAM como fonte.
  */
 export function listenToListas(callback: (listas: ColetaLista[]) => void): () => void {
@@ -552,16 +552,12 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
   return onSnapshot(colRef, (snap) => {
     const remoteListas: ColetaLista[] = snap.docs.map(docSnap => {
       const data = docSnap.data();
-      const legacyItens = Array.isArray(data.itens) ? data.itens : [];
-      const totalItens = typeof data.totalItens === 'number' ? data.totalItens : legacyItens.length;
-      const totalValidados = typeof data.totalValidados === 'number' ? data.totalValidados : legacyItens.filter((i: any) => i.validado).length;
-
       return {
         ...data,
         id: docSnap.id,
-        itens: legacyItens,
-        totalItens,
-        totalValidados
+        itens: [], // Empty array to prevent map/length crashes
+        totalItens: typeof data.totalItens === 'number' ? data.totalItens : 0,
+        totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0
       } as ColetaLista;
     });
 
@@ -573,49 +569,24 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
     });
 
     callback(remoteListas);
-
-    // Trigger background migration for legacy lists with inline array itens
-    snap.docs.forEach(docSnap => {
-      const data = docSnap.data();
-      if (Array.isArray(data.itens) && data.itens.length > 0 && data.migrationVersion !== 2) {
-        migrateSingleLegacyLista(docSnap.id, data.itens).catch(err => {
-          console.warn('Erro na migração em segundo plano da lista', docSnap.id, err);
-        });
-      }
-    });
   }, (error) => {
     console.error('Erro ao escutar listas de coleta no Firestore:', error);
   });
 }
 
 /**
- * Escuta os itens de uma lista específica em tempo real (otimizado com limite de 1500 itens para ultra performance).
+ * Escuta os itens de uma lista específica em tempo real.
  */
 export function listenToListaItens(listaId: string, callback: (itens: ColetaItem[]) => void): () => void {
   if (!listaId) return () => {};
   const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
-  const q = query(colRef, orderBy('timestamp', 'desc'), limit(1500));
+  const q = query(colRef, orderBy('timestamp', 'desc'));
   return onSnapshot(q, (snap) => {
-    const items = snap.docs.map(d => ({ ...(d.data() as any), id: d.id } as ColetaItem));
+    const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
     callback(items);
   }, (err) => {
     console.error('Erro ao escutar itens da lista:', err);
   });
-}
-
-/**
- * Busca uma vez todos os itens da subcoleção de uma lista.
- */
-export async function getListaItensOnce(listaId: string): Promise<ColetaItem[]> {
-  if (!listaId) return [];
-  try {
-    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
-    const snap = await getDocs(colRef);
-    return snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
-  } catch (err) {
-    console.error('Erro ao buscar itens da lista uma vez:', err);
-    return [];
-  }
 }
 
 /**
@@ -633,13 +604,12 @@ export function listenToActiveLista(listaId: string, callback: (lista: ColetaLis
       return;
     }
     const data = snap.data();
-    const legacyItens = Array.isArray(data.itens) ? data.itens : [];
     callback({
       ...data,
       id: snap.id,
-      itens: legacyItens,
-      totalItens: typeof data.totalItens === 'number' ? data.totalItens : legacyItens.length,
-      totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : legacyItens.filter((i: any) => i.validado).length
+      itens: [], // Empty array to prevent map/length crashes
+      totalItens: typeof data.totalItens === 'number' ? data.totalItens : 0,
+      totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0
     } as ColetaLista);
   }, (err) => {
     console.warn('Erro ao escutar lista ativa:', err);
@@ -655,13 +625,12 @@ export async function getListaById(listaId: string): Promise<ColetaLista | null>
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       const data = snap.data();
-      const legacyItens = Array.isArray(data.itens) ? data.itens : [];
       return {
         ...data,
         id: snap.id,
-        itens: legacyItens,
-        totalItens: typeof data.totalItens === 'number' ? data.totalItens : legacyItens.length,
-        totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : legacyItens.filter((i: any) => i.validado).length
+        itens: undefined,
+        totalItens: typeof data.totalItens === 'number' ? data.totalItens : (Array.isArray(data.itens) ? data.itens.length : 0),
+        totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0
       } as ColetaLista;
     }
     return null;
@@ -672,8 +641,8 @@ export async function getListaById(listaId: string): Promise<ColetaLista | null>
 }
 
 /**
- * Salva metadados da lista no servidor de forma estritamente não-destrutiva.
- * NUNCA apaga itens da subcoleção de pacotes ao atualizar metadados.
+ * Salva metadados da lista no servidor. Nunca envia o array itens no documento pai.
+ * Se houver itens na chamada (ex: lote inicial), grava na subcoleção itens.
  */
 export async function saveLista(lista: Partial<ColetaLista> & { id: string }, immediate = false): Promise<boolean> {
   try {
@@ -685,12 +654,24 @@ export async function saveLista(lista: Partial<ColetaLista> & { id: string }, im
       updatedAt: serverTimestamp()
     });
 
-    // Atualiza apenas os metadados do documento pai, sem tocar na subcoleção de itens
     await setDoc(docRef, cleaned, { merge: true });
 
-    // Se itens foram passados explicitamente (lote inicial), adiciona sem apagar os existentes
-    if (Array.isArray(itens) && itens.length > 0) {
-      await addItemsBatchToLista(lista.id, itens);
+    // Se itens foram passados, salva individualmente na subcoleção e exclui removidos
+    if (Array.isArray(itens)) {
+      // Find items to delete
+      const subColRef = collection(db, COLETA_LISTAS_COLLECTION, lista.id, 'itens');
+      const currentSnap = await getDocs(subColRef);
+      const currentIds = currentSnap.docs.map(d => d.id);
+      const newIds = new Set(itens.map(i => i.id));
+      const toDelete = currentIds.filter(id => !newIds.has(id));
+      
+      if (toDelete.length > 0) {
+        await deleteItemsBatchFromLista(lista.id, toDelete);
+      }
+      
+      if (itens.length > 0) {
+        await addItemsBatchToLista(lista.id, itens);
+      }
     }
 
     return true;
@@ -698,10 +679,6 @@ export async function saveLista(lista: Partial<ColetaLista> & { id: string }, im
     console.error('Erro ao salvar metadados da lista no servidor:', error);
     return false;
   }
-}
-
-export async function saveListaMetadata(lista: Partial<ColetaLista> & { id: string }): Promise<boolean> {
-  return saveLista(lista);
 }
 
 export async function flushSaveLista(listaId: string): Promise<boolean> {
@@ -1001,7 +978,7 @@ export async function getItemsPage(
     }
 
     const snap = await getDocs(q);
-    const items = snap.docs.map(d => ({ ...(d.data() as any), id: d.id } as ColetaItem));
+    const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
     const firstDoc = snap.docs.length > 0 ? snap.docs[0] : null;
     const lastDoc = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
 
@@ -1164,23 +1141,20 @@ export async function getItemsOfGrupo(listaId: string, grupoId: string): Promise
 }
 
 /**
- * Exclui a lista e todos os seus itens da subcoleção no servidor de forma ultra-rápida e otimizada (lotes iterativos).
+ * Exclui a lista e todos os seus itens da subcoleção no servidor.
  */
 export async function deleteLista(listaId: string): Promise<boolean> {
   try {
+    // 1. Exclui em lotes todos os itens da subcoleção
     const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
-
-    // Deleta em lotes iterativos de 400 sem baixar todos os documentos de uma vez na RAM
-    while (true) {
-      const q = query(colRef, limit(400));
-      const snap = await getDocs(q);
-      if (snap.empty) break;
-
-      const batch = writeBatch(db);
-      snap.docs.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-
-      if (snap.docs.length < 400) break;
+    const snap = await getDocs(colRef);
+    if (!snap.empty) {
+      const chunkSize = 400;
+      for (let i = 0; i < snap.docs.length; i += chunkSize) {
+        const batch = writeBatch(db);
+        snap.docs.slice(i, i + chunkSize).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
     }
 
     // 2. Exclui o documento pai
@@ -1194,98 +1168,76 @@ export async function deleteLista(listaId: string): Promise<boolean> {
 }
 
 /**
- * Migra de forma segura uma única lista legado para subcoleção de forma idempotente.
+ * Script de migração: transfere qualquer lista antiga que possua o array `itens`
+ * para a nova estrutura de metadados + subcoleção `itens` no servidor.
  */
-export async function migrateSingleLegacyLista(listaId: string, itens: ColetaItem[]): Promise<boolean> {
+export async function migrateLegacyListasToSubcollections(): Promise<{ migratedLists: number; migratedItems: number }> {
   try {
-    if (!Array.isArray(itens) || itens.length === 0) return true;
-    const chunkSize = 400;
-    for (let i = 0; i < itens.length; i += chunkSize) {
-      const batch = writeBatch(db);
-      const chunk = itens.slice(i, i + chunkSize);
-      chunk.forEach((item, index) => {
-        const itemId = item.id || `item-${Date.now()}-${i + index}`;
-        const itemRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
-        batch.set(itemRef, cleanUndefined({
-          ...item,
-          id: itemId,
-          codigoClean: cleanDigits(item.codigo),
-          timestamp: item.timestamp || (Date.now() - (i + index) * 10)
-        }), { merge: true });
-      });
-      await batch.commit();
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION);
+    const snap = await getDocs(colRef);
+    let migratedLists = 0;
+    let migratedItems = 0;
+
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data();
+      if (Array.isArray(data.itens) && data.itens.length > 0) {
+        const listaId = docSnap.id;
+        const itens: ColetaItem[] = data.itens;
+
+        // Grava cada item como documento individual na subcoleção
+        const chunkSize = 400;
+        for (let i = 0; i < itens.length; i += chunkSize) {
+          const batch = writeBatch(db);
+          const chunk = itens.slice(i, i + chunkSize);
+          chunk.forEach((item, index) => {
+            const itemId = item.id || `item-${Date.now()}-${i + index}`;
+            const itemRef = doc(db, COLETA_LISTAS_COLLECTION, listaId, 'itens', itemId);
+            batch.set(itemRef, cleanUndefined({
+              ...item,
+              id: itemId,
+              codigoClean: cleanDigits(item.codigo),
+              timestamp: item.timestamp || (Date.now() - (i + index) * 10)
+            }), { merge: true });
+          });
+          await batch.commit();
+        }
+
+        const totalItens = itens.length;
+        const totalValidados = itens.filter(i => i.validado).length;
+        const bipsPorOperador: Record<string, number> = {};
+        const saidasCount: Record<string, number> = {};
+        const motivosCount: Record<string, number> = {};
+
+        itens.forEach(item => {
+          const op = item.responsavel || data.responsavel || 'Operador';
+          bipsPorOperador[op] = (bipsPorOperador[op] || 0) + 1;
+          if (item.saida) saidasCount[item.saida] = (saidasCount[item.saida] || 0) + 1;
+          if (item.motivo) motivosCount[item.motivo] = (motivosCount[item.motivo] || 0) + 1;
+        });
+
+        // Remove o array itens do documento pai e salva os totais
+        await updateDoc(docSnap.ref, {
+          itens: deleteField(),
+          totalItens,
+          totalValidados,
+          bipsPorOperador,
+          saidasCount,
+          motivosCount,
+          updatedAt: serverTimestamp()
+        });
+
+        migratedLists++;
+        migratedItems += itens.length;
+      }
     }
 
-    const totalItens = itens.length;
-    const totalValidados = itens.filter(i => i.validado).length;
-    const bipsPorOperador: Record<string, number> = {};
-    const saidasCount: Record<string, number> = {};
-    const motivosCount: Record<string, number> = {};
+    if (migratedLists > 0) {
+      console.log(`[Migração Concluída] ${migratedLists} listas migradas com ${migratedItems} pacotes para subcoleções.`);
+    }
 
-    itens.forEach(item => {
-      const op = item.responsavel || 'Operador';
-      bipsPorOperador[op] = (bipsPorOperador[op] || 0) + 1;
-      if (item.saida) saidasCount[item.saida] = (saidasCount[item.saida] || 0) + 1;
-      if (item.motivo) motivosCount[item.motivo] = (motivosCount[item.motivo] || 0) + 1;
-    });
-
-    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
-    await updateDoc(docRef, {
-      itens: deleteField(),
-      totalItens,
-      totalValidados,
-      bipsPorOperador,
-      saidasCount,
-      motivosCount,
-      migrationVersion: 2,
-      legacyMigratedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-
-    console.log(`[Migração Segura] Lista ${listaId} migrada com sucesso (${totalItens} itens).`);
-    return true;
-  } catch (err) {
-    console.error(`Erro ao migrar lista antiga ${listaId}:`, err);
-    return false;
-  }
-}
-
-/**
- * Recalcula contadores da lista diretamente a partir da subcoleção de itens de forma determinística.
- */
-export async function recalculateListaCounters(listaId: string): Promise<boolean> {
-  if (!listaId) return false;
-  try {
-    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
-    const snap = await getDocs(colRef);
-    const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
-
-    const totalItens = items.length;
-    const totalValidados = items.filter(i => i.validado).length;
-    const bipsPorOperador: Record<string, number> = {};
-    const saidasCount: Record<string, number> = {};
-    const motivosCount: Record<string, number> = {};
-
-    items.forEach(item => {
-      const op = item.responsavel || 'Operador';
-      bipsPorOperador[op] = (bipsPorOperador[op] || 0) + 1;
-      if (item.saida) saidasCount[item.saida] = (saidasCount[item.saida] || 0) + 1;
-      if (item.motivo) motivosCount[item.motivo] = (motivosCount[item.motivo] || 0) + 1;
-    });
-
-    const docRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
-    await setDoc(docRef, cleanUndefined({
-      totalItens,
-      totalValidados,
-      bipsPorOperador,
-      saidasCount,
-      motivosCount,
-      updatedAt: serverTimestamp()
-    }), { merge: true });
-
-    return true;
-  } catch (err) {
-    console.error('Erro ao recalcular contadores da lista:', err);
-    return false;
+    return { migratedLists, migratedItems };
+  } catch (error) {
+    console.error('Erro na migração de listas para subcoleção:', error);
+    return { migratedLists: 0, migratedItems: 0 };
   }
 }

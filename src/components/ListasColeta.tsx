@@ -48,8 +48,7 @@ import {
   saveLista,
   deleteLista as deleteListaFirestore,
   getListaSortTimestamp,
-  listenToListaItens,
-  getListaItensOnce
+  listenToListaItens
 } from '../lib/firebase';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
@@ -1653,26 +1652,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleFinalizarLista = async (listaId: string, unificarBrancas: boolean = false) => {
     const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
-      let itensLista = lista.itens;
-      if (!itensLista || itensLista.length === 0) {
-        itensLista = await getListaItensOnce(lista.id);
-      }
-
       const cleanIdOnly = (code: string) => {
         if (!code) return '';
         return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
       };
 
       // 1. Obter os itens validados da lista (se existirem itens validados, filtra eles; senão considera todos)
-      const itensValidados = itensLista.some(i => i.validado)
-        ? itensLista.filter(i => i.validado)
-        : itensLista;
+      const itensValidados = lista.itens.some(i => i.validado)
+        ? lista.itens.filter(i => i.validado)
+        : lista.itens;
 
       const idsValidados = itensValidados.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
 
       // 2. Se optou por juntar com as brancas do refugo
       let rowsCsv: string[] = [];
-      let novosItensParaSalvar = [...itensLista];
+      let novosItensParaSalvar = [...lista.itens];
 
       if (unificarBrancas && idsBrancasRefugo.length > 0) {
         const validadosSet = new Set(idsValidados.map(id => id.toUpperCase()));
@@ -1692,7 +1686,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           responsavel: operanteNome,
           validado: true
         }));
-        novosItensParaSalvar = [...itensLista, ...itensBrancasNovos];
+        novosItensParaSalvar = [...lista.itens, ...itensBrancasNovos];
       } else {
         rowsCsv = idsValidados;
       }
@@ -1701,9 +1695,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const updatedLista: ColetaLista = { 
         ...lista, 
         status: 'finalizada',
-        itens: novosItensParaSalvar,
-        totalItens: novosItensParaSalvar.length,
-        totalValidados: novosItensParaSalvar.filter(i => i.validado).length
+        itens: novosItensParaSalvar
       };
       setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
       await saveLista(updatedLista);
