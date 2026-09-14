@@ -46,12 +46,19 @@ import {
   listenToRefugo,
   listenToListas,
   saveLista,
+  addItemToLista,
+  updateItemInLista,
+  deleteItemFromLista,
+  addItemsBatchToLista,
+  deleteItemsBatchFromLista,
+  updateItemsBatchMotivo,
   deleteLista as deleteListaFirestore,
   getListaSortTimestamp,
   listenToListaItens
 } from '../lib/firebase';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
+import { cleanTrackingId } from '../utils/csvParser';
 
 interface ListasColetaProps {
   currentUser?: User | null;
@@ -574,23 +581,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   useEffect(() => {
     if (!listaAtiva || !refugoBaseRows || refugoBaseRows.length === 0) return;
 
-    let hasChanges = false;
-    const novosItens = listaAtiva.itens.map(item => {
+    const itensParaAtualizar: ColetaItem[] = [];
+    listaAtiva.itens.forEach(item => {
       const rotaAtualizada = getRotaItem(item);
       if (rotaAtualizada !== 'Sem Rota' && item.rota !== rotaAtualizada) {
-        hasChanges = true;
-        return { ...item, rota: rotaAtualizada };
+        itensParaAtualizar.push({ ...item, rota: rotaAtualizada });
       }
-      return item;
     });
 
-    if (hasChanges) {
-      const updatedLista = { ...listaAtiva, itens: novosItens };
-      activeItensRef.current = novosItens;
-      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-      saveLista(updatedLista).catch(err => console.error('Erro ao sincronizar rotas do refugo:', err));
+    if (itensParaAtualizar.length > 0) {
+      addItemsBatchToLista(listaAtiva.id, itensParaAtualizar).catch(err => 
+        console.error('Erro ao sincronizar rotas do refugo:', err)
+      );
     }
-  }, [refugoBaseRows, listaAtiva?.id, getRotaItem]);
+  }, [refugoBaseRows, listaAtiva?.id]);
 
   // Abrir Modal de Verificação de IDs do Ciclo
   const handleAbrirVerificar = () => {
@@ -631,17 +635,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     e.preventDefault();
     if (!verificarInput.trim() || !listaAtiva) return;
 
-    let processedInput = verificarInput.trim();
-    processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
-    processedInput = processedInput.replace(/d[çc]?4/gi, '4');
-    processedInput = processedInput.replace(/^[^0-9a-zA-Z]+/, '');
-    const match47 = processedInput.match(/(47\d+)/);
-    if (match47) {
-      processedInput = match47[1];
-    } else {
-      processedInput = processedInput.replace(/m$/i, '');
-    }
-    const cleanInput = processedInput.toUpperCase();
+    const cleanInput = cleanTrackingId(verificarInput);
     const cleanInputDigits = cleanDigits(cleanInput);
 
     playShortBeep();
@@ -695,15 +689,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
       const itemDigits = cleanDigits(item.codigo);
       const matched = rawIds.some(rawId => {
-        let pId = rawId;
-        pId = pId.replace(/d[çc]?⁴/gi, '4');
-        pId = pId.replace(/d[çc]?4/gi, '4');
-        pId = pId.replace(/^[^0-9a-zA-Z]+/, '');
-        const match47 = pId.match(/(47\d+)/);
-        if (match47) pId = match47[1];
-        else pId = pId.replace(/m$/i, '');
-        
-        const cleanPId = pId.toUpperCase();
+        const cleanPId = cleanTrackingId(rawId);
         const pIdDigits = cleanDigits(cleanPId);
         
         return item.codigo === cleanPId || (itemDigits && pIdDigits && itemDigits === pIdDigits);
@@ -719,8 +705,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (modoIndividual) {
       setItensModoIndividual(itensAtualizados);
     } else {
-      const updatedLista = { ...listaAtiva, itens: itensAtualizados };
-      await saveLista(updatedLista);
+      const validadosNovos = itensAtualizados.filter(i => i.validado && !listToVerify.find(orig => orig.id === i.id && orig.validado));
+      if (validadosNovos.length > 0) {
+        await addItemsBatchToLista(listaAtiva.id, validadosNovos);
+      }
     }
     
     setShowVerificarLoteModal(false);
@@ -856,9 +844,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
 
     activeItensRef.current = novosItens;
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-    await saveLista(updatedLista, true);
+    await addItemsBatchToLista(listaAtiva.id, novosItens);
 
     // Limpar sessão individual salva após unificar
     const key = getModoIndKey(listaAtiva.id, operanteNome);
@@ -906,10 +892,15 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setShowVerificarModal(false);
       await handleFecharEUnificarModoIndividual(itensAtualizados);
     } else {
-      activeItensRef.current = itensAtualizados;
-      const updatedLista = { ...listaAtiva, itens: itensAtualizados };
-      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-      await saveLista(updatedLista);
+      const idsParaExcluir = listToVerify.filter(i => verificarMap[i.id] === 'em_rota').map(i => i.id);
+      const validadosNovos = itensAtualizados.filter(i => verificarMap[i.id] !== undefined);
+
+      if (idsParaExcluir.length > 0) {
+        await deleteItemsBatchFromLista(listaAtiva.id, idsParaExcluir);
+      }
+      if (validadosNovos.length > 0) {
+        await addItemsBatchToLista(listaAtiva.id, validadosNovos);
+      }
       setShowVerificarModal(false);
     }
   };
@@ -930,17 +921,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       ? activeItensRef.current
       : listaAtiva.itens;
 
-    const novosItens = currentItens.map(i => {
-      if (i.id === itemId) {
-        return { ...i, validado: !i.validado };
-      }
-      return i;
-    });
-
-    activeItensRef.current = novosItens;
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-    await saveLista(updatedLista);
+    const itemTarget = currentItens.find(i => i.id === itemId);
+    if (itemTarget) {
+      await updateItemInLista(listaAtiva.id, itemId, { validado: !itemTarget.validado }, itemTarget);
+    }
   };
 
 
@@ -989,13 +973,23 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         itens: []
       };
 
-      await saveLista(novaLista, true);
-      setOpeningListaId(novaLista.id);
+      // Atualização otimista no estado local para que a lista seja encontrada instantaneamente
+      setListas(prev => [novaLista, ...prev.filter(l => l.id !== novaLista.id)]);
+
       setShowModalNovaLista(false);
+      
+      // Salva no banco de dados em segundo plano
+      saveLista(novaLista, true).catch(err => {
+        console.error('Erro ao salvar nova lista no banco:', err);
+      });
+
+      setIsLoadingLista(false);
+      setOpeningListaId(null);
       navigate(`/listas/${novaLista.id}`);
     } catch (err) {
       console.error('Erro ao criar lista:', err);
       setIsLoadingLista(false);
+      setShowModalNovaLista(false);
     }
   };
 
@@ -1003,21 +997,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleBipCode = useCallback(async (codeToBip: string) => {
     if (!codeToBip.trim() || !listaAtiva) return;
 
-    let processedInput = codeToBip.trim();
-    processedInput = processedInput.replace(/d[çc]?⁴/gi, '4');
-    processedInput = processedInput.replace(/d[çc]?4/gi, '4');
-
-    // Remove noise before the actual tracking number (e.g. &^&^&^472727787272m -> 472727787272m)
-    processedInput = processedInput.replace(/^[^0-9a-zA-Z]+/, '');
-    
-    const match47 = processedInput.match(/(47\d+)/);
-    if (match47) {
-      processedInput = match47[1];
-    } else {
-      processedInput = processedInput.replace(/m$/i, '');
-    }
-
-    const cleanInput = processedInput.toUpperCase();
+    const cleanInput = cleanTrackingId(codeToBip);
     const cleanInputDigits = cleanDigits(cleanInput);
 
     // Beep curto de 50ms instantâneo
@@ -1089,20 +1069,23 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     if (idx !== -1) {
       // Atualizar item existente
-      novosItens[idx] = {
-        ...novosItens[idx],
+      const existingItem = currentItens[idx];
+      const updates = {
         saida: saidaItemFinal,
         motivo: selectedMotivo,
         rota: rotaItemFinal,
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
-        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : novosItens[idx].grupoId
+        grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : existingItem.grupoId
       };
+      novosItens[idx] = { ...existingItem, ...updates };
       setLastScanResult({
         status: 'success',
         code: cleanInput,
         message: `ID já existente atualizado! (Rota: ${rotaItemFinal})`
       });
+      activeItensRef.current = novosItens;
+      updateItemInLista(listaAtiva.id, existingItem.id, updates, existingItem).catch(err => console.error('Erro ao atualizar no banco:', err));
     } else {
       // Adicionar novo ID na lista
       const novoItem: ColetaItem = {
@@ -1122,14 +1105,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         code: cleanInput,
         message: `Novo ID coletado na lista! (Rota: ${rotaItemFinal})`
       });
+      activeItensRef.current = novosItens;
+      addItemToLista(listaAtiva.id, novoItem).catch(err => console.error('Erro ao salvar no banco:', err));
     }
-
-    // Salvar no cache em memória imediatamente
-    activeItensRef.current = novosItens;
-
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-    saveLista(updatedLista).catch(err => console.error('Erro ao salvar no banco:', err));
   }, [listaAtiva, refugoMap, selectedSaida, modoIndividual, itensModoIndividual, selectedMotivo, operanteNome]);
 
   // Alterar motivo do item selecionado na gaveta
@@ -1144,15 +1122,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         return item;
       }));
     } else {
-      const novosItens = listaAtiva.itens.map(item => {
-        if (item.id === itemParaMudarMotivo.id) {
-          return { ...item, motivo: novoMotivoEscolha };
-        }
-        return item;
-      });
-
-      const updatedLista = { ...listaAtiva, itens: novosItens };
-      await saveLista(updatedLista);
+      await updateItemInLista(listaAtiva.id, itemParaMudarMotivo.id, { motivo: novoMotivoEscolha }, itemParaMudarMotivo);
     }
 
     setItemParaMudarMotivo(null);
@@ -1431,15 +1401,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         return item;
       }));
     } else {
-      const novosItens = listaAtiva.itens.map(item => {
-        if (selectedItemIds.includes(item.id)) {
-          return { ...item, motivo: novoMotivoEscolha };
-        }
-        return item;
-      });
-
-      const updatedLista = { ...listaAtiva, itens: novosItens };
-      await saveLista(updatedLista);
+      await updateItemsBatchMotivo(listaAtiva.id, selectedItemIds, novoMotivoEscolha);
     }
 
     setSelectedItemIds([]);
@@ -1452,11 +1414,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       if (modoIndividual) {
         setItensModoIndividual(prev => prev.filter(i => !selectedItemIds.includes(i.id)));
       } else {
-        const novosItens = listaAtiva.itens.filter(i => !selectedItemIds.includes(i.id));
-        activeItensRef.current = novosItens;
-        const updatedLista = { ...listaAtiva, itens: novosItens };
-        setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-        await saveLista(updatedLista);
+        await deleteItemsBatchFromLista(listaAtiva.id, selectedItemIds);
       }
       setSelectedItemIds([]);
     }
@@ -1518,12 +1476,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const novosIndividuais: ColetaItem[] = [];
 
       codigos.forEach(cod => {
-        let processedCod = cod.replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4').replace(/^[^0-9a-zA-Z]+/, '');
-        const match47 = processedCod.match(/(47\d+)/);
-        if (match47) processedCod = match47[1];
-        else processedCod = processedCod.replace(/m$/i, '');
-
-        const cleanCod = processedCod.toUpperCase();
+        const cleanCod = cleanTrackingId(cod);
         if (!cleanCod || codigosSet.has(cleanCod)) return;
         codigosSet.add(cleanCod);
 
@@ -1566,19 +1519,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       const chunk = codigos.slice(i, i + CHUNK_SIZE);
 
       chunk.forEach(cod => {
-        let processedCod = cod;
-        processedCod = processedCod.replace(/d[çc]?⁴/gi, '4');
-        processedCod = processedCod.replace(/d[çc]?4/gi, '4');
-        processedCod = processedCod.replace(/^[^0-9a-zA-Z]+/, '');
-        
-        const match47 = processedCod.match(/(47\d+)/);
-        if (match47) {
-          processedCod = match47[1];
-        } else {
-          processedCod = processedCod.replace(/m$/i, '');
-        }
-
-        const cleanCod = processedCod.toUpperCase();
+        const cleanCod = cleanTrackingId(cod);
         const cleanCodDigits = cleanDigits(cleanCod);
         const cleanCodWithoutM = cleanCod.replace(/m$/i, '');
 
@@ -1622,8 +1563,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
     setImportStatusText('Salvando lista completa sem perdas na nuvem...');
     const novosItens = Array.from(novosItensMap.values());
-    const updatedLista = { ...listaAtiva, itens: novosItens };
-    await saveLista(updatedLista);
+    await addItemsBatchToLista(listaAtiva.id, novosItens);
 
     setIsImporting(false);
     setLoteText('');
@@ -1643,9 +1583,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const handleReabrirLista = async (listaId: string) => {
     const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
-      const updatedLista: ColetaLista = { ...lista, status: 'em_andamento' };
-      setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
-      await saveLista(updatedLista);
+      setListas(prev => prev.map(l => l.id === listaId ? { ...l, status: 'em_andamento' } : l));
+      await saveLista({ id: listaId, status: 'em_andamento' });
     }
   };
 
@@ -1666,7 +1605,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
       // 2. Se optou por juntar com as brancas do refugo
       let rowsCsv: string[] = [];
-      let novosItensParaSalvar = [...lista.itens];
 
       if (unificarBrancas && idsBrancasRefugo.length > 0) {
         const validadosSet = new Set(idsValidados.map(id => id.toUpperCase()));
@@ -1686,19 +1624,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           responsavel: operanteNome,
           validado: true
         }));
-        novosItensParaSalvar = [...lista.itens, ...itensBrancasNovos];
+        if (itensBrancasNovos.length > 0) {
+          await addItemsBatchToLista(listaId, itensBrancasNovos);
+        }
       } else {
         rowsCsv = idsValidados;
       }
 
       // 3. Atualizar status da lista no banco
-      const updatedLista: ColetaLista = { 
-        ...lista, 
-        status: 'finalizada',
-        itens: novosItensParaSalvar
-      };
-      setListas(prev => prev.map(l => l.id === listaId ? updatedLista : l));
-      await saveLista(updatedLista);
+      setListas(prev => prev.map(l => l.id === listaId ? { ...l, status: 'finalizada' } : l));
+      await saveLista({ id: listaId, status: 'finalizada' });
 
       // 4. Download do CSV
       if (rowsCsv.length > 0) {
@@ -1724,11 +1659,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     if (modoIndividual) {
       setItensModoIndividual(prev => prev.filter(i => i.id !== itemId));
     } else {
-      const novosItens = listaAtiva.itens.filter(i => i.id !== itemId);
-      activeItensRef.current = novosItens;
-      const updatedLista = { ...listaAtiva, itens: novosItens };
-      setListas(prev => prev.map(l => l.id === updatedLista.id ? updatedLista : l));
-      await saveLista(updatedLista);
+      const itemData = listaAtiva.itens.find(i => i.id === itemId);
+      await deleteItemFromLista(listaAtiva.id, itemId, itemData);
     }
   };
 

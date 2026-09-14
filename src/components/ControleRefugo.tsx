@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check } from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
-import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas } from '../lib/firebase';
+import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista } from '../lib/firebase';
+import { cleanDigits, cleanTrackingId } from '../utils/csvParser';
 import type { User } from '../lib/auth';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
 import { PageSkeleton } from './PageSkeleton';
@@ -58,10 +59,22 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const busyRef = useRef(false);
   const [page, setPage] = useState(0);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
-  const codeKey = (code: string) => code.replace(/\D/g, '') || code.trim().toUpperCase().replace(/M$/, '');
+  const codeKey = (code: string) => cleanDigits(cleanTrackingId(code)) || cleanTrackingId(code) || code.trim().toUpperCase().replace(/M$/, '');
   const rowByCode = useMemo(() => new Map(rows.map(row => [codeKey(row.id), row])), [rows]);
   const scanByCode = useMemo(() => new Map(scannedItems.map(scan => [codeKey(scan.id), scan])), [scannedItems]);
   const showError = (error: unknown) => setSyncError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação no servidor. Tente novamente.');
+
+  // Auto focus input when bip is unlocked
+  useEffect(() => {
+    if (!isLocked) {
+      const timer = setTimeout(() => {
+        if (inputRef.current && document.activeElement !== inputRef.current) {
+          inputRef.current.focus();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isLocked, busy, scannedItems.length]);
 
   // Modal / Popup States for Exporting to Lista Branca
   const [existingListas, setExistingListas] = useState<ColetaLista[]>([]);
@@ -148,19 +161,31 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
   const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bipInput.trim() || isLocked || busyRef.current) return;
-    const processed = bipInput.trim().replace(/d[çc]?⁴/gi, '4').replace(/d[çc]?4/gi, '4');
-    const cleanInput = (processed.match(/(47\d+)/)?.[1] || processed.replace(/m$/i, '')).toUpperCase();
-    const alreadyScanned = scanByCode.get(codeKey(cleanInput));
+    if (!bipInput.trim() || isLocked) return;
+    
+    const cleanInput = cleanTrackingId(bipInput);
+    if (!cleanInput) {
+      setBipInput('');
+      return;
+    }
+
+    const key = codeKey(cleanInput);
+    const rawKey = codeKey(bipInput);
+    const alreadyScanned = scanByCode.get(key) || scanByCode.get(rawKey);
     
     if (alreadyScanned) {
       setLastScanResult({ status: alreadyScanned.status === 'found' ? 'success' : 'error', message: 'O pacote já foi bipado anteriormente!' });
       if (alreadyScanned.status === 'found') playBeep();
       setBipInput('');
+      setTimeout(() => inputRef.current?.focus(), 10);
       return;
     }
     
-    const foundRow = rowByCode.get(codeKey(cleanInput));
+    const foundRow = rowByCode.get(key) || rowByCode.get(rawKey);
+
+    // Limpa o input instantaneamente para não travar a próxima leitura da leitora
+    setBipInput('');
+    setTimeout(() => inputRef.current?.focus(), 10);
     
     await runOperation(async () => {
       const newScan: ScannedItem = {
@@ -188,9 +213,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       } else {
         setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}` });
       }
-      setBipInput('');
       setPage(0);
-      inputRef.current?.focus();
+      setTimeout(() => inputRef.current?.focus(), 10);
     });
   };
 
@@ -314,12 +338,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
         const existingCodes = new Set(currentItens.map(i => i.codigo.toUpperCase()));
         const uniqueNewItems = newColetaItens.filter(i => !existingCodes.has(i.codigo.toUpperCase()));
 
-        const updatedLista: ColetaLista = {
-          ...targetList,
-          itens: [...currentItens, ...uniqueNewItems]
-        };
-
-        await saveLista(updatedLista, true);
+        if (uniqueNewItems.length > 0) {
+          await addItemsBatchToLista(targetList.id, uniqueNewItems);
+        }
       }
 
       // Download CSV file
@@ -414,7 +435,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       onBlur={() => {
                         if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
                       }}
-                      disabled={isLocked || busy}
+                      disabled={isLocked}
                       className={`block w-full pl-16 pr-6 py-8 border-2 rounded-xl text-3xl font-mono font-bold transition-all ${
                         isLocked 
                           ? 'bg-gray-50 border-gray-200 text-gray-400 placeholder-gray-300 cursor-not-allowed'
@@ -428,7 +449,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                     {isLocked ? 'Desbloqueie para voltar a ler pacotes.' : 'O campo submete automaticamente após a leitura do bipe (Enter).'}
                   </p>
                 </div>
-                <button type="submit" className="hidden" disabled={isLocked || busy}>Verificar</button>
+                <button type="submit" className="hidden" disabled={isLocked}>Verificar</button>
               </form>
 
               {lastScanResult && (

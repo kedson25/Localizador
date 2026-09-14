@@ -23,6 +23,8 @@ import {
   deleteField,
   QueryDocumentSnapshot,
   memoryLocalCache,
+  enableNetwork,
+  disableNetwork,
   setLogLevel
 } from 'firebase/firestore';
 
@@ -32,13 +34,14 @@ try {
 } catch (_) {}
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC-9ZgBnd6sjkAS6phLsO5fp_19UYNL5s4",
-  authDomain: "ssp45-d1847.firebaseapp.com",
-  projectId: "ssp45-d1847",
-  storageBucket: "ssp45-d1847.firebasestorage.app",
-  messagingSenderId: "684115094877",
-  appId: "1:684115094877:web:dc6797f688ac5b84b50cb4",
-  measurementId: "G-1V7HWH4L37"
+  apiKey: "AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA",
+  authDomain: "ecooy-5b791.firebaseapp.com",
+  databaseURL: "https://ecooy-5b791-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "ecooy-5b791",
+  storageBucket: "ecooy-5b791.firebasestorage.app",
+  messagingSenderId: "824859587278",
+  appId: "1:824859587278:web:9a6b5a4485af41e70dd69f",
+  measurementId: "G-LDCXYXPEXF"
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -54,6 +57,36 @@ try {
 }
 
 export const db = firestoreInstance;
+
+/**
+ * Função para salvar e sincronizar via rede local/nuvem.
+ * Salva no cache local (IndexedDB) e sincroniza automaticamente via rede quando conectado.
+ */
+export async function forceSyncLocalAndRemote(): Promise<{ success: boolean; message: string }> {
+  try {
+    await disableNetwork(db);
+    await enableNetwork(db);
+    return { success: true, message: "Conectado e sincronizado com sucesso na rede!" };
+  } catch (error: any) {
+    console.error("Erro ao sincronizar dados com a rede:", error);
+    return { success: false, message: error?.message || "Erro de sincronização na rede" };
+  }
+}
+
+/**
+ * Ativa ou desativa a conexão com a rede para forçar gravações estritamente locais ou online.
+ */
+export async function setNetworkMode(online: boolean) {
+  try {
+    if (online) {
+      await enableNetwork(db);
+    } else {
+      await disableNetwork(db);
+    }
+  } catch (e) {
+    console.error("Erro ao alterar modo de rede:", e);
+  }
+}
 
 const REFUGO_COLLECTION = 'refugo';
 const MAIN_REFUGO_DOC_ID = 'current_refugo_csv';
@@ -662,22 +695,9 @@ export async function saveLista(lista: Partial<ColetaLista> & { id: string }, im
 
     await setDoc(docRef, cleaned, { merge: true });
 
-    // Se itens foram passados, salva individualmente na subcoleção e exclui removidos
-    if (Array.isArray(itens)) {
-      // Find items to delete
-      const subColRef = collection(db, COLETA_LISTAS_COLLECTION, lista.id, 'itens');
-      const currentSnap = await getDocs(subColRef);
-      const currentIds = currentSnap.docs.map(d => d.id);
-      const newIds = new Set(itens.map(i => i.id));
-      const toDelete = currentIds.filter(id => !newIds.has(id));
-      
-      if (toDelete.length > 0) {
-        await deleteItemsBatchFromLista(lista.id, toDelete);
-      }
-      
-      if (itens.length > 0) {
-        await addItemsBatchToLista(lista.id, itens);
-      }
+    // Se itens foram passados explicitamente (ex: criação com lote inicial)
+    if (Array.isArray(itens) && itens.length > 0) {
+      await addItemsBatchToLista(lista.id, itens);
     }
 
     return true;

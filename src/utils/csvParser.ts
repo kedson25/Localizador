@@ -7,6 +7,31 @@ export function cleanDigits(str: string): string {
   return digits.length > 0 ? digits : str.trim();
 }
 
+export function cleanTrackingId(rawInput: string): string {
+  if (!rawInput) return '';
+  let processed = rawInput.trim();
+  
+  // Replace dirty prefix patterns like dç4, dç48, dç49, dç50, d4, d5, etc.
+  processed = processed.replace(/^d[çc]?[⁴4]/gi, '4');
+  processed = processed.replace(/^d[çc]?[⁵5]/gi, '5');
+  processed = processed.replace(/^d[çc]?[⁶6]/gi, '6');
+  processed = processed.replace(/^d[çc]?[⁷7]/gi, '7');
+  processed = processed.replace(/^d[çc]?[⁸8]/gi, '8');
+  processed = processed.replace(/^d[çc]?[⁹9]/gi, '9');
+  processed = processed.replace(/^d[çc]?[⁰0]/gi, '0');
+  processed = processed.replace(/^d[çc]+/gi, '');
+  processed = processed.replace(/^[^0-9a-zA-Z]+/, '');
+
+  // Extract sequence of 10 to 15 digits (handles 47..., 48..., 49..., 50..., 51..., 52..., 60..., etc.)
+  const matchDigits = processed.match(/([4-9]\d{9,14}|\d{10,15})/);
+  if (matchDigits) {
+    return matchDigits[1].toUpperCase();
+  }
+
+  // Fallback: remove trailing 'M' or 'm' and return uppercase clean string
+  return processed.replace(/m$/i, '').toUpperCase();
+}
+
 export function detectDelimiter(text: string): string {
   const lines = text.split('\n').filter((l) => l.trim().length > 0).slice(0, 5);
   let tabs = 0;
@@ -104,9 +129,9 @@ export function parseCsvText(rawText: string): { rows: CsvRow[]; groups: GroupSu
       continue;
     }
 
-    // Identify if ID consists of exactly 11 numeric digits (e.g. 47712645205)
+    // Identify if ID consists of 10 to 15 numeric digits (e.g. 47712645205, 48..., 49..., 50...)
     // Whatever is different is separated into group 'ERROS'
-    const is11Digits = /^\d{11}$/.test(cleanId);
+    const is11Digits = /^\d{10,15}$/.test(cleanId);
     const assignedGroup = is11Digits ? currentGroup : 'ERROS';
 
     // Build raw fields mapping
