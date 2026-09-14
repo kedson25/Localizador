@@ -1901,7 +1901,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <tbody className="divide-y divide-gray-100 font-sans">
                   {filteredDashboardListas.map((lista, idx) => (
                     <tr key={lista.id} className="hover:bg-blue-50/40 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-gray-400">{idx + 1}</td>
+                      <td className="py-3.5 px-4 font-mono font-bold text-gray-400">{filteredDashboardListas.length - idx}</td>
                       <td 
                         onClick={() => handleAbrirLista(lista.id)}
                         className="py-3.5 px-4 font-bold text-[#333333] text-sm cursor-pointer hover:text-[#3483FA] transition-colors"
