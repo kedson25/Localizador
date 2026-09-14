@@ -1,5 +1,20 @@
 {
   "entities": {
+    "User": {
+      "title": "User",
+      "description": "Usuário autenticado do sistema de coleta",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "isAdmin": { "type": "boolean" },
+        "isApproved": { "type": "boolean" },
+        "allowedGroups": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "email", "isAdmin", "isApproved"]
+    },
     "ColetaLista": {
       "title": "ColetaLista",
       "description": "Metadados de uma lista de coleta de pacotes",
@@ -43,16 +58,38 @@
         "validado": { "type": "boolean" }
       },
       "required": ["id", "codigo", "scannedAt"]
+    },
+    "RefugoScan": {
+      "title": "RefugoScan",
+      "description": "Registro de scan atômico de refugo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "rota": { "type": "string" },
+        "status": { "type": "string" },
+        "foundBy": { "type": "string" },
+        "scannedAt": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Coleção de contas de usuário e controle de permissões"
+    },
     "/coleta_listas/{listaId}": {
       "schema": "ColetaLista",
       "description": "Coleção de metadados das listas de coleta"
     },
     "/coleta_listas/{listaId}/itens/{itemId}": {
       "schema": "ColetaItem",
-      "description": "Subcoleção de pacotes individuais da lista de coleta"
+      "description": "Subcoleção de pacotes individuais da lista de coleta com ID determinístico"
+    },
+    "/refugo_scans_items/{scanId}": {
+      "schema": "RefugoScan",
+      "description": "Coleção de scans atômicos de pacotes de refugo"
     }
   }
 }

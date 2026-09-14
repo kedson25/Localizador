@@ -54,8 +54,21 @@ import {
   updateItemsBatchMotivo,
   deleteLista as deleteListaFirestore,
   getListaSortTimestamp,
-  listenToListaItens
+  listenToListaItens,
+  reconcileListaCounts
 } from '../lib/firebase';
+import { 
+  apiBipItem, 
+  apiUpdateItem, 
+  apiDeleteItem, 
+  apiGetItemsPage, 
+  apiSearchItems, 
+  apiBatchImport, 
+  apiCreateLista, 
+  apiUpdateListaMeta, 
+  apiDeleteLista,
+  apiReconcileListas
+} from '../lib/api';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { User, getAllUsers } from '../lib/auth';
 import { cleanTrackingId } from '../utils/csvParser';
@@ -137,6 +150,23 @@ const playShortBeep = () => {
 };
 
 const cleanDigits = (str: string) => (str || '').replace(/\D/g, '');
+
+/**
+ * Extrai apenas a identificação do ciclo para exportação/cópia (ex: "Ciclo 3 - Saída SD" -> "Ciclo 3")
+ */
+export const formatSaidaCiclo = (saida: string) => {
+  if (!saida) return '';
+  const trimmed = saida.trim();
+  const match = trimmed.match(/Ciclo\s*\d+/i);
+  if (match) {
+    return match[0].replace(/ciclo/i, 'Ciclo');
+  }
+  // Se for "AM", "PM", "SD", converte para o respectivo ciclo padrão
+  if (/am\b/i.test(trimmed)) return 'Ciclo 1';
+  if (/pm\b/i.test(trimmed)) return 'Ciclo 2';
+  if (/sd\b/i.test(trimmed)) return 'Ciclo 3';
+  return trimmed;
+};
 
 interface BipScannerFormProps {
   onBip: (code: string) => void;
@@ -348,19 +378,52 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const operanteNome = currentUser?.username || 'Usuário Atual';
 
   const [activeItens, setActiveItens] = useState<ColetaItem[]>([]);
+  const [isItensLoaded, setIsItensLoaded] = useState(false);
+
+  const [isCopiedPlanilha, setIsCopiedPlanilha] = useState(false);
 
   useEffect(() => {
     if (activeListaId) {
+      setIsLoadingLista(true);
+      setIsItensLoaded(false);
       return listenToListaItens(activeListaId, (itens) => {
         setActiveItens(itens);
+        setIsItensLoaded(true);
+        setIsLoadingLista(false);
+        setOpeningListaId(null);
       });
     } else {
       setActiveItens([]);
+      setIsItensLoaded(false);
+      setIsLoadingLista(false);
+      setOpeningListaId(null);
     }
   }, [activeListaId]);
 
   const rawListaAtiva = listas.find(l => l.id === activeListaId);
   const listaAtiva = rawListaAtiva ? { ...rawListaAtiva, itens: activeItens } : undefined;
+
+  // Reconciliação automática caso os metadados da lista divirjam dos itens reais
+  useEffect(() => {
+    if (activeListaId && rawListaAtiva && activeItens.length > 0) {
+      if (rawListaAtiva.totalItens !== activeItens.length) {
+        reconcileListaCounts(activeListaId).catch(() => {});
+      }
+    }
+  }, [activeListaId, rawListaAtiva?.totalItens, activeItens.length]);
+
+  const [isReconciling, setIsReconciling] = useState(false);
+
+  const handleSincronizarContadores = async (listaId?: string) => {
+    setIsReconciling(true);
+    try {
+      await apiReconcileListas(listaId);
+    } catch (e) {
+      console.error('Erro ao sincronizar contadores:', e);
+    } finally {
+      setIsReconciling(false);
+    }
+  };
 
   const getModoIndKey = useCallback((listaId: string, username: string) => {
     return `coleta_modo_ind_${listaId}_${username}`;
@@ -477,16 +540,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
   }, [activeListaId]);
 
-  // Quando a lista ativa for carregada, encerra o indicador de carregamento
+  // Timeout de segurança caso a conexão de rede demore ou caia
   useEffect(() => {
-    if (listaAtiva && isLoadingLista) {
+    if (activeListaId && !isItensLoaded && isLoadingLista) {
       const t = setTimeout(() => {
+        setIsItensLoaded(true);
         setIsLoadingLista(false);
         setOpeningListaId(null);
-      }, 250);
+      }, 7000);
       return () => clearTimeout(t);
     }
-  }, [listaAtiva, isLoadingLista]);
+  }, [activeListaId, isItensLoaded, isLoadingLista]);
 
   const handleAbrirLista = (id: string) => {
     setOpeningListaId(id);
@@ -734,24 +798,107 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
   };
 
-  const handleCopiarIdsComMotivoESaida = () => {
+  const handleCopiarParaPlanilha = () => {
     if (!listaAtiva) return;
-    const itensParaCopiar = filteredItems.length > 0 ? filteredItems : listaAtiva.itens;
+    const itensParaCopiar = modoIndividual 
+      ? itensModoIndividual 
+      : (filteredItems.length > 0 ? filteredItems : listaAtiva.itens);
+
     if (itensParaCopiar.length === 0) {
       alert('Não há itens para copiar.');
       return;
     }
-    const texto = itensParaCopiar.map(i => {
-      const grupoNome = listaAtiva.grupos?.find(g => g.id === i.grupoId)?.nome || '';
-      return `${i.codigo} | Saída: ${listaAtiva.saidaPadrao} | Motivo: ${i.motivo || 'N/A'}${grupoNome ? ` | Grupo: ${grupoNome}` : ''}`;
-    }).join('\n');
+
+    const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+
+    // Formato tabulado (TSV) sem divisores (|) e sem prefixos (Saída:, Motivo:, Grupo:).
+    // Ao colar no Excel ou Google Sheets, cada dado vai perfeitamente para sua própria coluna:
+    // Coluna 1: ID | Coluna 2: Ciclo | Coluna 3: Motivo | Coluna 4: Grupo (se houver)
+    const linhas = itensParaCopiar.map(i => {
+      const codigoLimpo = cleanIdOnly(i.codigo);
+      const saidaBruta = (i.saida || listaAtiva.saidaPadrao || '').trim();
+      const ciclo = formatSaidaCiclo(saidaBruta);
+      const motivo = (i.motivo || 'Pendente').trim();
+      const grupoNome = (listaAtiva.grupos?.find(g => g.id === i.grupoId)?.nome || '').trim();
+
+      if (listaAtiva.tipo === 'grupos' && grupoNome) {
+        return `${codigoLimpo}\t${ciclo}\t${motivo}\t${grupoNome}`;
+      }
+      return `${codigoLimpo}\t${ciclo}\t${motivo}`;
+    });
+
+    const texto = linhas.join('\n');
 
     navigator.clipboard.writeText(texto).then(() => {
-      alert(`${itensParaCopiar.length} itens copiados (ID, Saída e Motivo)!`);
+      setIsCopiedPlanilha(true);
+      setTimeout(() => setIsCopiedPlanilha(false), 2000);
     }).catch(err => {
       console.error('Erro ao copiar:', err);
     });
   };
+
+  const handleCopiarSelecionadosParaPlanilha = () => {
+    if (!listaAtiva || selectedItemIds.length === 0) return;
+    const list = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const selecionados = list.filter(i => selectedItemIds.includes(i.id));
+    if (selecionados.length === 0) return;
+
+    const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+    const texto = selecionados.map(i => {
+      const codigoLimpo = cleanIdOnly(i.codigo);
+      const saidaBruta = (i.saida || listaAtiva.saidaPadrao || '').trim();
+      const ciclo = formatSaidaCiclo(saidaBruta);
+      const motivo = (i.motivo || 'Pendente').trim();
+      const grupoNome = (listaAtiva.grupos?.find(g => g.id === i.grupoId)?.nome || '').trim();
+      if (listaAtiva.tipo === 'grupos' && grupoNome) {
+        return `${codigoLimpo}\t${ciclo}\t${motivo}\t${grupoNome}`;
+      }
+      return `${codigoLimpo}\t${ciclo}\t${motivo}`;
+    }).join('\n');
+
+    navigator.clipboard.writeText(texto).then(() => {
+      setIsCopiedPlanilha(true);
+      setTimeout(() => setIsCopiedPlanilha(false), 2000);
+    }).catch(err => console.error('Erro ao copiar:', err));
+  };
+
+  const handleCopiarLinhaCompleta = (item: ColetaItem) => {
+    if (!listaAtiva) return;
+    const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+    const codigoLimpo = cleanIdOnly(item.codigo);
+    const saidaBruta = (item.saida || listaAtiva.saidaPadrao || '').trim();
+    const ciclo = formatSaidaCiclo(saidaBruta);
+    const motivo = (item.motivo || 'Pendente').trim();
+    const texto = `${codigoLimpo}\t${ciclo}\t${motivo}`;
+
+    navigator.clipboard.writeText(texto).then(() => {
+      setCopiedId(item.codigo);
+      setTimeout(() => setCopiedId(null), 1500);
+    }).catch(err => console.error('Erro ao copiar item:', err));
+  };
+
+  const handleCopiarSoIds = () => {
+    if (!listaAtiva) return;
+    const itensParaCopiar = modoIndividual 
+      ? itensModoIndividual 
+      : (filteredItems.length > 0 ? filteredItems : listaAtiva.itens);
+
+    if (itensParaCopiar.length === 0) {
+      alert('Não há itens para copiar.');
+      return;
+    }
+
+    const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+    const texto = itensParaCopiar.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
+
+    navigator.clipboard.writeText(texto).then(() => {
+      alert(`${itensParaCopiar.length} IDs copiados (apenas códigos)!`);
+    }).catch(err => {
+      console.error('Erro ao copiar:', err);
+    });
+  };
+
+  const handleCopiarIdsComMotivoESaida = handleCopiarParaPlanilha;
 
   const handleBaixarListaSoIds = () => {
     if (!listaAtiva) return;
@@ -814,6 +961,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     let countNovos = 0;
     let countAtualizados = 0;
 
+    const itensParaSalvar: ColetaItem[] = [];
+
     itensParaUsar.forEach(itemInd => {
       const cleanCod = itemInd.codigo;
       const cleanCodDigits = cleanDigits(cleanCod);
@@ -829,6 +978,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           responsavel: operanteNome,
           scannedAt: itemInd.scannedAt || new Date().toLocaleString('pt-BR')
         };
+        itensParaSalvar.push(novosItens[idxExistente]);
         countAtualizados++;
       } else {
         const novoItem: ColetaItem = {
@@ -837,6 +987,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           responsavel: operanteNome
         };
         novosItens = [novoItem, ...novosItens];
+        itensParaSalvar.push(novoItem);
         mapaItens.set(cleanCod, 0);
         if (cleanCodDigits) mapaItens.set(cleanCodDigits, 0);
         countNovos++;
@@ -844,7 +995,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
 
     activeItensRef.current = novosItens;
-    await addItemsBatchToLista(listaAtiva.id, novosItens);
+    await addItemsBatchToLista(listaAtiva.id, itensParaSalvar);
+    try {
+      await reconcileListaCounts(listaAtiva.id);
+    } catch (_) {}
 
     // Limpar sessão individual salva após unificar
     const key = getModoIndKey(listaAtiva.id, operanteNome);
@@ -1058,7 +1212,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     // Usar activeItensRef.current para prevenir race-conditions em bips rápidos
     const currentItens = activeItensRef.current && activeItensRef.current.length > 0
       ? activeItensRef.current
-      : listaAtiva.itens;
+      : (listaAtiva.itens || []);
 
     // Verificar se o item já existe nesta lista
     const idx = currentItens.findIndex(
@@ -1066,14 +1220,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     );
 
     let novosItens = [...currentItens];
+    const targetMotivo = selectedMotivo || 'Pendente';
+    const targetSaida = saidaItemFinal;
+    const targetRota = rotaItemFinal;
 
     if (idx !== -1) {
-      // Atualizar item existente
+      // Atualizar item existente otimisticamente
       const existingItem = currentItens[idx];
       const updates = {
-        saida: saidaItemFinal,
-        motivo: selectedMotivo,
-        rota: rotaItemFinal,
+        saida: targetSaida,
+        motivo: targetMotivo,
+        rota: targetRota,
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
         grupoId: listaAtiva.tipo === 'grupos' && listaAtiva.grupoAtivoId ? listaAtiva.grupoAtivoId : existingItem.grupoId
@@ -1082,32 +1239,71 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       setLastScanResult({
         status: 'success',
         code: cleanInput,
-        message: `ID já existente atualizado! (Rota: ${rotaItemFinal})`
+        message: `ID já existente atualizado! (Rota: ${targetRota})`
       });
       activeItensRef.current = novosItens;
-      updateItemInLista(listaAtiva.id, existingItem.id, updates, existingItem).catch(err => console.error('Erro ao atualizar no banco:', err));
+      setActiveItens(novosItens);
     } else {
-      // Adicionar novo ID na lista
+      // Adicionar novo ID na lista otimisticamente com ID determinístico
+      const safeDocId = `pkg_${cleanInput.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
       const novoItem: ColetaItem = {
-        id: 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+        id: safeDocId,
         codigo: cleanInput,
-        rota: rotaItemFinal,
-        saida: saidaItemFinal, // Mesma saída do ciclo da lista
-        motivo: selectedMotivo,
+        rota: targetRota,
+        saida: targetSaida,
+        motivo: targetMotivo,
         scannedAt: new Date().toLocaleString('pt-BR'),
         responsavel: operanteNome,
         grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
-        validado: false
+        validado: false,
+        timestamp: Date.now()
       };
       novosItens = [novoItem, ...novosItens];
       setLastScanResult({
         status: 'success',
         code: cleanInput,
-        message: `Novo ID coletado na lista! (Rota: ${rotaItemFinal})`
+        message: `Novo ID coletado na lista! (Rota: ${targetRota})`
       });
       activeItensRef.current = novosItens;
-      addItemToLista(listaAtiva.id, novoItem).catch(err => console.error('Erro ao salvar no banco:', err));
+      setActiveItens(novosItens);
     }
+
+    // Persistência server-side atômica via API O(1)
+    apiBipItem({
+      listaId: listaAtiva.id,
+      codigo: cleanInput,
+      saida: targetSaida,
+      motivo: targetMotivo,
+      rota: targetRota,
+      responsavel: operanteNome,
+      grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined
+    }).then(res => {
+      if (res && res.item) {
+        setActiveItens(prev => [res.item, ...prev.filter(i => i.id !== res.item.id && i.codigo !== cleanInput)]);
+      }
+    }).catch(err => {
+      console.warn('Erro ao processar bip via API, fallback direto:', err);
+      if (idx !== -1) {
+        const existingItem = currentItens[idx];
+        updateItemInLista(listaAtiva.id, existingItem.id, {
+          saida: targetSaida,
+          motivo: targetMotivo,
+          rota: targetRota,
+          responsavel: operanteNome
+        }, existingItem).catch(e => console.error(e));
+      } else {
+        addItemToLista(listaAtiva.id, {
+          codigo: cleanInput,
+          rota: targetRota,
+          saida: targetSaida,
+          motivo: targetMotivo,
+          scannedAt: new Date().toLocaleString('pt-BR'),
+          responsavel: operanteNome,
+          grupoId: listaAtiva.tipo === 'grupos' ? listaAtiva.grupoAtivoId : undefined,
+          validado: false
+        }).catch(e => console.error(e));
+      }
+    });
   }, [listaAtiva, refugoMap, selectedSaida, modoIndividual, itensModoIndividual, selectedMotivo, operanteNome]);
 
   // Alterar motivo do item selecionado na gaveta
@@ -1131,14 +1327,37 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // Limpar seleção de itens ao trocar de lista
   useEffect(() => {
     setSelectedItemIds([]);
+    setServerSearchResults(null);
   }, [activeListaId]);
+
+  const [serverSearchResults, setServerSearchResults] = useState<ColetaItem[] | null>(null);
 
   useEffect(() => {
     setCurrentPage(1);
     setJumpPageInput('1');
+
+    if (!activeListaId || !searchTerm.trim() || searchTerm.trim().length < 2) {
+      setServerSearchResults(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiSearchItems(activeListaId, searchTerm.trim());
+        if (res && Array.isArray(res.items)) {
+          setServerSearchResults(res.items);
+        }
+      } catch (err) {
+        console.warn('Erro na busca global server-side:', err);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
   }, [activeListaId, searchTerm]);
 
-  const itemsFiltradosBase = modoIndividual ? itensModoIndividual : (listaAtiva?.itens || []);
+  const itemsFiltradosBase = modoIndividual 
+    ? itensModoIndividual 
+    : (serverSearchResults !== null ? serverSearchResults : (listaAtiva?.itens || []));
 
   const filteredItems = useMemo(() => {
     if (!searchTerm.trim()) return itemsFiltradosBase;
@@ -1698,8 +1917,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // -------------------------------------------------------------
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
-  if (activeListaId && !listaAtiva) {
-    if (isLoadingListas || isLoadingLista) {
+  if (activeListaId) {
+    if (!rawListaAtiva && isLoadingListas) {
       return (
         <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
           <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
@@ -1713,23 +1932,42 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       );
     }
 
-    return (
-      <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
-        <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center shadow-xs text-red-500">
-          <AlertCircle className="w-8 h-8" />
+    if (!rawListaAtiva && !isLoadingListas) {
+      return (
+        <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
+          <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center shadow-xs text-red-500">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <div className="max-w-md">
+            <h3 className="text-base font-bold text-gray-900">Esta lista não foi encontrada ou foi excluída</h3>
+            <p className="text-xs text-gray-500 mt-1">A lista de coleta que você estava acessando foi excluída ou não existe mais no sistema.</p>
+          </div>
+          <button
+            onClick={() => navigate('/listas')}
+            className="mt-2 px-4 py-2 bg-[#3483FA] text-white rounded-xl text-xs font-bold hover:bg-[#2c6ecf] transition-all cursor-pointer shadow-sm flex items-center gap-2"
+          >
+            Voltar para Todas as Listas
+          </button>
         </div>
-        <div className="max-w-md">
-          <h3 className="text-base font-bold text-gray-900">Esta lista não foi encontrada ou foi excluída</h3>
-          <p className="text-xs text-gray-500 mt-1">A lista de coleta que você estava acessando foi excluída ou não existe mais no sistema.</p>
+      );
+    }
+
+    // Se a lista foi encontrada mas os itens ainda estão carregando pela primeira vez:
+    if (rawListaAtiva && !isItensLoaded && (rawListaAtiva.totalItens || 0) > 0) {
+      return (
+        <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
+            <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+          </div>
+          <div className="max-w-md">
+            <h3 className="text-base font-bold text-gray-900">{rawListaAtiva.nome}</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Carregando {rawListaAtiva.totalItens.toLocaleString('pt-BR')} pacotes em tempo real...
+            </p>
+          </div>
         </div>
-        <button
-          onClick={() => navigate('/listas')}
-          className="mt-2 px-4 py-2 bg-[#3483FA] text-white rounded-xl text-xs font-bold hover:bg-[#2c6ecf] transition-all cursor-pointer shadow-sm flex items-center gap-2"
-        >
-          Voltar para Todas as Listas
-        </button>
-      </div>
-    );
+      );
+    }
   }
 
   if (!listaAtiva) {
@@ -1799,15 +2037,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </span>
             </div>
 
-            <div className="relative w-full sm:w-64">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
-              <input
-                type="text"
-                value={dashboardSearchTerm}
-                onChange={(e) => setDashboardSearchTerm(e.target.value)}
-                placeholder="Filtrar por nome, rota ou criador..."
-                className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:border-[#3483FA]"
-              />
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                onClick={() => handleSincronizarContadores()}
+                disabled={isReconciling}
+                title="Sincronizar contadores de pacotes com o servidor"
+                className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-lg border border-gray-200 transition-colors flex items-center gap-1.5 text-xs font-bold cursor-pointer disabled:opacity-50"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin text-[#3483FA]' : ''}`} />
+                <span>Sincronizar</span>
+              </button>
+
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-gray-400" />
+                <input
+                  type="text"
+                  value={dashboardSearchTerm}
+                  onChange={(e) => setDashboardSearchTerm(e.target.value)}
+                  placeholder="Filtrar por nome, rota ou criador..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:border-[#3483FA]"
+                />
+              </div>
             </div>
           </div>
 
@@ -2363,30 +2613,12 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                       <button
                         type="button"
-                        onClick={() => {
-                          if (itensModoIndividual.length === 0) {
-                            alert('Nenhum ID nesta sessão para copiar.');
-                            return;
-                          }
-                          const cleanIdOnly = (code: string) => (code || '').toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
-                          const texto = itensModoIndividual.map(i => cleanIdOnly(i.codigo)).filter(Boolean).join('\n');
-                          navigator.clipboard.writeText(texto).then(() => {
-                            alert(`${itensModoIndividual.length} IDs desta sessão copiados!`);
-                          });
-                        }}
-                        className="px-2.5 py-1.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                        onClick={handleCopiarParaPlanilha}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs ${isCopiedPlanilha ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                        title="Copiar lista com IDs, Ciclo e Motivo (pronto para colar em planilha)"
                       >
-                        <Copy className="w-3.5 h-3.5" />
-                        Copiar IDs
-                      </button>
-
-                      <button
-                        onClick={handleCopiarIdsComMotivoESaida}
-                        className="px-2.5 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-500 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                        title="Copiar lista completa com IDs, saídas e motivos"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        Copiar com Detalhes
+                        {isCopiedPlanilha ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5 text-gray-500" />}
+                        {isCopiedPlanilha ? 'Copiado!' : 'Copiar'}
                       </button>
                     </div>
 
@@ -2472,14 +2704,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         Baixar Lista
                       </button>
 
-                      {/* COPIAR COM DETALHES (MOTIVO E SAÍDA) */}
                       <button
-                        onClick={handleCopiarIdsComMotivoESaida}
-                        className="px-2.5 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-500 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                        title="Copiar lista completa com IDs, saídas e motivos"
+                        type="button"
+                        onClick={handleCopiarParaPlanilha}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs ${isCopiedPlanilha ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                        title="Copiar lista com IDs, Ciclo e Motivo (pronto para colar em planilha)"
                       >
-                        <Copy className="w-3.5 h-3.5" />
-                        Copiar com Detalhes
+                        {isCopiedPlanilha ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5 text-gray-500" />}
+                        {isCopiedPlanilha ? 'Copiado!' : 'Copiar'}
                       </button>
                     </div>
 
@@ -2540,15 +2772,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                       Edição em Massa
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleExcluirSelecionadosEmMassa}
-                    className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5"
-                    title="Excluir selecionados"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Excluir Itens
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopiarSelecionadosParaPlanilha}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shadow-xs ${isCopiedPlanilha ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                      title="Copiar apenas os selecionados com IDs, Ciclo e Motivo para planilha"
+                    >
+                      {isCopiedPlanilha ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {isCopiedPlanilha ? 'Copiado!' : `Copiar ${selectedItemIds.length} Selecionados`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExcluirSelecionadosEmMassa}
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5"
+                      title="Excluir selecionados"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Excluir Itens
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex flex-col xl:flex-row gap-6 items-start">
@@ -2801,15 +3044,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <td className="py-1 px-1 sm:px-2 text-center">
                             <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
-                                onClick={() => handleCopy(item.codigo)}
-                                className="p-1 hover:bg-gray-200 text-gray-500 hover:text-black transition-colors cursor-pointer"
-                                title="Copiar ID"
+                                type="button"
+                                onClick={() => handleCopiarLinhaCompleta(item)}
+                                className="p-1 hover:bg-emerald-100 text-emerald-700 transition-colors cursor-pointer rounded"
+                                title="Copiar ID, Saída e Motivo deste item"
                               >
                                 {copiedId === item.codigo ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                               </button>
                               <button
                                 onClick={() => handleRemoverItem(item.id)}
-                                className="p-1 hover:bg-red-100 text-red-600 transition-colors cursor-pointer"
+                                className="p-1 hover:bg-red-100 text-red-600 transition-colors cursor-pointer rounded"
                                 title="Remover Item"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />

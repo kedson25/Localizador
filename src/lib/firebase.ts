@@ -20,6 +20,7 @@ import {
   startAfter,
   endBefore,
   increment,
+  getCountFromServer,
   deleteField,
   QueryDocumentSnapshot,
   memoryLocalCache,
@@ -108,24 +109,31 @@ export interface RefugoData {
 }
 
 export async function saveRefugo(rawText: string, totalRows: number, fileName?: string): Promise<boolean> {
-  const localData: RefugoData = {
-    rawText,
-    totalRows,
-    fileName: fileName || 'refugo.csv',
-    updatedAt: new Date().toISOString(),
-  };
-
+  // Salva apenas metadados no localStorage para evitar QuotaExceededError com CSVs de vários megabytes
   try {
-    localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify(localData));
+    const metaOnly = {
+      totalRows,
+      fileName: fileName || 'refugo.csv',
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY + '_meta', JSON.stringify(metaOnly));
+    // Se o texto for pequeno (< 200KB), pode manter em cache temporário
+    if (rawText.length < 200000) {
+      localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify({ rawText, ...metaOnly }));
+    } else {
+      localStorage.removeItem(LOCAL_STORAGE_REFUGO_KEY);
+    }
   } catch (err) {
-    console.warn('Falha ao salvar refugo no localStorage:', err);
+    console.warn('Aviso: localStorage cheio, operando em memória RAM:', err);
   }
 
   try {
+    // Firestore limita documentos a 1MB. Se o texto exceder 800KB, grava com segurança
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
+    const safeText = rawText.length > 800000 ? rawText.slice(0, 800000) : rawText;
     await withTimeout(
       setDoc(refugoRef, {
-        rawText,
+        rawText: safeText,
         totalRows,
         fileName: fileName || 'refugo.csv',
         updatedAt: serverTimestamp(),
@@ -134,7 +142,7 @@ export async function saveRefugo(rawText: string, totalRows: number, fileName?: 
     );
     return true;
   } catch (error) {
-    console.warn('Aviso: Firestore offline (refugo salvo localmente):', error);
+    console.warn('Aviso: Firestore offline ao salvar refugo:', error);
     return true;
   }
 }
@@ -363,16 +371,20 @@ export async function saveRefugoScans(scans: any[], immediate = false): Promise<
 
   const doSave = async (dataToSave: any[]) => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(dataToSave));
+      // Limita o cache local aos últimos 100 scans para garantir que nunca estoure o localStorage
+      const safeToCache = dataToSave.slice(-100);
+      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(safeToCache));
     } catch (err) {
       console.warn('Falha ao salvar scans localmente:', err);
     }
     
     try {
       const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
+      // Limita aos 1000 mais recentes para nunca estourar o limite de 1MB do Firestore
+      const safeServerScans = dataToSave.length > 1000 ? dataToSave.slice(-1000) : dataToSave;
       await withTimeout(
         setDoc(refugoScansRef, {
-          scans: dataToSave,
+          scans: safeServerScans,
           updatedAt: serverTimestamp(),
         }),
         3500
@@ -613,18 +625,63 @@ export function listenToListas(callback: (listas: ColetaLista[]) => void): () =>
   });
 }
 
+// Cache em memória de itens por lista para abertura instantânea (0ms)
+const listaItensCache = new Map<string, ColetaItem[]>();
+
 /**
  * Escuta os itens de uma lista específica em tempo real.
+ * Por padrão carrega todos os itens da lista para garantir integridade total dos totais e grupos.
  */
-export function listenToListaItens(listaId: string, callback: (itens: ColetaItem[]) => void): () => void {
+export function listenToListaItens(
+  listaId: string,
+  callback: (itens: ColetaItem[]) => void,
+  maxLimit = 10000
+): () => void {
   if (!listaId) return () => {};
+
+  // Se já temos os itens em memória nesta sessão, entrega imediatamente para evitar tela em branco
+  if (listaItensCache.has(listaId)) {
+    const cached = listaItensCache.get(listaId);
+    if (cached && cached.length > 0) {
+      callback(cached);
+    }
+  }
+
   const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
-  const q = query(colRef, orderBy('timestamp', 'desc'));
+  const safeLimit = maxLimit > 0 ? Math.min(maxLimit, 10000) : null;
+  const q = safeLimit 
+    ? query(colRef, orderBy('timestamp', 'desc'), limit(safeLimit))
+    : query(colRef, orderBy('timestamp', 'desc'));
+
+  let hasDeliveredFromServer = false;
+
+  // Busca inicial paralela via getDocs para entregar em altíssima velocidade
+  getDocs(q).then((snap) => {
+    if (!hasDeliveredFromServer && !snap.empty) {
+      const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+      listaItensCache.set(listaId, items);
+      callback(items);
+    }
+  }).catch((err) => {
+    console.warn('Busca inicial de itens via getDocs falhou, aguardando onSnapshot:', err);
+  });
+
   return onSnapshot(q, (snap) => {
+    hasDeliveredFromServer = true;
     const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+    listaItensCache.set(listaId, items);
     callback(items);
   }, (err) => {
     console.error('Erro ao escutar itens da lista:', err);
+    // Fallback em caso de erro na query ordenada por timestamp: tentar buscar sem ordenação
+    if (!hasDeliveredFromServer) {
+      getDocs(colRef).then((fallbackSnap) => {
+        const items = fallbackSnap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+        items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        listaItensCache.set(listaId, items);
+        callback(items);
+      }).catch(e => console.error('Fallback getDocs também falhou:', e));
+    }
   });
 }
 
@@ -740,21 +797,33 @@ export async function addItemToLista(
     timestamp
   };
 
-  // 1. Grava o documento individual do pacote no servidor
+  // 1. Verifica se o item já existe para não inflar contadores
+  let isNewItem = true;
+  try {
+    const existingSnap = await getDoc(itemDocRef);
+    if (existingSnap.exists()) {
+      isNewItem = false;
+    }
+  } catch (_) {}
+
+  // 2. Grava o documento individual do pacote no servidor
   await setDoc(itemDocRef, cleanUndefined(itemToSave));
 
-  // 2. Atualiza contadores no documento pai no servidor
+  // 3. Atualiza contadores no documento pai no servidor
   const op = item.responsavel || 'Operador';
   const saida = item.saida || 'Ciclo 2 - Saída PM';
   const motivo = item.motivo || 'Pendente';
 
   const updatePayload: Record<string, any> = {
-    totalItens: increment(1),
     updatedAt: serverTimestamp(),
     [`bipsPorOperador.${op}`]: increment(1),
     [`saidasCount.${saida}`]: increment(1),
     [`motivosCount.${motivo}`]: increment(1),
   };
+
+  if (isNewItem) {
+    updatePayload.totalItens = increment(1);
+  }
 
   if (item.validado) {
     updatePayload.totalValidados = increment(1);
@@ -894,11 +963,19 @@ export async function deleteItemsBatchFromLista(
     }
 
     try {
+      const countSnap = await getCountFromServer(collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens'));
       await updateDoc(listaDocRef, {
-        totalItens: increment(-itemIds.length),
+        totalItens: countSnap.data().count,
         updatedAt: serverTimestamp()
       });
-    } catch (_) {}
+    } catch (_) {
+      try {
+        await updateDoc(listaDocRef, {
+          totalItens: increment(-itemIds.length),
+          updatedAt: serverTimestamp()
+        });
+      } catch (_) {}
+    }
 
     return true;
   } catch (error) {
@@ -933,8 +1010,9 @@ export async function addItemsBatchToLista(listaId: string, items: ColetaItem[])
 
     const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
     try {
+      const countSnap = await getCountFromServer(collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens'));
       await updateDoc(listaDocRef, {
-        totalItens: increment(items.length),
+        totalItens: countSnap.data().count,
         updatedAt: serverTimestamp()
       });
     } catch (_) {}
@@ -943,6 +1021,45 @@ export async function addItemsBatchToLista(listaId: string, items: ColetaItem[])
   } catch (error) {
     console.error('Erro ao adicionar itens em lote no servidor:', error);
     return false;
+  }
+}
+
+/**
+ * Reconcilia e recalcula contagens exatas da lista no servidor
+ */
+export async function reconcileListaCounts(listaId: string): Promise<{ totalItens: number; totalValidados: number }> {
+  try {
+    const colRef = collection(db, COLETA_LISTAS_COLLECTION, listaId, 'itens');
+    const itemsSnap = await getDocs(colRef);
+    const totalItens = itemsSnap.size;
+    let totalValidados = 0;
+    const bipsPorOperador: Record<string, number> = {};
+    const saidasCount: Record<string, number> = {};
+    const motivosCount: Record<string, number> = {};
+
+    itemsSnap.docs.forEach(d => {
+      const item = d.data();
+      if (item.validado) totalValidados++;
+      const op = item.responsavel || 'Operador';
+      bipsPorOperador[op] = (bipsPorOperador[op] || 0) + 1;
+      if (item.saida) saidasCount[item.saida] = (saidasCount[item.saida] || 0) + 1;
+      if (item.motivo) motivosCount[item.motivo] = (motivosCount[item.motivo] || 0) + 1;
+    });
+
+    const listaDocRef = doc(db, COLETA_LISTAS_COLLECTION, listaId);
+    await updateDoc(listaDocRef, {
+      totalItens,
+      totalValidados,
+      bipsPorOperador,
+      saidasCount,
+      motivosCount,
+      updatedAt: serverTimestamp()
+    });
+
+    return { totalItens, totalValidados };
+  } catch (error) {
+    console.error('Erro ao reconciliar contadores da lista:', error);
+    return { totalItens: 0, totalValidados: 0 };
   }
 }
 
