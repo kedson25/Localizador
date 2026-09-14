@@ -1767,6 +1767,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   // VIEW 1: DASHBOARD DE LISTAS (EXIBIÇÃO EM TABELA/LISTA SEM DADOS FAKE)
   // -------------------------------------------------------------
   if (activeListaId && !listaAtiva) {
+    if (isLoadingListas || isLoadingLista) {
+      return (
+        <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs">
+            <Loader2 className="w-8 h-8 text-[#3483FA] animate-spin" />
+          </div>
+          <div className="max-w-md">
+            <h3 className="text-base font-bold text-gray-900">Carregando lista de coleta...</h3>
+            <p className="text-xs text-gray-500 mt-1">Conectando ao banco de dados em tempo real.</p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-4">
         <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center shadow-xs text-red-500">

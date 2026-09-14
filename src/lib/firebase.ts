@@ -32,14 +32,13 @@ try {
 } catch (_) {}
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA",
-  authDomain: "ecooy-5b791.firebaseapp.com",
-  databaseURL: "https://ecooy-5b791-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "ecooy-5b791",
-  storageBucket: "ecooy-5b791.firebasestorage.app",
-  messagingSenderId: "824859587278",
-  appId: "1:824859587278:web:9a6b5a4485af41e70dd69f",
-  measurementId: "G-LDCXYXPEXF"
+  apiKey: "AIzaSyC-9ZgBnd6sjkAS6phLsO5fp_19UYNL5s4",
+  authDomain: "ssp45-d1847.firebaseapp.com",
+  projectId: "ssp45-d1847",
+  storageBucket: "ssp45-d1847.firebasestorage.app",
+  messagingSenderId: "684115094877",
+  appId: "1:684115094877:web:dc6797f688ac5b84b50cb4",
+  measurementId: "G-1V7HWH4L37"
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -479,6 +478,13 @@ export function cleanUndefined(obj: any): any {
   if (Array.isArray(obj)) {
     return obj.map(cleanUndefined);
   }
+  
+  // Se não for um objeto plano (ex: FieldValue, Timestamp), retorna o próprio objeto para preservar a funcionalidade do Firestore
+  const proto = Object.getPrototypeOf(obj);
+  if (proto !== null && proto !== Object.prototype) {
+    return obj;
+  }
+
   const cleaned: Record<string, any> = {};
   for (const key of Object.keys(obj)) {
     if (obj[key] !== undefined) {
@@ -978,7 +984,10 @@ export async function getItemsPage(
     }
 
     const snap = await getDocs(q);
-    const items = snap.docs.map(d => ({ ...d.data(), id: d.id } as ColetaItem));
+    const items = snap.docs.map(d => {
+      const data = d.data() as any;
+      return { ...data, id: d.id } as ColetaItem;
+    });
     const firstDoc = snap.docs.length > 0 ? snap.docs[0] : null;
     const lastDoc = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
 

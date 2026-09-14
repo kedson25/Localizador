@@ -16,7 +16,7 @@ import {
   Sliders,
   CheckCircle2,
 } from 'lucide-react';
-import { CsvRow, ColetaLista } from '../types';
+import { CsvRow, ColetaLista, ColetaItem } from '../types';
 import { cleanDigits } from '../utils/csvParser';
 import { listenToListas } from '../lib/firebase';
 
