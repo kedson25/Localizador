@@ -355,8 +355,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [showVerificarLoteModal, setShowVerificarLoteModal] = useState(false);
   const [verificarLoteText, setVerificarLoteText] = useState('');
 
-  // Estado para a gaveta de exclusão
-  const [listaParaExcluir, setListaParaExcluir] = useState<ColetaLista | null>(null);
   const [listaParaFinalizar, setListaParaFinalizar] = useState<ColetaLista | null>(null);
   const [juntarComBrancas, setJuntarComBrancas] = useState(true);
 
@@ -1789,14 +1787,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     setShowModalLote(false);
   };
 
-  const handleExcluirLista = async (listaId: string) => {
+  const handleExcluirLista = async (lista: ColetaLista) => {
+    if (!window.confirm(`Tem certeza que deseja excluir a lista "${lista.nome}"?\nEsta ação não pode ser desfeita.`)) {
+      return;
+    }
     // Atualização otimista imediata 0ms na UI
-    setListas(prev => prev.filter(l => l.id !== listaId));
-    await deleteListaFirestore(listaId);
-    if (activeListaId === listaId) {
+    setListas(prev => prev.filter(l => l.id !== lista.id));
+    await deleteListaFirestore(lista.id);
+    if (activeListaId === lista.id) {
       navigate('/listas');
     }
-    setListaParaExcluir(null);
   };
 
   const handleReabrirLista = async (listaId: string) => {
@@ -2174,7 +2174,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </button>
                           )}
                           <button
-                            onClick={() => setListaParaExcluir(lista)}
+                            onClick={() => handleExcluirLista(lista)}
                             className="p-1.5 hover:bg-red-50 text-red-600 rounded-lg transition-colors border border-red-200 cursor-pointer"
                             title="Excluir Lista"
                           >
@@ -3805,93 +3805,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           </div>
         </div>
       )}
-
-      {/* GAVETA DE CONFIRMAÇÃO DE EXCLUSÃO DE LISTA */}
-      <AnimatePresence>
-        {listaParaExcluir && (
-          <div className="fixed inset-0 z-[60] flex justify-end overflow-hidden">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setListaParaExcluir(null)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-sm bg-white shadow-2xl h-full flex flex-col"
-            >
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-red-50/50">
-                <div className="flex items-center gap-2 text-red-600">
-                  <AlertCircle className="w-6 h-6" />
-                  <h3 className="text-lg font-black uppercase tracking-tight">Confirmar Exclusão</h3>
-                </div>
-                <button 
-                  onClick={() => setListaParaExcluir(null)}
-                  className="p-2 hover:bg-red-100 rounded-full text-red-400 transition-colors cursor-pointer"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-
-              <div className="flex-1 p-6 space-y-6 overflow-y-auto">
-                <div className="bg-red-50 border border-red-100 rounded-2xl p-5 space-y-3">
-                  <p className="text-sm font-bold text-red-900 leading-relaxed">
-                    Você está prestes a excluir permanentemente esta lista de coleta. Esta ação não pode ser desfeita.
-                  </p>
-                  <div className="pt-3 border-t border-red-200">
-                    <p className="text-[10px] uppercase font-black text-red-500 tracking-wider">Lista Selecionada:</p>
-                    <p className="text-base font-black text-red-700">{listaParaExcluir.nome}</p>
-                    <p className="text-xs font-bold text-red-600/70">{listaParaExcluir.data} • {listaParaExcluir.totalItens || 0} itens</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">O que acontece agora?</h4>
-                  <ul className="space-y-3">
-                    <li className="flex gap-3 items-start">
-                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
-                        <XCircle className="w-3 h-3 text-gray-500" />
-                      </div>
-                      <p className="text-xs font-bold text-gray-600 leading-snug">
-                        Todos os bips registrados nesta lista serão apagados do sistema.
-                      </p>
-                    </li>
-                    <li className="flex gap-3 items-start">
-                      <div className="mt-1 p-1 bg-gray-100 rounded-md">
-                        <Users className="w-3 h-3 text-gray-500" />
-                      </div>
-                      <p className="text-xs font-bold text-gray-600 leading-snug">
-                        Outros operadores deixarão de ver esta lista imediatamente.
-                      </p>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="p-6 bg-gray-50 border-t border-gray-100 space-y-3">
-                <button
-                  onClick={() => handleExcluirLista(listaParaExcluir.id)}
-                  className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer"
-                >
-                  <Trash2 className="w-5 h-5" />
-                  CONFIRMAR EXCLUSÃO
-                </button>
-                <button
-                  onClick={() => setListaParaExcluir(null)}
-                  className="w-full py-4 bg-white border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-2xl font-black text-sm transition-all cursor-pointer"
-                >
-                  CANCELAR
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       {/* POPUP DE CONFIRMAÇÃO DE FINALIZAÇÃO DE LISTA */}
       <AnimatePresence>
         {listaParaFinalizar && (() => {
