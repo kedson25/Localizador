@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check } from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
-import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista } from '../lib/firebase';
+import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista, getAllItemsForExport } from '../lib/firebase';
 import { cleanDigits, cleanTrackingId } from '../utils/csvParser';
 import type { User } from '../lib/auth';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
@@ -332,7 +332,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
           return;
         }
 
-        const currentItens = await import('../lib/firebase').then(m => m.getAllItemsForExport(targetList.id));
+        const currentItens = await getAllItemsForExport(targetList.id);
 
         // Evitar pacotes duplicados
         const existingCodes = new Set(currentItens.map(i => i.codigo.toUpperCase()));

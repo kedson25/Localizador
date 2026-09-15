@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { CsvRow, ColetaLista, ColetaItem } from '../types';
 import { cleanDigits } from '../utils/csvParser';
-import { listenToListas } from '../lib/firebase';
+import { listenToListas, getAllItemsForExport } from '../lib/firebase';
 
 interface WhatsappReportProps {
   rows: CsvRow[];
@@ -88,7 +88,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
   const [selectedListaItens, setSelectedListaItens] = useState<ColetaItem[]>([]);
   useEffect(() => {
     if (selectedListaId) {
-      import('../lib/firebase').then(m => m.getAllItemsForExport(selectedListaId).then(setSelectedListaItens));
+      getAllItemsForExport(selectedListaId).then(setSelectedListaItens);
     } else {
       setSelectedListaItens([]);
     }
