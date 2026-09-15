@@ -1,33 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import {
-  initializeFirestore,
-  getFirestore,
-  collection,
-  collectionGroup,
-  doc,
-  setDoc,
-  getDoc,
-  getDocs,
-  updateDoc,
-  deleteDoc,
-  writeBatch,
-  serverTimestamp,
-  onSnapshot,
-  query,
-  where,
-  orderBy,
-  limit,
-  startAfter,
-  endBefore,
-  increment,
-  getCountFromServer,
-  deleteField,
-  QueryDocumentSnapshot,
-  memoryLocalCache,
-  enableNetwork,
-  disableNetwork,
-  setLogLevel
-} from 'firebase/firestore';
+import { initializeFirestore, getFirestore, collection, collectionGroup, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, writeBatch, serverTimestamp, onSnapshot, query, where, orderBy, limit, startAfter, endBefore, increment, getCountFromServer, deleteField, QueryDocumentSnapshot, memoryLocalCache, enableNetwork, disableNetwork, setLogLevel } from 'firebase/firestore';
 
 // Silencia avisos internos de conectividade temporária do SDK do Firestore
 try {
@@ -361,57 +333,37 @@ export async function clearColetor(): Promise<boolean> {
 let refugoScansDebounceTimer: any = null;
 let pendingScansData: any[] | null = null;
 
+
 export async function saveRefugoScans(scans: any[], immediate = false): Promise<boolean> {
-  pendingScansData = scans;
+  // O array "scans" vem completo da interface, mas o primeiro item é o mais novo (bipado agora).
+  if (!scans || scans.length === 0) return true;
   
-  if (refugoScansDebounceTimer) {
-    clearTimeout(refugoScansDebounceTimer);
-    refugoScansDebounceTimer = null;
-  }
-
-  const doSave = async (dataToSave: any[]) => {
-    try {
-      // Limita o cache local aos últimos 100 scans para garantir que nunca estoure o localStorage
-      const safeToCache = dataToSave.slice(-100);
-      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(safeToCache));
-    } catch (err) {
-      console.warn('Falha ao salvar scans localmente:', err);
-    }
+  // Vamos salvar apenas o scan mais recente na subcoleção para evitar re-gravar todos
+  const latestScan = scans[0];
+  
+  // Se "latestScan" não tiver as propriedades, tentamos salvar todos em batch (fallback)
+  const dbCollection = collection(db, 'refugo_scans_items');
+  
+  try {
+    const cleanId = latestScan.id.replace(/[^a-zA-Z0-9]/g, '');
+    const docId = cleanId ? `${cleanId}_${Date.now()}` : `scan_${Date.now()}`;
     
-    try {
-      const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
-      // Limita aos 1000 mais recentes para nunca estourar o limite de 1MB do Firestore
-      const safeServerScans = dataToSave.length > 1000 ? dataToSave.slice(-1000) : dataToSave;
-      await withTimeout(
-        setDoc(refugoScansRef, {
-          scans: safeServerScans,
-          updatedAt: serverTimestamp(),
-        }),
-        3500
-      );
-      return true;
-    } catch (error) {
-      console.warn('Aviso: Firestore offline (scans salvos localmente):', error);
-      return true;
-    }
-  };
-
-  if (immediate) {
-    return await doSave(scans);
+    await withTimeout(
+      setDoc(doc(dbCollection, docId), {
+        ...latestScan,
+        scannedAt: latestScan.scannedAt instanceof Date ? latestScan.scannedAt.toISOString() : latestScan.scannedAt,
+        timestamp: Date.now(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true }),
+      3500
+    );
+    return true;
+  } catch (error) {
+    console.warn('Aviso: Firestore offline (scans salvos localmente):', error);
+    return true;
   }
-
-  return new Promise<boolean>((resolve) => {
-    refugoScansDebounceTimer = setTimeout(async () => {
-      refugoScansDebounceTimer = null;
-      if (pendingScansData) {
-        const res = await doSave(pendingScansData);
-        resolve(res);
-      } else {
-        resolve(true);
-      }
-    }, 350);
-  });
 }
+
 
 export async function loadRefugoScans(): Promise<any[] | null> {
   let localData: any[] | null = null;
@@ -423,23 +375,13 @@ export async function loadRefugoScans(): Promise<any[] | null> {
   } catch (err) {}
   
   try {
-    const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
-    const snap = await withTimeout(getDoc(refugoScansRef), 3000);
-    if (snap.exists()) {
-      const remoteData = snap.data();
-      if (remoteData && Array.isArray(remoteData.scans)) {
-        try {
-          localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(remoteData.scans));
-        } catch (_) {}
-        return remoteData.scans;
-      } else {
-        try { localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify([])); } catch (_) {}
-        return [];
-      }
-    } else {
-      try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_SCANS_KEY); } catch (_) {}
-      return [];
-    }
+    const q = query(collection(db, 'refugo_scans_items'), orderBy('timestamp', 'desc'), limit(500));
+    const snap = await withTimeout(getDocs(q), 3000);
+    const remoteData = snap.docs.map(d => d.data());
+    try {
+      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(remoteData));
+    } catch (_) {}
+    return remoteData;
   } catch (error) {
     console.warn('Não foi possível conectar ao Firestore para scans:', error);
   }
@@ -452,6 +394,13 @@ export async function clearRefugoScans(): Promise<boolean> {
   } catch (err) {}
   
   try {
+    const q = query(collection(db, 'refugo_scans_items'), limit(500));
+    const snap = await withTimeout(getDocs(q), 3000);
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await withTimeout(batch.commit(), 3000);
+    
+    // Antigo doc monolítico por garantia
     const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
     await withTimeout(deleteDoc(refugoScansRef), 3000);
     return true;
@@ -461,9 +410,8 @@ export async function clearRefugoScans(): Promise<boolean> {
   }
 }
 
+
 export function listenToRefugoScans(callback: (scans: any[]) => void): () => void {
-  const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
-  
   // Immediately check local storage cache first
   try {
     const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_SCANS_KEY);
@@ -472,24 +420,15 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
     }
   } catch (_) {}
 
-  // Real-time listener
-  const unsubscribe = onSnapshot(refugoScansRef, (snap) => {
-    if (snap.exists()) {
-      const data = snap.data();
-      if (data && Array.isArray(data.scans)) {
-        // Sync local storage on update
-        try {
-          localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(data.scans));
-        } catch (_) {}
-        callback(data.scans);
-      } else {
-        try { localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify([])); } catch (_) {}
-        callback([]);
-      }
-    } else {
-      try { localStorage.removeItem(LOCAL_STORAGE_REFUGO_SCANS_KEY); } catch (_) {}
-      callback([]); // document was deleted or doesn't exist
-    }
+  // Real-time listener in the collection
+  const q = query(collection(db, 'refugo_scans_items'), orderBy('timestamp', 'desc'), limit(500));
+  
+  const unsubscribe = onSnapshot(q, (snap) => {
+    const scans = snap.docs.map(d => d.data());
+    try {
+      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(scans));
+    } catch (_) {}
+    callback(scans);
   }, (error) => {
     console.warn('Erro ao escutar scans em tempo real (fallback local):', error);
     try {
@@ -499,7 +438,7 @@ export function listenToRefugoScans(callback: (scans: any[]) => void): () => voi
       callback([]);
     }
   });
-
+  
   return unsubscribe;
 }
 

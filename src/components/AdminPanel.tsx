@@ -5,7 +5,7 @@ import {
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
   AlertCircle, CheckCircle2, Copy, Download, Search, Barcode, User as UserIcon, Check,
   Calendar, UserCheck, UserPlus, Clock, Filter, RotateCcw,
-  TrendingUp, Target, Trophy
+  TrendingUp, Target, Trophy, Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { listenToListas, saveLista, listenToRefugoScans } from '../lib/firebase';
