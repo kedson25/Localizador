@@ -60,7 +60,7 @@ export async function signupUser(
 ): Promise<{ success: boolean; message?: string }> {
   // 1. Tenta cadastrar via API backend (segura, Firebase Admin Auth)
   try {
-    const res = await fetch('/api/auth/signup', {
+    const res = await fetch('/api/auth?action=signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, email, password }),
@@ -113,7 +113,7 @@ export async function loginUser(
 ): Promise<{ success: boolean; user?: User; message?: string }> {
   // 1. Tenta autenticar via API backend
   try {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch('/api/auth?action=login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ emailOrUsername, password }),
@@ -166,7 +166,7 @@ export async function loginUser(
 export async function getAllUsers(): Promise<User[]> {
   // 1. Tenta via API backend
   try {
-    const res = await fetch('/api/auth/users');
+    const res = await fetch('/api/auth?action=users');
     const data = await res.json();
     if (data.ok && Array.isArray(data.data?.users)) {
       return data.data.users;
@@ -197,7 +197,7 @@ export async function updateUserAdminStatus(
 
   // 1. Tenta via API backend
   try {
-    const res = await fetch('/api/auth/users', {
+    const res = await fetch('/api/auth?action=users', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, updates: safeUpdates }),
