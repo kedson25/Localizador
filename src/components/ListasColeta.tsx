@@ -55,7 +55,8 @@ import {
   deleteLista as deleteListaFirestore,
   getListaSortTimestamp,
   listenToListaItens,
-  reconcileListaCounts
+  reconcileListaCounts,
+  getAllItemsForExport
 } from '../lib/firebase';
 import { 
   apiBipItem, 
@@ -1835,7 +1836,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       
       const cleanIdOnly = (code: string) => {
         if (!code) return '';
-        return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+        // Remove all non-numeric characters to ensure only the 11-digit number remains
+        return code.toString().replace(/\D/g, '');
       };
 
       // 1. Obter os itens validados da lista (se existirem itens validados, filtra eles; senão considera todos)
@@ -1843,7 +1845,9 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         ? itensReais.filter(i => i.validado)
         : itensReais;
 
-      const idsValidados = itensValidados.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
+      const idsValidados = itensValidados
+        .map(item => cleanIdOnly(item.codigo))
+        .filter(code => code && code.length >= 10);
 
       // 2. Se optou por juntar com as brancas do refugo
       let rowsCsv: string[] = [];
@@ -1925,11 +1929,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
       alert('Não há itens para exportar.');
       return;
     }
+
     const cleanIdOnly = (code: string) => {
       if (!code) return '';
-      return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
+      // Remove all non-numeric characters to ensure only the 11-digit number remains
+      const numericOnly = code.toString().replace(/\D/g, '');
+      return numericOnly;
     };
-    const rows = itens.map(i => cleanIdOnly(i.codigo)).filter(Boolean);
+
+    const rows = itens
+      .map(i => cleanIdOnly(i.codigo))
+      .filter(code => code && code.length >= 10); // Ensure it's a valid looking ID
+
     const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
