@@ -900,7 +900,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
   const handleBaixarListaSoIds = () => {
     if (!listaAtiva) return;
-    const itensParaExportar = modoIndividual ? itensModoIndividual : listaAtiva.itens;
+    const itensParaExportar = modoIndividual ? itensModoIndividual : activeItens;
     exportarApenasIdsCSV(listaAtiva, itensParaExportar, modoIndividual ? 'IDs_Individual' : 'IDs');
   };
 
@@ -1799,6 +1799,20 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
   };
 
+  const handleAbrirFinalizar = async (lista: ColetaLista) => {
+    setIsLoadingLista(true);
+    setLoadingMessage('Buscando itens da lista...');
+    try {
+      const itens = await getAllItemsForExport(lista.id);
+      setListaParaFinalizar({ ...lista, itens });
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao carregar itens da lista');
+    } finally {
+      setIsLoadingLista(false);
+    }
+  };
+
   const handleReabrirLista = async (listaId: string) => {
     const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
     if (lista) {
@@ -1808,27 +1822,35 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   };
 
   const handleFinalizarLista = async (listaId: string, unificarBrancas: boolean = false) => {
-    const lista = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
-    if (lista) {
+    // Pegar metadados da lista
+    const listaMeta = listas.find(l => l.id === listaId) || (listaAtiva?.id === listaId ? listaAtiva : null);
+    if (!listaMeta) return;
+
+    setIsLoadingLista(true);
+    setLoadingMessage('Buscando itens e finalizando lista...');
+
+    try {
+      // Buscar todos os itens reias da subcoleção para exportação/finalização
+      const itensReais = await getAllItemsForExport(listaId);
+      
       const cleanIdOnly = (code: string) => {
         if (!code) return '';
         return code.toString().trim().replace(/["\r\n\t]/g, '').replace(/\s+/g, '');
       };
 
       // 1. Obter os itens validados da lista (se existirem itens validados, filtra eles; senão considera todos)
-      const itensValidados = lista.itens.some(i => i.validado)
-        ? lista.itens.filter(i => i.validado)
-        : lista.itens;
+      const itensValidados = itensReais.some(i => i.validado)
+        ? itensReais.filter(i => i.validado)
+        : itensReais;
 
       const idsValidados = itensValidados.map(item => cleanIdOnly(item.codigo)).filter(Boolean);
 
       // 2. Se optou por juntar com as brancas do refugo
       let rowsCsv: string[] = [];
-
       if (unificarBrancas && idsBrancasRefugo.length > 0) {
         const validadosSet = new Set(idsValidados.map(id => id.toUpperCase()));
         const brancasAdicionais = idsBrancasRefugo.filter(id => !validadosSet.has(id.toUpperCase()));
-
+        
         // CSV unificado: validados primeiro, depois as brancas
         rowsCsv = [...idsValidados, ...brancasAdicionais];
 
@@ -1837,12 +1859,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           id: `branca-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
           codigo: code,
           rota: 'Brancas',
-          saida: lista.saidaPadrao || 'Ciclo 2 - Saída PM',
+          saida: listaMeta.saidaPadrao || 'Ciclo 2 - Saída PM',
           motivo: 'Brancas',
           scannedAt: new Date().toLocaleString('pt-BR'),
           responsavel: operanteNome,
           validado: true
         }));
+
         if (itensBrancasNovos.length > 0) {
           await addItemsBatchToLista(listaId, itensBrancasNovos);
         }
@@ -1862,14 +1885,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
         const link = document.createElement('a');
         link.href = url;
         const sufixoNome = unificarBrancas ? '_Validados_Com_Brancas.csv' : '_Validados.csv';
-        link.setAttribute('download', `${lista.nome.replace(/\s+/g, '_')}${sufixoNome}`);
+        link.setAttribute('download', `${listaMeta.nome.replace(/\s+/g, '_')}${sufixoNome}`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+      } else {
+        alert('Nenhum item válido para baixar.');
       }
 
       setListaParaFinalizar(null);
+    } catch (error) {
+      console.error("Erro ao finalizar lista", error);
+      alert('Erro ao finalizar a lista. Tente novamente.');
+    } finally {
+      setIsLoadingLista(false);
     }
   };
 
@@ -1910,8 +1940,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     document.body.removeChild(link);
   };
 
-  const exportListaCSV = (lista: ColetaLista) => {
-    exportarApenasIdsCSV(lista);
+  const exportListaCSV = async (lista: ColetaLista) => {
+    setIsLoadingLista(true);
+    setLoadingMessage('Buscando itens da lista...');
+    try {
+      const itens = await getAllItemsForExport(lista.id);
+      exportarApenasIdsCSV(lista, itens);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao carregar itens da lista');
+    } finally {
+      setIsLoadingLista(false);
+    }
   };
 
   // -------------------------------------------------------------
@@ -3212,7 +3252,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     type="button"
                     onClick={() => {
                       setJuntarComBrancas(true);
-                      setListaParaFinalizar(listaAtiva);
+                      handleAbrirFinalizar(listaAtiva);
                     }}
                     className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                   >
