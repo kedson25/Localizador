@@ -22,7 +22,6 @@ export default async function handler(req: any, res: any) {
           createdAt: data.createdAt,
         };
       });
-
       return sendSuccess(res, { users });
     } catch (err: any) {
       return sendError(res, 500, 'FETCH_FAILED', 'Erro ao listar usuários', err.message);
@@ -31,7 +30,6 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === 'PATCH') {
     try {
-      // Validar que o solicitante é administrador no servidor
       let currentUser;
       try {
         currentUser = await requireAuth(req);
@@ -42,12 +40,10 @@ export default async function handler(req: any, res: any) {
         return sendError(res, 400, 'INVALID_PAYLOAD', 'userId e updates são obrigatórios');
       }
 
-      // Whitelist de campos permitidos
       const allowedKeys = ['isAdmin', 'isApproved', 'allowedGroups'];
       const safeUpdates: Record<string, any> = {
         updatedAt: FieldValue.serverTimestamp(),
       };
-
       for (const key of allowedKeys) {
         if (updates[key] !== undefined) {
           safeUpdates[key] = updates[key];
@@ -65,6 +61,32 @@ export default async function handler(req: any, res: any) {
       return sendSuccess(res, { updated: true, userId });
     } catch (err: any) {
       return sendError(res, 500, 'UPDATE_FAILED', 'Erro ao atualizar usuário', err.message);
+    }
+  }
+
+  if (req.method === 'DELETE') {
+    try {
+      let currentUser;
+      try {
+        currentUser = await requireAuth(req);
+      } catch (_) {}
+
+      const { userId } = req.body || {};
+      if (!userId) {
+        return sendError(res, 400, 'INVALID_PAYLOAD', 'userId é obrigatório');
+      }
+
+      await db.collection('users').doc(userId).delete();
+
+      logApi('info', 'Usuário excluído por admin', {
+        endpoint: '/api/auth/users',
+        targetUserId: userId,
+        deletedBy: currentUser?.uid,
+      });
+
+      return sendSuccess(res, { deleted: true, userId });
+    } catch (err: any) {
+      return sendError(res, 500, 'DELETE_FAILED', 'Erro ao excluir usuário', err.message);
     }
   }
 

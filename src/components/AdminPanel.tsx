@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, getAllUsers, updateUserAdminStatus, getUserById } from '../lib/auth';
+import { User, getAllUsers, updateUserAdminStatus, getUserById, deleteUser } from '../lib/auth';
 import { 
   Shield, ShieldAlert, CheckCircle, XCircle, Users, Activity, Settings2, 
   AlertTriangle, Package, CheckSquare, Edit3, BarChart3, X, FileText, 
@@ -222,6 +222,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
       
     await runAdminAction(async () => {
       await updateUserAdminStatus(userId, { allowedGroups: newGroups });
+      await fetchUsers();
+    });
+  };
+
+  const handleDeleteUser = async (userId: string, userName: string) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o usuário "${userName}"?\nEsta ação não pode ser desfeita e ele perderá todo o acesso ao sistema.`)) {
+      return;
+    }
+
+    await runAdminAction(async () => {
+      await deleteUser(userId);
       await fetchUsers();
     });
   };
@@ -1063,6 +1074,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                     <th className="px-4 py-3 text-center">Status</th>
                     <th className="px-4 py-3 text-center">Admin</th>
                     <th className="px-4 py-3">Permissão de Abas</th>
+                    <th className="px-4 py-3 text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1120,6 +1132,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
                             </button>
                           ))}
                         </div>
+                      </td>
+
+                      <td className="px-4 py-4 text-center">
+                        <button
+                          onClick={() => handleDeleteUser(user.id, user.username)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          title="Excluir Usuário"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </td>
                     </tr>
                   ))}

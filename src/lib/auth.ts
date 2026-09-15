@@ -1,4 +1,4 @@
-import { collection, doc, setDoc, getDocs, getDoc, updateDoc, query, where } from 'firebase/firestore';
+import { collection, doc, setDoc, getDocs, getDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 
 export interface User {
@@ -230,4 +230,28 @@ export async function getUserById(userId: string): Promise<User | null> {
     console.warn('Erro ao buscar usuário por ID:', error);
   }
   return null;
+}
+
+export async function deleteUser(userId: string): Promise<boolean> {
+  // 1. Tenta via API backend
+  try {
+    const res = await fetch('/api/auth?action=users', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (data.ok) return true;
+  } catch (_) {}
+
+  // 2. Fallback Firestore
+  try {
+    
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    await withTimeout(deleteDoc(userRef), 3000);
+    return true;
+  } catch (error) {
+    console.warn('Erro ao excluir usuário no Firestore:', error);
+    return false;
+  }
 }

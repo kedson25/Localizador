@@ -2174,7 +2174,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </button>
                           )}
                           <button
-                            onClick={() => handleExcluirLista(lista.id)}
+                            onClick={() => setListaParaExcluir(lista)}
                             className="p-1.5 hover:bg-red-50 text-red-600 rounded-lg transition-colors border border-red-200 cursor-pointer"
                             title="Excluir Lista"
                           >
