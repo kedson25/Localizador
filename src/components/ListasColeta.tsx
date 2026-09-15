@@ -2120,24 +2120,24 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             </div>
           ) : filteredDashboardListas.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-700">
+              <table className="w-full text-left text-xs text-gray-700 whitespace-nowrap min-w-[800px]">
                 <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 font-bold uppercase tracking-wider">
                   <tr>
-                    <th className="py-3 px-4">#</th>
-                    <th className="py-3 px-4">Nome da Lista</th>
-                    <th className="py-3 px-4">Tipo</th>
-                    <th className="py-3 px-4">Saída / Ciclo</th>
-                    <th className="py-3 px-4">Data</th>
-                    <th className="py-3 px-4">Criado Por</th>
-                    <th className="py-3 px-4">IDs Coletados</th>
-                    <th className="py-3 px-4 text-center">Status</th>
-                    <th className="py-3 px-4 text-center">Ações</th>
+                    <th className="py-3 px-4 whitespace-nowrap">#</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Nome da Lista</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Tipo</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Saída / Ciclo</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Data</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Criado Por</th>
+                    <th className="py-3 px-4 whitespace-nowrap">IDs Coletados</th>
+                    <th className="py-3 px-4 whitespace-nowrap text-center">Status</th>
+                    <th className="py-3 px-4 whitespace-nowrap text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 font-sans">
                   {filteredDashboardListas.map((lista, idx) => (
                     <tr key={lista.id} className="hover:bg-blue-50/40 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-gray-400">{filteredDashboardListas.length - idx}</td>
+                      <td className="py-3.5 px-4 whitespace-nowrap font-mono font-bold text-gray-400">{filteredDashboardListas.length - idx}</td>
                       <td 
                         onClick={() => handleAbrirLista(lista.id)}
                         className="py-3.5 px-4 font-bold text-[#333333] text-sm cursor-pointer hover:text-[#3483FA] transition-colors"
@@ -2150,7 +2150,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           )}
                         </div>
                       </td>
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-4 whitespace-nowrap">
                         <span className={`px-2 py-0.5 rounded font-bold text-xs inline-flex items-center border ${
                           lista.tipo === 'grupos'
                             ? 'bg-purple-50 text-purple-700 border-purple-200'
@@ -2159,26 +2159,26 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {lista.tipo === 'grupos' ? 'Grupo' : 'Comum'}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-4 whitespace-nowrap">
                         <span className="bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded text-xs font-semibold">
                           {lista.saidaPadrao || 'Ciclo 2 - Saída PM'}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 text-gray-600 font-medium">{lista.data}</td>
-                      <td className="py-3.5 px-4 text-gray-700 font-bold">
+                      <td className="py-3.5 px-4 whitespace-nowrap text-gray-600 font-medium">{lista.data}</td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-gray-700 font-bold">
                         {lista.responsavel}
                       </td>
-                      <td className="py-3.5 px-4 font-mono font-bold text-[#3483FA] text-sm">
+                      <td className="py-3.5 px-4 whitespace-nowrap font-mono font-bold text-[#3483FA] text-sm">
                         {lista.totalItens || 0} pacotes
                       </td>
-                      <td className="py-3.5 px-4 text-center">
+                      <td className="py-3.5 px-4 whitespace-nowrap text-center">
                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
                           lista.status === 'finalizada' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
                         }`}>
                           {lista.status === 'finalizada' ? 'Finalizada' : 'Ativa'}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 text-center">
+                      <td className="py-3.5 px-4 whitespace-nowrap text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
                             onClick={() => handleAbrirLista(lista.id)}
