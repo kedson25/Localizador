@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check } from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
-import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista, getAllItemsForExport } from '../lib/firebase';
+import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista, getAllItemsForExport, addRefugoScan, deleteRefugoScan } from '../lib/firebase';
 import { cleanDigits, cleanTrackingId, normalizeTrackingCode } from '../utils/csvParser';
 import type { User } from '../lib/auth';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
