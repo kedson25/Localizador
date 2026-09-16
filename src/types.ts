@@ -16,6 +16,7 @@ export interface CsvRow {
   statusDelay?: string;
   concat?: string;
   rawFields: Record<string, string>;
+  isHighPriority?: boolean;
   rowIndex: number;
 }
 

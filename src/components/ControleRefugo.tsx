@@ -43,6 +43,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [bipInput, setBipInput] = useState('');
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
+  const [highPriorityAlert, setHighPriorityAlert] = useState<RefugoRow | null>(null);
   const [baseDate, setBaseDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [scansReady, setScansReady] = useState(false);
@@ -83,10 +84,42 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const parseCSV = (text: string): RefugoRow[] => {
     const result = Papa.parse<string[]>(text, { skipEmptyLines: true });
     if (result.errors.some(error => error.type === 'Quotes')) throw new Error('O arquivo CSV contém aspas inválidas. Confira o arquivo.');
+    
+    const headerRow = result.data.find(values => {
+      const id = String(values[0] || '').trim().toUpperCase();
+      return ['ID', 'CODIGO', 'CÓDIGO', 'PACOTE', 'TRACKING', 'ENVIO'].includes(id);
+    });
+
+    let valorRealIndex = -1;
+    let valorUsdIndex = -1;
+
+    if (headerRow) {
+      headerRow.forEach((col, idx) => {
+        const c = String(col).trim().toUpperCase();
+        if (c.includes('VALOR REAL')) valorRealIndex = idx;
+        if (c.includes('VALOR USD')) valorUsdIndex = idx;
+      });
+    } else {
+      valorRealIndex = 5;
+      valorUsdIndex = 6;
+    }
+
     return result.data.flatMap(values => {
       const id = String(values[0] || '').trim().toUpperCase();
       if (!id || ['ID', 'CODIGO', 'CÓDIGO', 'PACOTE', 'TRACKING', 'ENVIO'].includes(id)) return [];
-      return [{ id, rota: String(values[1] || 'Sem Rota').trim(), rawFields: Object.fromEntries(values.map((value, index) => [String(index), value])) }];
+      
+      let isHighPriority = false;
+      [valorRealIndex, valorUsdIndex].forEach(idx => {
+         if (idx >= 0 && values[idx]) {
+           const valStr = values[idx].replace(/\./g, '').replace(',', '.').trim();
+           const val = parseFloat(valStr);
+           if (!isNaN(val) && val > 1000) {
+             isHighPriority = true;
+           }
+         }
+      });
+
+      return [{ id, rota: String(values[1] || 'Sem Rota').trim(), isHighPriority, rawFields: Object.fromEntries(values.map((value, index) => [String(index), value])) }];
     });
   };
 
@@ -195,6 +228,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       if (foundRow) {
         setLastScanResult({ status: 'success', message: 'Pacote localizado!' });
         
+        if (foundRow.isHighPriority) {
+           setHighPriorityAlert(foundRow);
+        }
+
         // Voice alert
         const isM = /M$/i.test(foundRow.id);
         const prefix = isM ? 'M ' : '';
@@ -364,6 +401,25 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
+      {highPriorityAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-yellow-400 p-4">
+          <div className="bg-yellow-100 rounded-2xl p-8 max-w-lg w-full text-center shadow-2xl border-4 border-yellow-500 animate-in zoom-in-95">
+            <AlertCircle className="w-24 h-24 text-yellow-600 mx-auto mb-4" />
+            <h2 className="text-3xl font-black text-yellow-800 uppercase tracking-tight mb-2">PACOTE DE ALTA PRIORIDADE BPP</h2>
+            <p className="text-yellow-700 font-medium mb-6 text-lg">Este pacote tem um valor registrado superior a R$ 1.000,00 e requer tratamento imediato e especial.</p>
+            <div className="bg-yellow-200 rounded-lg p-4 mb-6 text-left">
+              <p className="text-sm text-yellow-800 font-bold mb-1">CÓDIGO:</p>
+              <p className="font-mono text-xl text-yellow-900 break-all bg-yellow-300 p-2 rounded">{highPriorityAlert.id}</p>
+            </div>
+            <button 
+              onClick={() => setHighPriorityAlert(null)}
+              className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-4 rounded-xl shadow-lg transition-colors text-lg cursor-pointer"
+            >
+              Confirmar Recebimento (BPP)
+            </button>
+          </div>
+        </div>
+      )}
       {syncError && <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{syncError}</div>}
       {rows.length === 0 ? (
         <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-12 flex flex-col items-center justify-center text-center mt-4">
