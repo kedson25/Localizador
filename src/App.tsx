@@ -14,7 +14,7 @@ import { ListasColeta } from './components/ListasColeta';
 import { Login } from './components/Login';
 import { Navigate } from 'react-router-dom';
 import { AdminPanel } from './components/AdminPanel';
-import { User } from './lib/auth';
+import { User, getCurrentUser } from './lib/auth';
 
 import { saveToColetor, loadFromColetor, clearColetor } from './lib/firebase';
 
@@ -29,9 +29,7 @@ export default function App() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
   const [loadingFirebase, setLoadingFirebase] = useState<boolean>(true);
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try { return JSON.parse(localStorage.getItem('currentUser') || 'null'); } catch { return null; }
-  });
+  const [currentUser, setCurrentUser] = useState<User | null>(() => getCurrentUser());
   const isAuthenticated = !!currentUser;
 
   useEffect(() => {
@@ -197,7 +195,7 @@ export default function App() {
             {/* Public Routes */}
             <Route path="/refugo" element={<ControleRefugo currentUser={currentUser} />} />
             <Route path="/login" element={
-              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); localStorage.setItem('currentUser', JSON.stringify(user)); navigate('/'); }} />
+              isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={(user) => { setCurrentUser(user); navigate('/'); }} />
             } />
             
             {/* Protected Routes */}
