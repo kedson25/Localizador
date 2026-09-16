@@ -43,6 +43,7 @@ export function setCurrentUser(user: User | null) {
   try {
     if (!user) {
       localStorage.removeItem(CURRENT_USER_KEY);
+      localStorage.removeItem('currentUser');
       return;
     }
     const safeUser = { ...user };
@@ -102,12 +103,12 @@ export async function signupUser(
       email,
       // NUNCA salva password em texto puro
       isAdmin: false,
-      isApproved: false,
+      isApproved: true,
       allowedGroups: ['consulta', 'remover', 'reporte', 'listas', 'upload'],
     };
 
     await withTimeout(setDoc(newDocRef, newUser), 3500);
-    return { success: true, message: 'Cadastro realizado! Aguarde aprovação de um Administrador.' };
+    return { success: true, message: 'Cadastro realizado com sucesso!' };
   } catch (error: any) {
     console.error('Erro no cadastro:', error);
     return { success: false, message: 'Erro ao cadastrar usuário: ' + (error.message || '') };
@@ -166,9 +167,7 @@ export async function loginUser(
          } catch(e) {}
       }
 
-      if (!user.isApproved) {
-        return { success: false, message: 'Acesso pendente de aprovação por um Administrador.' };
-      }
+      
 
       setCurrentUser(user);
       return { success: true, user };
@@ -272,3 +271,5 @@ export async function deleteUser(userId: string): Promise<boolean> {
     return false;
   }
 }
+
+export function logoutUser() { setCurrentUser(null); window.location.reload(); }
