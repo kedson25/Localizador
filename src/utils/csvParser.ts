@@ -7,6 +7,14 @@ export function cleanDigits(str: string): string {
   return digits.length > 0 ? digits : str.trim();
 }
 
+
+export function normalizeTrackingCode(codigo: string): string {
+  if (!codigo) return '';
+  const cleaned = cleanTrackingId(codigo);
+  const digits = cleanDigits(cleaned);
+  return digits || cleaned || codigo.trim().toUpperCase().replace(/M$/i, '');
+}
+
 export function cleanTrackingId(rawInput: string): string {
   if (!rawInput) return '';
   let processed = rawInput.trim();

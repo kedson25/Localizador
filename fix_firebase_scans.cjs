@@ -2,105 +2,93 @@ const fs = require('fs');
 
 let code = fs.readFileSync('src/lib/firebase.ts', 'utf8');
 
-const importRegex = /import \{([^\}]+)\} from 'firebase\/firestore';/;
-code = code.replace(importRegex, (match, imports) => {
-    const parts = imports.split(',').map(s => s.trim());
-    const needed = ['collection', 'query', 'orderBy', 'limit', 'writeBatch'];
-    needed.forEach(n => {
-        if (!parts.includes(n)) parts.push(n);
-    });
-    return `import { ${parts.join(', ')} } from 'firebase/firestore';`;
-});
+const scansLogic = `
+export interface RefugoScan {
+  firestoreId?: string;
+  id: string;
+  normalizedId: string;
+  rota: string;
+  scannedAt: string;
+  timestamp: number;
+  status: 'found' | 'not_found';
+  foundBy?: string;
+}
 
-
-code = code.replace(/export async function saveRefugoScans[\s\S]*?export async function loadRefugoScans/, `
-export async function saveRefugoScans(scans: any[], immediate = false): Promise<boolean> {
-  // O array "scans" vem completo da interface, mas o primeiro item é o mais novo (bipado agora).
-  if (!scans || scans.length === 0) return true;
-  
-  // Vamos salvar apenas o scan mais recente na subcoleção para evitar re-gravar todos
-  const latestScan = scans[0];
-  
-  // Se "latestScan" não tiver as propriedades, tentamos salvar todos em batch (fallback)
-  const dbCollection = collection(db, 'refugo_scans_items');
-  
+export async function addRefugoScan(scan: Omit<RefugoScan, 'firestoreId'>): Promise<void> {
+  if (!scan || !scan.normalizedId) throw new Error('Scan inválido ou sem ID normalizado.');
+  const docRef = doc(db, 'refugo_scans_items', scan.normalizedId);
   try {
-    const cleanId = latestScan.id.replace(/[^a-zA-Z0-9]/g, '');
-    const docId = cleanId ? \`\${cleanId}_\${Date.now()}\` : \`scan_\${Date.now()}\`;
-    
-    await withTimeout(
-      setDoc(doc(dbCollection, docId), {
-        ...latestScan,
-        scannedAt: latestScan.scannedAt instanceof Date ? latestScan.scannedAt.toISOString() : latestScan.scannedAt,
-        timestamp: Date.now(),
-        updatedAt: serverTimestamp(),
-      }, { merge: true }),
-      3500
-    );
-    return true;
+    await setDoc(docRef, scan);
   } catch (error) {
-    console.warn('Aviso: Firestore offline (scans salvos localmente):', error);
-    return true;
+    console.error('Erro ao adicionar refugo scan:', error);
+    throw error;
   }
 }
 
-export async function loadRefugoScans`);
+export async function deleteRefugoScan(normalizedId: string): Promise<void> {
+  if (!normalizedId) throw new Error('ID normalizado não fornecido para exclusão.');
+  const docRef = doc(db, 'refugo_scans_items', normalizedId);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error('Erro ao excluir refugo scan:', error);
+    throw error;
+  }
+}
 
-code = code.replace(/export async function clearRefugoScans[\s\S]*?export function listenToRefugoScans/, `
 export async function clearRefugoScans(): Promise<boolean> {
   try {
-    localStorage.removeItem(LOCAL_STORAGE_REFUGO_SCANS_KEY);
-  } catch (err) {}
-  
-  try {
-    const q = query(collection(db, 'refugo_scans_items'), limit(500));
-    const snap = await withTimeout(getDocs(q), 3000);
-    const batch = writeBatch(db);
-    snap.docs.forEach(d => batch.delete(d.ref));
-    await withTimeout(batch.commit(), 3000);
+    // 1. Apaga o documento monolítico legado se existir
+    try {
+      const docRefLegacy = doc(db, REFUGO_COLLECTION, 'current_refugo_scans');
+      await deleteDoc(docRefLegacy);
+    } catch (_) {}
+
+    // 2. Apaga todos os documentos da coleção refugo_scans_items em lotes
+    const colRef = collection(db, 'refugo_scans_items');
     
-    // Antigo doc monolítico por garantia
-    const refugoScansRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_SCANS_DOC_ID);
-    await withTimeout(deleteDoc(refugoScansRef), 3000);
+    while (true) {
+      const q = query(colRef, limit(400));
+      const snap = await getDocs(q);
+      
+      if (snap.empty) {
+        break;
+      }
+      
+      const batch = writeBatch(db);
+      snap.docs.forEach(d => {
+        batch.delete(d.ref);
+      });
+      
+      await batch.commit();
+    }
+
     return true;
   } catch (error) {
-    console.warn('Firestore offline ao apagar scans:', error);
-    return true;
+    console.error('Erro ao limpar scans de refugo:', error);
+    throw error;
   }
 }
 
-export function listenToRefugoScans`);
-
-code = code.replace(/export function listenToRefugoScans\([\s\S]*?\([\s\S]*?\}\);[\s\S]*?\}/, `
-export function listenToRefugoScans(callback: (scans: any[]) => void): () => void {
-  // Immediately check local storage cache first
-  try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_SCANS_KEY);
-    if (cached) {
-      callback(JSON.parse(cached));
-    }
-  } catch (_) {}
-
-  // Real-time listener in the collection
-  const q = query(collection(db, 'refugo_scans_items'), orderBy('timestamp', 'desc'), limit(500));
+export function listenToRefugoScans(callback: (scans: RefugoScan[]) => void): () => void {
+  const colRef = collection(db, 'refugo_scans_items');
+  const q = query(colRef, orderBy('timestamp', 'desc'));
   
   const unsubscribe = onSnapshot(q, (snap) => {
-    const scans = snap.docs.map(d => d.data());
-    try {
-      localStorage.setItem(LOCAL_STORAGE_REFUGO_SCANS_KEY, JSON.stringify(scans));
-    } catch (_) {}
+    const scans = snap.docs.map(docSnap => ({
+      ...docSnap.data(),
+      firestoreId: docSnap.id
+    } as RefugoScan));
     callback(scans);
   }, (error) => {
-    console.warn('Erro ao escutar scans em tempo real (fallback local):', error);
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_SCANS_KEY);
-      callback(cached ? JSON.parse(cached) : []);
-    } catch (_) {
-      callback([]);
-    }
+    console.warn('Erro ao escutar refugo scans:', error);
   });
-  
+
   return unsubscribe;
-}`);
+}
+`;
+
+// Remove the old saveRefugoScans, loadRefugoScans, clearRefugoScans, listenToRefugoScans
+code = code.replace(/let refugoScansDebounceTimer: any = null;[\s\S]*?export async function saveRefugoScans[\s\S]*?export async function loadRefugoScans[\s\S]*?export async function clearRefugoScans[\s\S]*?export function listenToRefugoScans[\s\S]*?return unsubscribe;\s*\}/, scansLogic.trim());
 
 fs.writeFileSync('src/lib/firebase.ts', code);

@@ -3,18 +3,12 @@ import Papa from 'papaparse';
 import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check } from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista, getAllItemsForExport } from '../lib/firebase';
-import { cleanDigits, cleanTrackingId } from '../utils/csvParser';
+import { cleanDigits, cleanTrackingId, normalizeTrackingCode } from '../utils/csvParser';
 import type { User } from '../lib/auth';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
 import { PageSkeleton } from './PageSkeleton';
 
-interface ScannedItem {
-  id: string;
-  rota: string;
-  scannedAt: Date;
-  status: 'found' | 'not_found';
-  foundBy?: string;
-}
+import { RefugoScan } from "../lib/firebase";
 
 let audioCtx: AudioContext | null = null;
 const playBeep = () => {
@@ -45,7 +39,7 @@ const playBeep = () => {
 
 export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [rows, setRows] = useState<RefugoRow[]>([]);
-  const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
+  const [scannedItems, setRefugoScans] = useState<RefugoScan[]>([]);
   const [bipInput, setBipInput] = useState('');
   const [isLocked, setIsLocked] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
@@ -59,9 +53,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const busyRef = useRef(false);
   const [page, setPage] = useState(0);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
-  const codeKey = (code: string) => cleanDigits(cleanTrackingId(code)) || cleanTrackingId(code) || code.trim().toUpperCase().replace(/M$/, '');
+  const codeKey = (code: string) => normalizeTrackingCode(code);
   const rowByCode = useMemo(() => new Map(rows.map(row => [codeKey(row.id), row])), [rows]);
-  const scanByCode = useMemo(() => new Map(scannedItems.map(scan => [codeKey(scan.id), scan])), [scannedItems]);
+  const scanByCode = useMemo(() => new Map(scannedItems.map(scan => [scan.normalizedId || codeKey(scan.id), scan])), [scannedItems]);
   const showError = (error: unknown) => setSyncError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação no servidor. Tente novamente.');
 
   // Auto focus input when bip is unlocked
@@ -106,7 +100,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     });
     
     const unsubScans = listenToRefugoScans((scans) => {
-      setScannedItems(scans.map(scan => ({ ...scan, scannedAt: new Date(scan.scannedAt) })));
+      setRefugoScans(scans.map(scan => ({ ...scan, scannedAt: new Date(scan.scannedAt) })));
       setScansReady(true);
     });
     
@@ -159,6 +153,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     });
   };
 
+  
   const handleBip = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bipInput.trim() || isLocked) return;
@@ -169,43 +164,45 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       return;
     }
 
-    const key = codeKey(cleanInput);
-    const rawKey = codeKey(bipInput);
-    const alreadyScanned = scanByCode.get(key) || scanByCode.get(rawKey);
+    const key = codeKey(bipInput);
+    const alreadyScanned = scanByCode.get(key);
     
     if (alreadyScanned) {
       setLastScanResult({ status: alreadyScanned.status === 'found' ? 'success' : 'error', message: 'O pacote já foi bipado anteriormente!' });
-      if (alreadyScanned.status === 'found') playBeep();
       setBipInput('');
       setTimeout(() => inputRef.current?.focus(), 10);
       return;
     }
-    
-    const foundRow = rowByCode.get(key) || rowByCode.get(rawKey);
 
-    // Limpa o input instantaneamente para não travar a próxima leitura da leitora
+    const foundRow = rowByCode.get(key);
+    
     setBipInput('');
     setTimeout(() => inputRef.current?.focus(), 10);
     
     await runOperation(async () => {
-      const newScan: ScannedItem = {
+      const newScan: Omit<RefugoScan, 'firestoreId'> = {
         id: foundRow?.id || cleanInput,
+        normalizedId: key,
         rota: foundRow?.rota || '',
-        scannedAt: new Date(),
+        scannedAt: new Date().toLocaleString('pt-BR'),
+        timestamp: Date.now(),
         status: foundRow ? 'found' : 'not_found',
         foundBy: currentUser?.username || 'Operador'
       };
-      const newScans = [newScan, ...scannedItems];
-      setScannedItems(newScans);
-      await saveRefugoScans(newScans);
-      
+
+      await addRefugoScan(newScan);
+
       if (foundRow) {
-        const isHibrida = (foundRow.rota.match(/_/g) || []).length >= 2;
-        setLastScanResult({ status: 'success', message: `ROTA VÁLIDA: ${foundRow.rota}${isHibrida ? ' (HÍBRIDA)' : ''}` });
-        playBeep();
-        if (isHibrida && 'speechSynthesis' in window) {
+        setLastScanResult({ status: 'success', message: 'Pacote localizado!' });
+        
+        // Voice alert
+        const isM = /M$/i.test(foundRow.id);
+        const prefix = isM ? 'M ' : '';
+        const utterance = `${prefix}${foundRow.saida || 'Rota não encontrada'}`;
+        
+        if (window.speechSynthesis) {
           window.speechSynthesis.cancel();
-          const message = new SpeechSynthesisUtterance('Rota Híbrida');
+          const message = new SpeechSynthesisUtterance(utterance);
           message.lang = 'pt-BR';
           message.rate = 1.2;
           window.speechSynthesis.speak(message);
@@ -218,15 +215,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     });
   };
 
-  const foundItems = scannedItems.filter(s => s.status === 'found');
-
-
-  const removeScan = async (idToRemove: string) => {
-    if (!window.confirm(`Deseja remover o pacote ${idToRemove} do histórico?`)) return;
+  const removeScan = async (scan: RefugoScan) => {
+    const targetId = scan.normalizedId || codeKey(scan.id);
     await runOperation(async () => {
-      const newScans = scannedItems.filter(s => s.id !== idToRemove);
-      setScannedItems(newScans);
-      await saveRefugoScans(newScans);
+      await deleteRefugoScan(targetId);
     });
   };
 
@@ -569,7 +561,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                         </span>
                       )}
                       <button
-                        onClick={() => removeScan(item.id)}
+                        onClick={() => removeScan(item)}
                         className="ml-1 text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
                         title="Remover pacote"
                       >
