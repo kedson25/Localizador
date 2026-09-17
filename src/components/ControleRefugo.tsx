@@ -482,26 +482,66 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   };
 
   const clearData = async () => {
-    if (!window.confirm('Deseja realmente limpar a base de faltantes? (Isso também apagará os itens bipados)')) return;
+    const confirmed = window.confirm(
+      'Deseja realmente limpar a base de faltantes? Isso também apagará os itens bipados.'
+    );
+
+    if (!confirmed) return;
+
     await runOperation(async () => {
       syncQueueRef.current.clear();
       scanByCodeRef.current.clear();
       await clearRefugo();
       await clearRefugoScans();
+
+      // ZERA IMEDIATAMENTE A BASE LOCAL
+      setRows([]);
+
+      // ZERA IMEDIATAMENTE O HISTÓRICO LOCAL
       setScannedItems([]);
+
+      // INVALIDA QUALQUER EXPORTAÇÃO PREPARADA ANTERIORMENTE
+      setExportTargetCodes([]);
+
+      // FECHA MODAL DE EXPORTAÇÃO CASO ESTEJA ABERTO
+      setShowExportModal(false);
+
+      // LIMPA DADOS DA EXPORTAÇÃO ANTERIOR
+      setExportListName('');
+      setSelectedListId('');
+
+      // LIMPA ESTADOS DA OPERAÇÃO
       setLastScanResult(null);
+      setBaseDate(null);
+
+      // VOLTA PAGINAÇÃO
       setPage(0);
+
+      // REMOVE ERRO ANTIGO
+      setSyncError(null);
     });
   };
 
   const clearScans = async () => {
-    if (!window.confirm('Deseja limpar apenas o histórico de pacotes bipados?')) return;
+    const confirmed = window.confirm(
+      'Deseja limpar apenas o histórico de pacotes bipados?'
+    );
+
+    if (!confirmed) return;
+
     await runOperation(async () => {
       syncQueueRef.current.clear();
       scanByCodeRef.current.clear();
       await clearRefugoScans();
+
       setScannedItems([]);
+
+      setExportTargetCodes([]);
+
+      setShowExportModal(false);
+
       setLastScanResult(null);
+
       setPage(0);
     });
   };
@@ -520,39 +560,86 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   };
 
   const handleOpenExportModal = () => {
+    // Nunca reutilizar seleção de exportação antiga
+    setExportTargetCodes([]);
+
+    if (
+      rows.length === 0 &&
+      scannedItems.length === 0
+    ) {
+      setShowExportModal(false);
+
+      alert(
+        'Nenhum pacote disponível para exportar.'
+      );
+
+      return;
+    }
+
     const scannedSemRota = scannedItems.filter(
-      s => s.status === 'not_found' || s.rota === 'SEM ROTA' || s.rota === 'Sem Rota' || !s.rota
+      s =>
+        s.status === 'not_found' ||
+        !s.rota ||
+        s.rota.trim().toUpperCase() === 'SEM ROTA'
     );
 
-    const baseSemRota = rows.filter(
-      r => !r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA' || r.rota.toLowerCase().includes('branca')
-    );
+    const baseSemRota = rows.filter(r => {
+      const rota =
+        (r.rota || '').trim().toUpperCase();
+
+      return (
+        !rota ||
+        rota === 'SEM ROTA' ||
+        rota.includes('BRANCA')
+      );
+    });
 
     let targetCodes: string[] = [];
 
     if (scannedSemRota.length > 0) {
-      targetCodes = scannedSemRota.map(s => s.id.trim().toUpperCase());
+      targetCodes =
+        scannedSemRota.map(scan =>
+          scan.id.trim().toUpperCase()
+        );
     } else if (baseSemRota.length > 0) {
-      targetCodes = baseSemRota.map(r => r.id.trim().toUpperCase());
+      targetCodes =
+        baseSemRota.map(row =>
+          row.id.trim().toUpperCase()
+        );
     } else if (scannedItems.length > 0) {
-      if (window.confirm("Não foram encontrados pacotes especificamente marcados como 'SEM ROTA'. Deseja exportar todos os pacotes bipados para a Lista Branca?")) {
-        targetCodes = scannedItems.map(s => s.id.trim().toUpperCase());
-      } else {
+      const confirmed = window.confirm(
+        'Não foram encontrados pacotes SEM ROTA. Deseja exportar todos os pacotes bipados?'
+      );
+
+      if (!confirmed) {
         return;
       }
+
+      targetCodes =
+        scannedItems.map(scan =>
+          scan.id.trim().toUpperCase()
+        );
     }
 
-    const uniqueCodes = Array.from(new Set(targetCodes)).filter(Boolean);
+    const uniqueCodes = Array.from(
+      new Set(targetCodes)
+    ).filter(Boolean);
 
     if (uniqueCodes.length === 0) {
-      alert('Nenhum pacote sem rota ("SEM ROTA") foi encontrado para exportar.');
+      setShowExportModal(false);
+      setExportTargetCodes([]);
+
+      alert(
+        'Nenhum pacote disponível para exportar.'
+      );
+
       return;
     }
 
+    setExportTargetCodes(uniqueCodes);
+
     const now = new Date();
     const todayBR = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
-
-    setExportTargetCodes(uniqueCodes);
     setExportListName(`Lista Branca - Refugo (${todayBR})`);
     setExportDestinationType('new');
     if (existingListas.length > 0) {
@@ -564,20 +651,56 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const handleConfirmExport = async () => {
     if (exportTargetCodes.length === 0 || busyRef.current) return;
 
+    const currentAvailableCodes = new Set<string>([
+      ...rows.map(row =>
+        normalizeTrackingCode(row.id)
+      ),
+      ...scannedItems.map(scan =>
+        scan.normalizedId ||
+        normalizeTrackingCode(scan.id)
+      )
+    ]);
+
+    const validExportCodes =
+      exportTargetCodes.filter(code => {
+        const normalized =
+          normalizeTrackingCode(code);
+
+        return currentAvailableCodes.has(
+          normalized
+        );
+      });
+
+    if (
+      validExportCodes.length === 0
+    ) {
+      setExportTargetCodes([]);
+      setShowExportModal(false);
+
+      alert(
+        'A base foi alterada ou limpa. Nenhum pacote disponível para exportar.'
+      );
+
+      return;
+    }
+
     const operatorName = currentUser?.username || 'Operador';
     const now = new Date();
     const todayBR = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
 
-    const newColetaItens: ColetaItem[] = exportTargetCodes.map((code, index) => ({
-      id: `item-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 5)}`,
-      codigo: code,
-      rota: 'Brancas',
-      saida: exportSaida,
-      motivo: exportMotivo,
-      scannedAt: new Date().toISOString(),
-      responsavel: operatorName,
-      validado: true
-    }));
+    const newColetaItens: ColetaItem[] =
+      validExportCodes.map((code, index) => ({
+        id: `item-${Date.now()}-${index}-${Math.random()
+          .toString(36)
+          .substring(2, 5)}`,
+        codigo: code,
+        rota: 'Brancas',
+        saida: exportSaida,
+        motivo: exportMotivo,
+        scannedAt: new Date().toISOString(),
+        responsavel: operatorName,
+        validado: true
+      }));
 
     busyRef.current = true;
     setBusy(true);
@@ -613,7 +736,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       }
 
       const csvHeader = "ID,ROTA\n";
-      const csvBody = exportTargetCodes.map(code => `${code},Brancas`).join("\n");
+      const csvBody =
+        validExportCodes
+          .map(code => `${code},Brancas`)
+          .join('\n');
       const blob = new Blob([csvHeader + csvBody], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -624,7 +750,13 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       document.body.removeChild(link);
 
       setShowExportModal(false);
-      alert(`✅ Exportação concluída com sucesso!\n\n${exportTargetCodes.length} pacote(s) exportado(s) para o sistema e o arquivo CSV foi baixado.`);
+      setExportTargetCodes([]);
+      setSelectedListId('');
+      setExportListName('');
+
+      alert(
+        `✅ Exportação concluída!\n\n${validExportCodes.length} pacote(s) exportado(s).`
+      );
     } catch (err) {
       showError(err);
     } finally {

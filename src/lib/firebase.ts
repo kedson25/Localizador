@@ -87,6 +87,18 @@ export interface RefugoData {
 }
 
 export async function saveRefugo(rawText: string, totalRows: number, fileName?: string): Promise<boolean> {
+  const localData: RefugoData = {
+    rawText,
+    totalRows,
+    fileName: fileName || 'refugo.csv',
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify(localData));
+  } catch (err) {
+    console.warn('Falha ao salvar refugo no localStorage:', err);
+  }
+
   try {
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
     await setDoc(refugoRef, {
@@ -98,24 +110,46 @@ export async function saveRefugo(rawText: string, totalRows: number, fileName?: 
     return true;
   } catch (error) {
     console.error('Erro ao salvar refugo:', error);
-    throw error;
+    return true;
   }
 }
 
 export async function loadRefugo(): Promise<RefugoData | null> {
+  let localData: RefugoData | null = null;
+  try {
+    const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_KEY);
+    if (cached) {
+      localData = JSON.parse(cached) as RefugoData;
+    }
+  } catch (err) {
+    console.warn('Erro ao ler cache local de refugo:', err);
+  }
+
   try {
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
     const snap = await getDoc(refugoRef);
     if (snap.exists()) {
-      return snap.data() as RefugoData;
+      const remoteData = snap.data() as RefugoData;
+      if (remoteData && remoteData.rawText) {
+        try {
+          localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify(remoteData));
+        } catch (_) {}
+        return remoteData;
+      }
     }
   } catch (error) {
     console.error('Erro ao carregar refugo:', error);
   }
-  return null;
+  return localData;
 }
 
 export async function clearRefugo(): Promise<boolean> {
+  try {
+    localStorage.removeItem(LOCAL_STORAGE_REFUGO_KEY);
+  } catch (err) {
+    console.warn('Erro ao limpar localStorage de refugo:', err);
+  }
+
   try {
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
     await deleteDoc(refugoRef);
