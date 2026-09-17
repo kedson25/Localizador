@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
-import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check, Star } from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
 import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista, getAllItemsForExport, addRefugoScan, deleteRefugoScan } from '../lib/firebase';
 import { cleanDigits, cleanTrackingId, normalizeTrackingCode } from '../utils/csvParser';
@@ -42,7 +42,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [scannedItems, setRefugoScans] = useState<RefugoScan[]>([]);
   const [bipInput, setBipInput] = useState('');
   const [isLocked, setIsLocked] = useState(false);
-  const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
+  const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error' | 'high_priority' | 'high_priority_no_route' | 'success_no_route', message: string, rota?: string, id?: string } | null>(null);
   const [highPriorityAlert, setHighPriorityAlert] = useState<RefugoRow | null>(null);
   const [baseDate, setBaseDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -201,7 +201,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     const alreadyScanned = scanByCode.get(key);
     
     if (alreadyScanned) {
-      setLastScanResult({ status: alreadyScanned.status === 'found' ? 'success' : 'error', message: 'O pacote já foi bipado anteriormente!' });
+      setLastScanResult({ status: alreadyScanned.status === 'found' ? 'success' : 'error', message: 'O pacote já foi bipado anteriormente!', id: alreadyScanned.id });
       setBipInput('');
       setTimeout(() => inputRef.current?.focus(), 10);
       return;
@@ -226,26 +226,17 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       await addRefugoScan(newScan);
 
       if (foundRow) {
-        setLastScanResult({ status: 'success', message: 'Pacote localizado!' });
-        
         if (foundRow.isHighPriority) {
-           setHighPriorityAlert(foundRow);
+           const isSemRota = !foundRow.rota || foundRow.rota.toUpperCase() === 'SEM ROTA' || foundRow.rota.toUpperCase() === 'SEM ROTA ';
+           setLastScanResult({ status: isSemRota ? 'high_priority_no_route' : 'high_priority', message: '', rota: foundRow.rota, id: foundRow.id });
+        } else {
+           const isSemRota = !foundRow.rota || foundRow.rota.toUpperCase() === 'SEM ROTA' || foundRow.rota.toUpperCase() === 'SEM ROTA ';
+           setLastScanResult({ status: isSemRota ? 'success_no_route' : 'success', message: 'Pacote localizado!', rota: foundRow.rota, id: foundRow.id });
         }
 
-        // Voice alert
-        const isM = /M$/i.test(foundRow.id);
-        const prefix = isM ? 'M ' : '';
-        const utterance = `${prefix}${foundRow.saida || 'Rota não encontrada'}`;
         
-        if (window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-          const message = new SpeechSynthesisUtterance(utterance);
-          message.lang = 'pt-BR';
-          message.rate = 1.2;
-          window.speechSynthesis.speak(message);
-        }
       } else {
-        setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}` });
+        setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}`, id: cleanInput });
       }
       setPage(0);
       setTimeout(() => inputRef.current?.focus(), 10);
@@ -393,6 +384,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
   const foundCount = scannedItems.filter(s => s.status === 'found').length;
   const notFoundCount = scannedItems.filter(s => s.status === 'not_found').length;
+  const highPriorityCount = scannedItems.filter(s => {
+    const row = rows.find(r => r.id.trim().toUpperCase() === s.id.trim().toUpperCase());
+    return row?.isHighPriority;
+  }).length;
   const semRotaCount = notFoundCount || rows.filter(r => !r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA').length;
 
   if (isLoading || !scansReady || !listasReady) {
@@ -401,25 +396,6 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
-      {highPriorityAlert && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-yellow-400 p-4">
-          <div className="bg-yellow-100 rounded-2xl p-8 max-w-lg w-full text-center shadow-2xl border-4 border-yellow-500 animate-in zoom-in-95">
-            <AlertCircle className="w-24 h-24 text-yellow-600 mx-auto mb-4" />
-            <h2 className="text-3xl font-black text-yellow-800 uppercase tracking-tight mb-2">PACOTE DE ALTA PRIORIDADE BPP</h2>
-            <p className="text-yellow-700 font-medium mb-6 text-lg">Este pacote tem um valor registrado superior a R$ 1.000,00 e requer tratamento imediato e especial.</p>
-            <div className="bg-yellow-200 rounded-lg p-4 mb-6 text-left">
-              <p className="text-sm text-yellow-800 font-bold mb-1">CÓDIGO:</p>
-              <p className="font-mono text-xl text-yellow-900 break-all bg-yellow-300 p-2 rounded">{highPriorityAlert.id}</p>
-            </div>
-            <button 
-              onClick={() => setHighPriorityAlert(null)}
-              className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-4 rounded-xl shadow-lg transition-colors text-lg cursor-pointer"
-            >
-              Confirmar Recebimento (BPP)
-            </button>
-          </div>
-        </div>
-      )}
       {syncError && <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{syncError}</div>}
       {rows.length === 0 ? (
         <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-12 flex flex-col items-center justify-center text-center mt-4">
@@ -502,17 +478,38 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
               {lastScanResult && (
                 <div className={`mt-8 p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center animate-in zoom-in duration-200 ${
-                  lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
+                  lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 
+                  lastScanResult.status === 'success_no_route' ? 'bg-orange-50 border-orange-200 text-orange-800' : 
+                  lastScanResult.status === 'high_priority' ? 'bg-yellow-400 border-yellow-500 text-yellow-900 shadow-[0_0_30px_rgba(250,204,21,0.5)]' :
+                  lastScanResult.status === 'high_priority_no_route' ? 'bg-red-600 border-red-700 text-white shadow-[0_0_30px_rgba(220,38,38,0.6)]' :
+                  'bg-red-50 border-red-200 text-red-800'
                 }`}>
-                  {lastScanResult.status === 'success' ? (
-                    <CheckCircle2 className="w-20 h-20 text-emerald-500 mb-4" />
+                  {lastScanResult.status === 'high_priority' ? (
+                    <AlertCircle className="w-20 h-20 text-yellow-800 mb-4 animate-bounce" />
+                  ) : lastScanResult.status === 'high_priority_no_route' ? (
+                    <Star className="w-20 h-20 text-white mb-4 animate-pulse fill-yellow-400" />
+                  ) : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? (
+                    <CheckCircle2 className={`w-20 h-20 mb-4 ${lastScanResult.status === 'success_no_route' ? 'text-orange-500' : 'text-emerald-500'}`} />
                   ) : (
                     <XCircle className="w-20 h-20 text-red-500 mb-4" />
                   )}
-                  <p className="font-black text-3xl uppercase tracking-wide">
-                    {lastScanResult.status === 'success' ? 'ENCONTRADO' : 'ERRO'}
+                  <p className="font-black text-3xl uppercase tracking-wide flex flex-col items-center gap-3">
+                    <span>{lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route' ? 'ALTA PRIORIDADE BPP' : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? 'ENCONTRADO' : 'NÃO ENCONTRADO'}</span>
+                    {(lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route') && lastScanResult.id && (
+                      <span className="text-4xl font-mono bg-black/10 px-6 py-2 rounded-xl mt-1 tracking-widest">{lastScanResult.id}</span>
+                    )}
                   </p>
-                  <p className="text-xl font-bold mt-2">{lastScanResult.message}</p>
+                  <p className={`text-xl font-bold mt-2 ${lastScanResult.status === 'high_priority_no_route' ? 'text-red-100' : ''}`}>{lastScanResult.message}</p>
+                  {lastScanResult.rota && (
+                    <div className={`mt-4 px-6 py-2 rounded-lg text-2xl font-black shadow-sm uppercase ${
+                       lastScanResult.status === 'high_priority' ? 'bg-yellow-100 text-yellow-900' : 
+                       lastScanResult.status === 'high_priority_no_route' ? 'bg-red-800 text-white' : 
+                       lastScanResult.status === 'success_no_route' ? 'bg-orange-100 text-orange-900' :
+                       'bg-white text-emerald-900'
+                    }`}>
+                      {lastScanResult.status === 'success_no_route' || lastScanResult.status === 'high_priority_no_route' || lastScanResult.rota.toUpperCase().includes('SEM ROTA') ? 'SEM ROTA' : `Rota: ${lastScanResult.rota}`}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -525,6 +522,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Histórico de Leitura</span>
                 <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <span className="bg-yellow-100 text-yellow-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-yellow-300 flex items-center gap-1 shadow-sm">
+                    <AlertCircle className="w-3.5 h-3.5 text-yellow-600" /> Alta Prioridade (BPP): {highPriorityCount}
+                  </span>
                   <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-emerald-200 flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Encontrados: {foundCount}
                   </span>
@@ -588,21 +588,51 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
             
             <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
             <div className="overflow-y-auto flex-1 pr-2 space-y-2">
-              {scannedItems.length > 0 ? (
-                scannedItems.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE).map((item) => (
-                  <div key={item.id} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${item.status === 'found' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                            {scannedItems.length > 0 ? (
+                scannedItems.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE).map((item) => {
+                  const isItemSemRota = item.status === 'not_found' || !item.rota || item.rota.toUpperCase() === 'SEM ROTA' || item.rota.toUpperCase() === 'SEM ROTA ';
+                  const itemRow = rowByCode.get(item.normalizedId || codeKey(item.id));
+                  const isBpp = Boolean(itemRow?.isHighPriority);
+                  
+                  // Color classes based on:
+                  // - With route: Green
+                  // - Sem rota BPP: Yellow (Amarelo)
+                  // - Sem rota normal: Red (Vermelho)
+                  let cardClasses = 'border-emerald-200 bg-emerald-50';
+                  let idColor = 'text-emerald-900';
+                  let badgeClasses = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                  
+                  if (isItemSemRota) {
+                    if (isBpp) {
+                      cardClasses = 'border-yellow-300 bg-yellow-50';
+                      idColor = 'text-yellow-900';
+                      badgeClasses = 'bg-yellow-100 text-yellow-900 border-yellow-300';
+                    } else {
+                      cardClasses = 'border-red-200 bg-red-50';
+                      idColor = 'text-red-900';
+                      badgeClasses = 'bg-red-100 text-red-800 border-red-200';
+                    }
+                  }
+                  
+                  return (
+                  <div key={item.id} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${cardClasses}`}>
                     <div className="flex items-center gap-2">
-                      {item.status === 'found' ? (
+                      {!isItemSemRota ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                      ) : isBpp ? (
+                        <AlertCircle className="w-4 h-4 text-yellow-600" />
                       ) : (
                         <XCircle className="w-4 h-4 text-red-500" />
                       )}
-                      <span className={`font-mono font-bold text-sm ${item.status === 'found' ? 'text-emerald-900' : 'text-red-900'}`}>{item.id}</span>
+                      <span className={`font-mono font-bold text-sm ${idColor}`}>{item.id}</span>
+                      {isBpp && isItemSemRota && (
+                        <span className="text-[10px] bg-yellow-200 text-yellow-800 font-bold px-1.5 py-0.5 rounded uppercase">BPP</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
-                      {item.status === 'found' ? (
+                      {!isItemSemRota ? (
                         <div className="flex flex-col items-end">
-                          <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-xs font-bold border border-emerald-200">
+                          <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
                             Rota: {item.rota}
                           </span>
                           {item.foundBy && (
@@ -612,9 +642,16 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                           )}
                         </div>
                       ) : (
-                        <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded text-xs font-bold border border-red-200">
-                          SEM ROTA
-                        </span>
+                        <div className="flex flex-col items-end">
+                          <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
+                            SEM ROTA
+                          </span>
+                          {item.foundBy && (
+                            <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
+                              Bipado por: <strong className="text-gray-700">{item.foundBy}</strong>
+                            </span>
+                          )}
+                        </div>
                       )}
                       <button
                         onClick={() => removeScan(item)}
@@ -625,7 +662,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       </button>
                     </div>
                   </div>
-                ))
+                );
+                })
               ) : (
                 <div className="flex flex-col items-center justify-center py-10 text-center text-gray-500">
                    <Barcode className="w-12 h-12 text-gray-300 mb-3" />
@@ -634,36 +672,35 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                 </div>
               )}
             </div>
+            
+            {scannedItems.length > 50 && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
+              </div>
+            )}
+            
           </div>
         </div>
       </div>
       )}
 
-      {/* Export Popup / Modal */}
       {showExportModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
-            {/* Header */}
-            <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-5 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <FilePlus className="w-6 h-6 text-white" />
-                <div>
-                  <h3 className="font-bold text-lg leading-tight">Exportar para Lista Branca</h3>
-                  <p className="text-xs text-amber-100 mt-0.5">Selecione a lista de destino no sistema</p>
-                </div>
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-xl font-black text-gray-900 uppercase">Exportar Lista Branca</h2>
+                <p className="text-sm text-gray-500 mt-1 font-medium">Transferir pacotes sem rota para o sistema de coleta</p>
               </div>
-              <button
-                type="button"
+              <button 
                 onClick={() => setShowExportModal(false)}
-                className="text-white/80 hover:text-white bg-white/10 hover:bg-white/20 p-1.5 rounded-lg transition-colors cursor-pointer"
+                className="text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-2 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Content */}
-            <div className="p-6 space-y-5 overflow-y-auto">
-              {/* Pacotes Summary Box */}
+            <div className="space-y-4">
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-900">
@@ -676,160 +713,114 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                 </div>
               </div>
 
-              {/* Destination Selection */}
               <div>
-                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                  Destino da Lista no Sistema
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label
+                <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">Destino da Exportação</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
                     onClick={() => setExportDestinationType('new')}
-                    className={`cursor-pointer border-2 rounded-xl p-3.5 flex flex-col gap-1 transition-all ${
-                      exportDestinationType === 'new'
-                        ? 'border-amber-500 bg-amber-50/50 shadow-xs'
-                        : 'border-gray-200 hover:border-gray-300'
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${
+                      exportDestinationType === 'new' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="destType"
-                        checked={exportDestinationType === 'new'}
-                        onChange={() => setExportDestinationType('new')}
-                        className="text-amber-600 focus:ring-amber-500"
-                      />
-                      <span className="font-bold text-xs text-gray-800 flex items-center gap-1">
-                        <FolderPlus className="w-4 h-4 text-amber-600" /> Criar Nova Lista
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-gray-500 pl-5">Gera uma nova lista branca no sistema</span>
-                  </label>
-
-                  <label
-                    onClick={() => {
-                      if (existingListas.length > 0) setExportDestinationType('existing');
-                    }}
-                    className={`border-2 rounded-xl p-3.5 flex flex-col gap-1 transition-all ${
-                      existingListas.length === 0
-                        ? 'opacity-50 cursor-not-allowed border-gray-200'
-                        : 'cursor-pointer ' + (exportDestinationType === 'existing' ? 'border-amber-500 bg-amber-50/50 shadow-xs' : 'border-gray-200 hover:border-gray-300')
+                    <FolderPlus className="w-5 h-5 mb-1.5" />
+                    <span className="text-xs font-bold uppercase">Criar Nova Lista</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportDestinationType('existing')}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${
+                      exportDestinationType === 'existing' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="destType"
-                        disabled={existingListas.length === 0}
-                        checked={exportDestinationType === 'existing'}
-                        onChange={() => setExportDestinationType('existing')}
-                        className="text-amber-600 focus:ring-amber-500"
-                      />
-                      <span className="font-bold text-xs text-gray-800 flex items-center gap-1">
-                        <ListPlus className="w-4 h-4 text-amber-600" /> Lista Existente
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-gray-500 pl-5">
-                      {existingListas.length === 0 ? 'Nenhuma lista disponível' : 'Anexar itens a uma lista ativa'}
-                    </span>
-                  </label>
+                    <ListPlus className="w-5 h-5 mb-1.5" />
+                    <span className="text-xs font-bold uppercase">Lista Existente</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Form Options */}
               {exportDestinationType === 'new' ? (
-                <div className="space-y-3 pt-2 border-t border-gray-100">
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">
-                      Nome da Nova Lista
-                    </label>
-                    <input
-                      type="text"
-                      value={exportListName}
-                      onChange={(e) => setExportListName(e.target.value)}
-                      placeholder="Ex: Lista Branca - Refugo"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Saída Padrão
-                      </label>
-                      <select
-                        value={exportSaida}
-                        onChange={(e) => setExportSaida(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-bold focus:ring-2 focus:ring-amber-500"
-                      >
-                        <option value="Ciclo 1 - Saída AM">Ciclo 1 - Saída AM</option>
-                        <option value="Ciclo 2 - Saída PM">Ciclo 2 - Saída PM</option>
-                        <option value="Inbound">Inbound</option>
-                        <option value="Socorro">Socorro</option>
-                        <option value="Retorno">Retorno</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Motivo Padrão
-                      </label>
-                      <select
-                        value={exportMotivo}
-                        onChange={(e) => setExportMotivo(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-bold focus:ring-2 focus:ring-amber-500"
-                      >
-                        <option value="Brancas">Brancas</option>
-                        <option value="Refugo">Refugo</option>
-                        <option value="Atraso">Atraso</option>
-                        <option value="Falta de Capacidade">Falta de Capacidade</option>
-                      </select>
-                    </div>
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">Nome da Nova Lista</label>
+                  <input
+                    type="text"
+                    value={exportListName}
+                    onChange={(e) => setExportListName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-shadow"
+                    placeholder="Ex: Lista Branca - Refugo"
+                  />
                 </div>
               ) : (
-                <div className="space-y-3 pt-2 border-t border-gray-100">
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">
-                      Selecione a Lista de Destino no Sistema
-                    </label>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">Selecione a Lista</label>
+                  {existingListas.length > 0 ? (
                     <select
                       value={selectedListId}
                       onChange={(e) => setSelectedListId(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-amber-500 outline-none"
                     >
-                      {existingListas.map((lista) => (
+                      {existingListas.map(lista => (
                         <option key={lista.id} value={lista.id}>
-                          {lista.nome} ({lista.totalItens || 0} itens) - {lista.rota || 'Geral'}
+                          {lista.nome} ({lista.rota || 'Geral'})
                         </option>
                       ))}
                     </select>
-                  </div>
+                  ) : (
+                    <div className="text-sm text-amber-600 bg-amber-50 p-2 rounded border border-amber-200">
+                      Nenhuma lista de coleta encontrada no sistema. Crie uma nova lista.
+                    </div>
+                  )}
                 </div>
               )}
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">Saída Padrão</label>
+                  <input
+                    type="text"
+                    value={exportSaida}
+                    onChange={(e) => setExportSaida(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">Motivo</label>
+                  <input
+                    type="text"
+                    value={exportMotivo}
+                    onChange={(e) => setExportMotivo(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
             </div>
 
-            {/* Footer */}
-            <div className="bg-gray-50 border-t border-gray-200 p-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
+            <div className="mt-8 flex justify-end gap-3">
+              <button 
                 onClick={() => setShowExportModal(false)}
-                className="px-4 py-2 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                className="px-5 py-2 text-sm font-bold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors uppercase"
               >
                 Cancelar
               </button>
-              <button
-                type="button"
+              <button 
                 onClick={handleConfirmExport}
-                  disabled={busy}
-                className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+                disabled={busy || (exportDestinationType === 'existing' && existingListas.length === 0)}
+                className="flex items-center gap-2 px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 uppercase cursor-pointer"
               >
-                <Check className="w-4 h-4" />
-                Confirmar e Exportar
+                {busy ? (
+                  <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Confirmar Exportação
+                  </>
+                )}
               </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }
