@@ -3193,8 +3193,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </div>
                 )}
 
-                <div className="overflow-x-auto app-scroll-x max-h-[70vh]">
-                  <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse min-w-[650px]">
+                <div className="w-full min-w-0 overflow-x-auto app-scroll-x max-h-[70vh]">
+                  <table className="w-full min-w-[980px] table-fixed border-collapse text-[10px] xl:text-xs text-gray-700">
+                    <colgroup>
+                      <col className="w-[34px]" />
+                      <col className="w-[44px]" />
+                      <col className="w-[130px]" />
+                      {listaAtiva.tipo === 'grupos' && <col className="w-[105px]" />}
+                      <col className="w-[100px]" />
+                      <col className="w-[125px]" />
+                      <col className="w-[90px]" />
+                      <col className="w-[62px]" />
+                      <col className="w-[125px]" />
+                      <col className="w-[110px]" />
+                      <col className="w-[72px]" />
+                    </colgroup>
                     <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                       <tr>
                         <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
@@ -3215,7 +3228,22 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Bipado por</th>
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Rota</th>
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Saída</th>
-                        <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Motivo</th>
+                        <th
+                          className="
+                            w-[125px]
+                            min-w-[125px]
+                            max-w-[125px]
+                            py-1
+                            px-2
+                            text-center
+                            border-b
+                            border-r
+                            border-gray-200
+                            bg-gray-100
+                          "
+                        >
+                          Motivo
+                        </th>
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-r border-gray-200 bg-gray-100">Data / Hora</th>
                         <th className="py-1 px-1 sm:px-2 text-center border-b border-gray-200 bg-gray-100">Ações</th>
                       </tr>
@@ -3244,38 +3272,48 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </td>
                             <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - (startIndex + idx)}</td>
                           <td 
-                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 border-r border-gray-200 overflow-hidden"
                           >
-                            <div className="flex items-center gap-1.5 font-mono text-xs">
-                              <Barcode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                              <span>{item.codigo}</span>
+                            <div className="flex items-center gap-1.5 font-mono text-xs min-w-0 w-full overflow-hidden">
+                              <Barcode className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span
+                                className="block w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono"
+                                title={item.codigo}
+                              >
+                                {item.codigo}
+                              </span>
                             </div>
                           </td>
 
                           {/* COLUNA DE GRUPO (Se tipo = grupos) - NEUTRA SEM COR */}
                           {listaAtiva.tipo === 'grupos' && (
                             <td 
-                              className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
+                              className="py-1 px-1 sm:px-2 text-center border-r border-gray-200 overflow-hidden"
                             >
                               {(() => {
                                 const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
                                 return grupo ? (
-                                  <span className="text-gray-700 font-semibold text-xs truncate block max-w-[105px] mx-auto">
+                                  <span
+                                    className="text-gray-700 font-semibold text-xs block w-full overflow-hidden text-ellipsis whitespace-nowrap"
+                                    title={grupo.nome}
+                                  >
                                     {grupo.nome}
                                   </span>
                                 ) : (
-                                  <span className="text-gray-400 text-xs italic">Sem Grupo</span>
+                                  <span className="text-gray-400 text-xs italic block w-full overflow-hidden text-ellipsis whitespace-nowrap">
+                                    Sem Grupo
+                                  </span>
                                 );
                               })()}
                             </td>
                           )}
 
                           {/* COLUNA DE STATUS DE VALIDAÇÃO - TEM COR */}
-                          <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
+                          <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200 overflow-hidden">
                             <button
                               type="button"
                               onClick={() => handleToggleItemValidado(item.id)}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs ${
+                              className={`inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer border shadow-2xs whitespace-nowrap max-w-full overflow-hidden ${
                                 item.validado
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
                                   : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
@@ -3284,13 +3322,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             >
                               {item.validado ? (
                                 <>
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                  <span>Validado</span>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                                  <span className="truncate">Validado</span>
                                 </>
                               ) : (
                                 <>
-                                  <AlertCircle className="w-3 h-3 text-amber-600" />
-                                  <span>Pendente</span>
+                                  <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                                  <span className="truncate">Pendente</span>
                                 </>
                               )}
                             </button>
@@ -3298,27 +3336,32 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA BIPADO POR - NEUTRA SEM COR */}
                           <td 
-                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
+                            className="py-1 px-2 text-center border-r border-gray-200 overflow-hidden"
                           >
                             <span 
-                              className="text-gray-700 font-medium text-xs truncate max-w-[120px] inline-flex items-center justify-center gap-1"
+                              className="text-gray-700 font-medium text-xs inline-flex items-center justify-center gap-1 w-full min-w-0 overflow-hidden"
                               title={`Bipado por: ${item.responsavel || listaAtiva.responsavel || 'Operador'}`}
                             >
-                              <UserIcon className="w-2.5 h-2.5 text-gray-400 flex-shrink-0" />
-                              <span className="truncate">{item.responsavel || listaAtiva.responsavel || 'Operador'}</span>
+                              <UserIcon className="w-2.5 h-2.5 text-gray-400 shrink-0" />
+                              <span className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+                                {item.responsavel || listaAtiva.responsavel || 'Operador'}
+                              </span>
                             </span>
                           </td>
 
                           {/* COLUNA ROTA - BASEADA NO ARQUIVO DE REFUGO ATUAL, SÓ TEM COR SE TIVER ROTA */}
                           <td 
-                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200 overflow-hidden"
                           >
                             {hasRota ? (
-                              <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-bold text-xs inline-block shadow-2xs">
+                              <span 
+                                className="bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-bold text-xs block w-full overflow-hidden text-ellipsis whitespace-nowrap shadow-2xs"
+                                title={itemRota}
+                              >
                                 {itemRota}
                               </span>
                             ) : (
-                              <span className="text-gray-400 text-xs italic">
+                              <span className="text-gray-400 text-xs italic block w-full overflow-hidden text-ellipsis whitespace-nowrap">
                                 Sem Rota
                               </span>
                             )}
@@ -3326,19 +3369,25 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA SAÍDA - NEUTRA SEM COR */}
                           <td 
-                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
+                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200 overflow-hidden"
                           >
-                            <span className="text-gray-600 font-semibold text-xs uppercase">
+                            <span 
+                              className="text-gray-600 font-semibold text-xs uppercase block w-full overflow-hidden text-ellipsis whitespace-nowrap"
+                              title={item.saida || 'Sem saída'}
+                            >
                               {getShortSaida(item.saida)}
                             </span>
                           </td>
 
-                          {/* COLUNA MOTIVO - TEM COR */}
+                          {/* COLUNA MOTIVO - LARGURA FIXA 125px */}
                           <td
                             className="
+                              w-[125px]
+                              min-w-[125px]
+                              max-w-[125px]
+                              overflow-hidden
                               py-1
-                              px-1
-                              sm:px-2
+                              px-2
                               text-center
                               border-r
                               border-gray-200
@@ -3352,35 +3401,46 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                                   item
                                 )
                               }
-                              className={`
-                                ${getMotivoStyle(item.motivo)}
-                                mx-auto
-                                inline-flex
-                                max-w-[130px]
-                                items-center
-                                justify-center
-                                gap-1
-                                rounded
-                                border
-                                px-2
-                                py-0.5
-                                text-[10px]
-                                font-bold
-                                uppercase
-                                tracking-wide
-                                shadow-xs
-                                transition-all
-                                hover:shadow-sm
-                                cursor-pointer
-                              `}
-                              title="Alterar motivo"
                               aria-label={`Alterar motivo do pacote ${item.codigo}`}
                               aria-expanded={
                                 motivoDropdown?.item.id ===
                                 item.id
                               }
+                              className={`
+                                ${getMotivoStyle(item.motivo)}
+                                mx-auto
+                                flex
+                                h-6
+                                w-[105px]
+                                min-w-0
+                                max-w-[105px]
+                                items-center
+                                justify-center
+                                gap-1
+                                overflow-hidden
+                                rounded-md
+                                border
+                                px-2
+                                text-[9px]
+                                font-bold
+                                uppercase
+                                whitespace-nowrap
+                                shadow-xs
+                                transition-all
+                                hover:shadow-sm
+                                cursor-pointer
+                              `}
                             >
-                              <span className="truncate">
+                              <span
+                                className="
+                                  min-w-0
+                                  flex-1
+                                  overflow-hidden
+                                  text-ellipsis
+                                  whitespace-nowrap
+                                "
+                                title={item.motivo || 'Sem motivo'}
+                              >
                                 {item.motivo || 'Sem motivo'}
                               </span>
 
@@ -3406,11 +3466,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           </td>
 
                           {/* COLUNA DATA / HORA - NEUTRA */}
-                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 text-[11px] border-r border-gray-200">
-                            {item.scannedAt}
+                          <td className="py-1 px-1 sm:px-2 text-center text-gray-500 text-[11px] border-r border-gray-200 overflow-hidden">
+                            <span 
+                              className="block w-full overflow-hidden text-ellipsis whitespace-nowrap"
+                              title={item.scannedAt}
+                            >
+                              {item.scannedAt}
+                            </span>
                           </td>
-                          <td className="py-1 px-1 sm:px-2 text-center">
-                            <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <td className="py-1 px-1 sm:px-2 text-center overflow-hidden">
+                            <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                               <button
                                 type="button"
                                 onClick={() => handleCopiarLinhaCompleta(item)}
