@@ -42,7 +42,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   listenToRefugoScans, 
-  saveRefugoScans, 
   listenToRefugo,
   listenToListas,
   saveLista,

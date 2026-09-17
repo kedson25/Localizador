@@ -1,14 +1,43 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Papa from 'papaparse';
-import { UploadCloud, CheckCircle2, AlertCircle, Barcode, Trash2, Search, XCircle, Lock, Unlock, Download, FilePlus, X, FolderPlus, ListPlus, Check, Star } from 'lucide-react';
+import {
+  UploadCloud,
+  CheckCircle2,
+  AlertCircle,
+  Barcode,
+  Trash2,
+  XCircle,
+  Lock,
+  Unlock,
+  Download,
+  FilePlus,
+  X,
+  FolderPlus,
+  ListPlus,
+  Check,
+  Star,
+  RefreshCw
+} from 'lucide-react';
 import { RefugoRow, ColetaItem, ColetaLista } from '../types';
-import { saveRefugo, clearRefugo, saveRefugoScans, clearRefugoScans, listenToRefugoScans, listenToRefugo, saveLista, listenToListas, addItemsBatchToLista, getAllItemsForExport, addRefugoScan, deleteRefugoScan } from '../lib/firebase';
-import { cleanDigits, cleanTrackingId, normalizeTrackingCode } from '../utils/csvParser';
+import {
+  saveRefugo,
+  clearRefugo,
+  clearRefugoScans,
+  listenToRefugo,
+  listenToRefugoScansIncremental,
+  deleteRefugoScan,
+  saveLista,
+  listenToListas,
+  addItemsBatchToLista,
+  getAllItemsForExport,
+  RefugoScan,
+  RefugoScanChange
+} from '../lib/firebase';
+import { cleanTrackingId, normalizeTrackingCode } from '../utils/csvParser';
+import { RefugoSyncQueue } from '../utils/refugoSyncQueue';
 import type { User } from '../lib/auth';
 import { ResultPagination, RESULTS_PAGE_SIZE } from './ResultPagination';
 import { PageSkeleton } from './PageSkeleton';
-
-import { RefugoScan } from "../lib/firebase";
 
 let audioCtx: AudioContext | null = null;
 const playBeep = () => {
@@ -18,60 +47,60 @@ const playBeep = () => {
       if (!AudioContextClass) return;
       audioCtx = new AudioContextClass();
     }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    
+
     osc.type = 'sine';
     osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-    
+
     gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15);
-    
+
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    
+
     osc.start();
     osc.stop(audioCtx.currentTime + 0.15);
   } catch (e) {
-    console.error("Audio beep error:", e);
+    console.warn("Audio beep error:", e);
   }
 };
 
 export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [rows, setRows] = useState<RefugoRow[]>([]);
-  const [scannedItems, setRefugoScans] = useState<RefugoScan[]>([]);
+  const [scannedItems, setScannedItems] = useState<RefugoScan[]>([]);
   const [bipInput, setBipInput] = useState('');
   const [isLocked, setIsLocked] = useState(false);
-  const [lastScanResult, setLastScanResult] = useState<{ status: 'success' | 'error' | 'high_priority' | 'high_priority_no_route' | 'success_no_route', message: string, rota?: string, id?: string } | null>(null);
-  const [highPriorityAlert, setHighPriorityAlert] = useState<RefugoRow | null>(null);
+  const [lastScanResult, setLastScanResult] = useState<{
+    status: 'success' | 'error' | 'high_priority' | 'high_priority_no_route' | 'success_no_route';
+    message: string;
+    rota?: string;
+    id?: string;
+  } | null>(null);
+
   const [baseDate, setBaseDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [scansReady, setScansReady] = useState(false);
-  const [listasReady, setListasReady] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+
+  // Busy state exclusivo para ações administrativas pesadas (upload CSV, clear, export)
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+
+  const inputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(0);
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
-  const codeKey = (code: string) => normalizeTrackingCode(code);
-  const rowByCode = useMemo(() => new Map(rows.map(row => [codeKey(row.id), row])), [rows]);
-  const scanByCode = useMemo(() => new Map(scannedItems.map(scan => [scan.normalizedId || codeKey(scan.id), scan])), [scannedItems]);
-  const showError = (error: unknown) => setSyncError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação no servidor. Tente novamente.');
 
-  // Auto focus input when bip is unlocked
-  useEffect(() => {
-    if (!isLocked) {
-      const timer = setTimeout(() => {
-        if (inputRef.current && document.activeElement !== inputRef.current) {
-          inputRef.current.focus();
-        }
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [isLocked, busy, scannedItems.length]);
+  // Índice em memória ultra-rápido de scans para verificação de duplicidade O(1) e merge realtime
+  const scanByCodeRef = useRef<Map<string, RefugoScan>>(new Map());
 
-  // Modal / Popup States for Exporting to Lista Branca
+  // Fila de sincronização em memória (executa gravações em background sem travar o scanner)
+  const syncQueueRef = useRef<RefugoSyncQueue>(new RefugoSyncQueue());
+
+  // Modal de exportação para Lista Branca
   const [existingListas, setExistingListas] = useState<ColetaLista[]>([]);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportDestinationType, setExportDestinationType] = useState<'new' | 'existing'>('new');
@@ -81,10 +110,92 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [exportMotivo, setExportMotivo] = useState('Brancas');
   const [exportTargetCodes, setExportTargetCodes] = useState<string[]>([]);
 
-  const parseCSV = (text: string): RefugoRow[] => {
+  const showError = useCallback((error: unknown) => {
+    setSyncError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação no servidor. Tente novamente.');
+  }, []);
+
+  // Índice O(1) para lookups de pacotes da base CSV
+  const rowByCode = useMemo(() => {
+    const map = new Map<string, RefugoRow>();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      map.set(normalizeTrackingCode(row.id), row);
+    }
+    return map;
+  }, [rows]);
+
+  // Contadores calculados em passagem única O(N) com lookups O(1) via Map
+  const stats = useMemo(() => {
+    let found = 0;
+    let notFound = 0;
+    let highPriority = 0;
+
+    for (let i = 0; i < scannedItems.length; i++) {
+      const scan = scannedItems[i];
+      if (scan.status === 'found') {
+        found++;
+      } else {
+        notFound++;
+      }
+      const row = rowByCode.get(scan.normalizedId);
+      if (row?.isHighPriority) {
+        highPriority++;
+      }
+    }
+
+    return { found, notFound, highPriority };
+  }, [scannedItems, rowByCode]);
+
+  // Contagem estática de itens sem rota na base CSV (calculada somente quando a base CSV muda)
+  const baseSemRotaCount = useMemo(() => {
+    let count = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA' || r.rota.toLowerCase().includes('branca')) {
+        count++;
+      }
+    }
+    return count;
+  }, [rows]);
+
+  const semRotaCount = stats.notFound || baseSemRotaCount;
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
+
+  // Função única e direta para focar o scanner sem timers redundantes
+  const focusScanner = useCallback(() => {
+    if (!isLocked && inputRef.current && document.activeElement !== inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isLocked]);
+
+  // Foco inicial / ao destravar (sem recriação de timers a cada bip)
+  useEffect(() => {
+    if (!isLocked) {
+      focusScanner();
+    }
+  }, [isLocked, focusScanner]);
+
+  // Configuração dos callbacks da fila de sincronização em memória
+  useEffect(() => {
+    syncQueueRef.current.setCallbacks({
+      onQueueChange: (count) => {
+        setPendingSyncCount(count);
+      },
+      onSyncError: (err, scan) => {
+        setSyncError(`Aviso de sincronização: pacote ${scan.id} não pôde ser salvo no servidor. Verifique sua conexão.`);
+      },
+      onSyncSuccess: () => {
+        setSyncError(null);
+      }
+    });
+  }, []);
+
+  const parseCSV = useCallback((text: string): RefugoRow[] => {
     const result = Papa.parse<string[]>(text, { skipEmptyLines: true });
-    if (result.errors.some(error => error.type === 'Quotes')) throw new Error('O arquivo CSV contém aspas inválidas. Confira o arquivo.');
-    
+    if (result.errors.some(error => error.type === 'Quotes')) {
+      throw new Error('O arquivo CSV contém aspas inválidas. Confira o arquivo.');
+    }
+
     const headerRow = result.data.find(values => {
       const id = String(values[0] || '').trim().toUpperCase();
       return ['ID', 'CODIGO', 'CÓDIGO', 'PACOTE', 'TRACKING', 'ENVIO'].includes(id);
@@ -107,44 +218,117 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     return result.data.flatMap(values => {
       const id = String(values[0] || '').trim().toUpperCase();
       if (!id || ['ID', 'CODIGO', 'CÓDIGO', 'PACOTE', 'TRACKING', 'ENVIO'].includes(id)) return [];
-      
+
       let isHighPriority = false;
       [valorRealIndex, valorUsdIndex].forEach(idx => {
-         if (idx >= 0 && values[idx]) {
-           const valStr = values[idx].replace(/\./g, '').replace(',', '.').trim();
-           const val = parseFloat(valStr);
-           if (!isNaN(val) && val > 1000) {
-             isHighPriority = true;
-           }
-         }
+        if (idx >= 0 && values[idx]) {
+          const valStr = values[idx].replace(/\./g, '').replace(',', '.').trim();
+          const val = parseFloat(valStr);
+          if (!isNaN(val) && val > 1000) {
+            isHighPriority = true;
+          }
+        }
       });
 
-      return [{ id, rota: String(values[1] || 'Sem Rota').trim(), isHighPriority, rawFields: Object.fromEntries(values.map((value, index) => [String(index), value])) }];
+      return [{
+        id,
+        rota: String(values[1] || 'Sem Rota').trim(),
+        isHighPriority,
+        rawFields: Object.fromEntries(values.map((value, index) => [String(index), value]))
+      }];
     });
-  };
+  }, []);
 
+  // Inscrição aos dados: CSV de Refugo e Scans incrementais
   useEffect(() => {
     const unsubRefugo = listenToRefugo(data => {
       try {
         setRows(data?.rawText ? parseCSV(data.rawText) : []);
         setBaseDate(data?.updatedAt ? new Date(data.updatedAt).toLocaleString('pt-BR') : null);
-      } catch (error) { setRows([]); showError(error); }
+      } catch (error) {
+        setRows([]);
+        showError(error);
+      }
       setIsLoading(false);
     });
-    
-    const unsubScans = listenToRefugoScans((scans) => {
-      setRefugoScans(scans.map(scan => ({ ...scan, scannedAt: new Date(scan.scannedAt) })));
-      setScansReady(true);
-    });
-    
-    const unsubListas = listenToListas(data => { 
-      setExistingListas(data); 
-      setListasReady(true); 
-    });
-    
-    return () => { unsubRefugo(); unsubScans(); unsubListas(); };
-  }, []);
 
+    // Processamento incremental com snapshot.docChanges() para alta performance com milhares de scans
+    const unsubScans = listenToRefugoScansIncremental((changes: RefugoScanChange[], isInitial: boolean, initialScans?: RefugoScan[]) => {
+      if (isInitial && initialScans) {
+        const map = new Map<string, RefugoScan>();
+        for (let i = 0; i < initialScans.length; i++) {
+          const s = initialScans[i];
+          const k = s.normalizedId || normalizeTrackingCode(s.id);
+          map.set(k, { ...s, normalizedId: k });
+        }
+        scanByCodeRef.current = map;
+        setScannedItems(initialScans);
+        setScansReady(true);
+        return;
+      }
+
+      if (changes && changes.length > 0) {
+        setScannedItems(prev => {
+          let updated = [...prev];
+          let hasChanges = false;
+
+          for (let i = 0; i < changes.length; i++) {
+            const change = changes[i];
+            const scan = change.scan;
+            const normId = scan.normalizedId || normalizeTrackingCode(scan.id);
+            const fullScan: RefugoScan = { ...scan, normalizedId: normId };
+
+            if (change.type === 'added') {
+              const existing = scanByCodeRef.current.get(normId);
+              scanByCodeRef.current.set(normId, fullScan);
+
+              if (existing) {
+                // Confirmação do item otimista enviado anteriormente: atualiza dados mantendo sem duplicação
+                const idx = updated.findIndex(s => s.normalizedId === normId);
+                if (idx >= 0) {
+                  updated[idx] = fullScan;
+                  hasChanges = true;
+                }
+              } else {
+                // Novo scan adicionado por outro usuário em tempo real
+                updated = [fullScan, ...updated.filter(s => s.normalizedId !== normId)];
+                hasChanges = true;
+              }
+            } else if (change.type === 'modified') {
+              scanByCodeRef.current.set(normId, fullScan);
+              const idx = updated.findIndex(s => s.normalizedId === normId);
+              if (idx >= 0) {
+                updated[idx] = fullScan;
+                hasChanges = true;
+              }
+            } else if (change.type === 'removed') {
+              scanByCodeRef.current.delete(normId);
+              const filtered = updated.filter(s => s.normalizedId !== normId);
+              if (filtered.length !== updated.length) {
+                updated = filtered;
+                hasChanges = true;
+              }
+            }
+          }
+
+          return hasChanges ? updated : prev;
+        });
+      }
+    });
+
+    // Carregamento lazy/background das listas de coleta (NÃO bloqueia a inicialização do scanner)
+    const unsubListas = listenToListas(data => {
+      setExistingListas(data);
+    });
+
+    return () => {
+      unsubRefugo();
+      unsubScans();
+      unsubListas();
+    };
+  }, [parseCSV, showError]);
+
+  // Função para operações administrativas pesadas (upload CSV, limpar base, exportar)
   const runOperation = async (operation: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -152,8 +336,136 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     try {
       await operation();
       setSyncError(null);
-    } catch (error) { showError(error); }
-    finally { busyRef.current = false; setBusy(false); }
+    } catch (error) {
+      showError(error);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  /**
+   * FLUXO DO SCANNER ULTRA-RÁPIDO (< 5ms):
+   * O scanner NUNCA espera o Firestore para permitir o próximo bip!
+   * 1. Normalizar ID
+   * 2. Verificar duplicidade no Map local O(1)
+   * 3. Buscar pacote no rowByCode O(1)
+   * 4. Limpar input e devolver foco imediatamente
+   * 5. Mostrar resultado visual imediatamente
+   * 6. Tocar som imediatamente
+   * 7. Atualizar histórico local otimisticamente
+   * 8. Enfileirar gravação remota em background na fila de sincronização
+   */
+  const handleBip = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bipInput.trim() || isLocked) return;
+
+    const rawInput = bipInput;
+    const cleanInput = cleanTrackingId(rawInput);
+    if (!cleanInput) {
+      setBipInput('');
+      focusScanner();
+      return;
+    }
+
+    const key = normalizeTrackingCode(rawInput);
+
+    // 1. Verificação instantânea de duplicidade no índice local
+    const alreadyScanned = scanByCodeRef.current.get(key);
+    if (alreadyScanned) {
+      setLastScanResult({
+        status: alreadyScanned.status === 'found' ? 'success' : 'error',
+        message: 'O pacote já foi bipado anteriormente!',
+        id: alreadyScanned.id,
+        rota: alreadyScanned.rota
+      });
+      setBipInput('');
+      focusScanner();
+      return;
+    }
+
+    // 2. Busca O(1) na base CSV
+    const foundRow = rowByCode.get(key);
+
+    // 3. Monta o objeto de scan
+    const newScan: RefugoScan = {
+      id: foundRow?.id || cleanInput,
+      normalizedId: key,
+      rota: foundRow?.rota || '',
+      scannedAt: new Date().toLocaleString('pt-BR'),
+      timestamp: Date.now(),
+      status: foundRow ? 'found' : 'not_found',
+      foundBy: currentUser?.username || 'Operador',
+      firestoreId: key
+    };
+
+    // 4. Registro local imediato no índice e no estado da UI (0ms de latência)
+    scanByCodeRef.current.set(key, newScan);
+    setScannedItems(prev => [newScan, ...prev.filter(s => s.normalizedId !== key)]);
+
+    // 5. Limpa input e devolve o foco imediatamente para o próximo bip
+    setBipInput('');
+    focusScanner();
+
+    // 6. Feedback visual imediato
+    const isSemRota = !foundRow?.rota || foundRow.rota.trim().toUpperCase() === 'SEM ROTA';
+    if (foundRow) {
+      if (foundRow.isHighPriority) {
+        setLastScanResult({
+          status: isSemRota ? 'high_priority_no_route' : 'high_priority',
+          message: '',
+          rota: foundRow.rota,
+          id: foundRow.id
+        });
+      } else {
+        setLastScanResult({
+          status: isSemRota ? 'success_no_route' : 'success',
+          message: 'Pacote localizado!',
+          rota: foundRow.rota,
+          id: foundRow.id
+        });
+      }
+    } else {
+      setLastScanResult({
+        status: 'error',
+        message: `Bipado: ${cleanInput}`,
+        id: cleanInput
+      });
+    }
+
+    // 7. Som instantâneo
+    playBeep();
+
+    // 8. Garante visualização na primeira página
+    setPage(0);
+
+    // 9. Enfileira na fila de background do Firestore (concorrência limitada, sem travar o scanner)
+    syncQueueRef.current.enqueue(newScan);
+  };
+
+  /**
+   * Exclusão instantânea de scan (0ms na UI com sincronização em background)
+   */
+  const removeScan = async (scan: RefugoScan) => {
+    const targetId = scan.normalizedId || normalizeTrackingCode(scan.id);
+    const prevScan = scanByCodeRef.current.get(targetId);
+
+    // Remove imediatamente da UI e do índice local
+    scanByCodeRef.current.delete(targetId);
+    setScannedItems(prev => prev.filter(s => s.normalizedId !== targetId && s.id !== scan.id));
+    syncQueueRef.current.cancel(targetId);
+
+    // Executa deleção no Firestore em background
+    try {
+      await deleteRefugoScan(targetId);
+    } catch (error) {
+      // Em caso de falha de conexão, restaura o item e avisa o operador
+      if (prevScan) {
+        scanByCodeRef.current.set(targetId, prevScan);
+        setScannedItems(prev => [prevScan, ...prev]);
+      }
+      showError(error);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -172,81 +484,25 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const clearData = async () => {
     if (!window.confirm('Deseja realmente limpar a base de faltantes? (Isso também apagará os itens bipados)')) return;
     await runOperation(async () => {
+      syncQueueRef.current.clear();
+      scanByCodeRef.current.clear();
       await clearRefugo();
       await clearRefugoScans();
+      setScannedItems([]);
       setLastScanResult(null);
+      setPage(0);
     });
   };
 
   const clearScans = async () => {
     if (!window.confirm('Deseja limpar apenas o histórico de pacotes bipados?')) return;
     await runOperation(async () => {
+      syncQueueRef.current.clear();
+      scanByCodeRef.current.clear();
       await clearRefugoScans();
+      setScannedItems([]);
       setLastScanResult(null);
-    });
-  };
-
-  
-  const handleBip = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bipInput.trim() || isLocked) return;
-    
-    const cleanInput = cleanTrackingId(bipInput);
-    if (!cleanInput) {
-      setBipInput('');
-      return;
-    }
-
-    const key = codeKey(bipInput);
-    const alreadyScanned = scanByCode.get(key);
-    
-    if (alreadyScanned) {
-      setLastScanResult({ status: alreadyScanned.status === 'found' ? 'success' : 'error', message: 'O pacote já foi bipado anteriormente!', id: alreadyScanned.id });
-      setBipInput('');
-      setTimeout(() => inputRef.current?.focus(), 10);
-      return;
-    }
-
-    const foundRow = rowByCode.get(key);
-    
-    setBipInput('');
-    setTimeout(() => inputRef.current?.focus(), 10);
-    
-    await runOperation(async () => {
-      const newScan: Omit<RefugoScan, 'firestoreId'> = {
-        id: foundRow?.id || cleanInput,
-        normalizedId: key,
-        rota: foundRow?.rota || '',
-        scannedAt: new Date().toLocaleString('pt-BR'),
-        timestamp: Date.now(),
-        status: foundRow ? 'found' : 'not_found',
-        foundBy: currentUser?.username || 'Operador'
-      };
-
-      await addRefugoScan(newScan);
-
-      if (foundRow) {
-        if (foundRow.isHighPriority) {
-           const isSemRota = !foundRow.rota || foundRow.rota.toUpperCase() === 'SEM ROTA' || foundRow.rota.toUpperCase() === 'SEM ROTA ';
-           setLastScanResult({ status: isSemRota ? 'high_priority_no_route' : 'high_priority', message: '', rota: foundRow.rota, id: foundRow.id });
-        } else {
-           const isSemRota = !foundRow.rota || foundRow.rota.toUpperCase() === 'SEM ROTA' || foundRow.rota.toUpperCase() === 'SEM ROTA ';
-           setLastScanResult({ status: isSemRota ? 'success_no_route' : 'success', message: 'Pacote localizado!', rota: foundRow.rota, id: foundRow.id });
-        }
-
-        
-      } else {
-        setLastScanResult({ status: 'error', message: `Bipado: ${cleanInput}`, id: cleanInput });
-      }
       setPage(0);
-      setTimeout(() => inputRef.current?.focus(), 10);
-    });
-  };
-
-  const removeScan = async (scan: RefugoScan) => {
-    const targetId = scan.normalizedId || codeKey(scan.id);
-    await runOperation(async () => {
-      await deleteRefugoScan(targetId);
     });
   };
 
@@ -264,12 +520,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   };
 
   const handleOpenExportModal = () => {
-    // 1. Pacotes bipados que estão sem rota (status 'not_found' ou 'SEM ROTA')
     const scannedSemRota = scannedItems.filter(
       s => s.status === 'not_found' || s.rota === 'SEM ROTA' || s.rota === 'Sem Rota' || !s.rota
     );
 
-    // 2. Pacotes da base que estão sem rota
     const baseSemRota = rows.filter(
       r => !r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA' || r.rota.toLowerCase().includes('branca')
     );
@@ -339,9 +593,6 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
           status: 'em_andamento',
           saidaPadrao: exportSaida,
           motivoPadrao: exportMotivo,
-          // Removed these invalid properties to fix Type Error:
-          // pacotesSemRotaEmFluxo: exportTargetCodes.length,
-          // rotasEncontradas: foundCount,
           itens: newColetaItens
         };
         await saveLista(novaLista, true);
@@ -353,8 +604,6 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
         }
 
         const currentItens = await getAllItemsForExport(targetList.id);
-
-        // Evitar pacotes duplicados
         const existingCodes = new Set(currentItens.map(i => i.codigo.toUpperCase()));
         const uniqueNewItems = newColetaItens.filter(i => !existingCodes.has(i.codigo.toUpperCase()));
 
@@ -363,7 +612,6 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
         }
       }
 
-      // Download CSV file
       const csvHeader = "ID,ROTA\n";
       const csvBody = exportTargetCodes.map(code => `${code},Brancas`).join("\n");
       const blob = new Blob([csvHeader + csvBody], { type: 'text/csv;charset=utf-8;' });
@@ -379,24 +627,26 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       alert(`✅ Exportação concluída com sucesso!\n\n${exportTargetCodes.length} pacote(s) exportado(s) para o sistema e o arquivo CSV foi baixado.`);
     } catch (err) {
       showError(err);
-    } finally { busyRef.current = false; setBusy(false); }
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
 
-  const foundCount = scannedItems.filter(s => s.status === 'found').length;
-  const notFoundCount = scannedItems.filter(s => s.status === 'not_found').length;
-  const highPriorityCount = scannedItems.filter(s => {
-    const row = rows.find(r => r.id.trim().toUpperCase() === s.id.trim().toUpperCase());
-    return row?.isHighPriority;
-  }).length;
-  const semRotaCount = notFoundCount || rows.filter(r => !r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA').length;
-
-  if (isLoading || !scansReady || !listasReady) {
+  // O scanner abre imediatamente após carregar o CSV e scans iniciais (NÃO depende de listasReady)
+  if (isLoading || !scansReady) {
     return <PageSkeleton variant="detail" className="mx-auto max-w-7xl pb-12" />;
   }
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
-      {syncError && <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{syncError}</div>}
+      {syncError && (
+        <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-center justify-between">
+          <span>{syncError}</span>
+          <button onClick={() => setSyncError(null)} className="text-red-500 hover:text-red-700 font-bold ml-2">✕</button>
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-12 flex flex-col items-center justify-center text-center mt-4">
           <div className="w-16 h-16 bg-[#E3F2FD] rounded-2xl flex items-center justify-center mb-4">
@@ -415,273 +665,295 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       ) : (
         <div className="space-y-4 w-full mt-2">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
-          {/* Scanner Area */}
-          <div className="space-y-4">
-            <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm h-full">
-              <h3 className="text-sm font-bold text-[#333333] uppercase tracking-wider mb-6 text-center">Leitura de Pacotes</h3>
-              
-              <form onSubmit={handleBip} className="space-y-4">
+            {/* Scanner Area */}
+            <div className="space-y-4">
+              <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm h-full flex flex-col justify-between">
                 <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <label className="block text-sm font-bold text-gray-700">
-                      Bipe o ID do pacote (Foco travado no campo)
-                    </label>
-                    <button 
-                      type="button" 
-                      onClick={() => {
-                        setIsLocked(!isLocked);
-                        if (isLocked) {
-                          setTimeout(() => inputRef.current?.focus(), 50);
-                        }
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors shadow-sm border ${
-                        isLocked 
-                          ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' 
-                          : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                      }`}
-                    >
-                      {isLocked ? (
-                        <><Lock className="w-4 h-4" /> Bip Travado</>
-                      ) : (
-                        <><Unlock className="w-4 h-4" /> Bip Liberado</>
-                      )}
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                      <Barcode className={`h-8 w-8 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
-                    </div>
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      value={bipInput}
-                      onChange={(e) => setBipInput(e.target.value)}
-                      onBlur={() => {
-                        if (!isLocked) setTimeout(() => inputRef.current?.focus(), 150);
-                      }}
-                      disabled={isLocked}
-                      className={`block w-full pl-16 pr-6 py-8 border-2 rounded-xl text-3xl font-mono font-bold transition-all ${
-                        isLocked 
-                          ? 'bg-gray-50 border-gray-200 text-gray-400 placeholder-gray-300 cursor-not-allowed'
-                          : 'border-[#3483FA]/30 focus:ring-4 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-300'
-                      }`}
-                      placeholder={isLocked ? "SISTEMA TRAVADO" : "MLB..."}
-                      autoFocus
-                    />
-                  </div>
-                  <p className="text-xs text-gray-400 mt-3 text-center font-medium">
-                    {isLocked ? 'Desbloqueie para voltar a ler pacotes.' : 'O campo submete automaticamente após a leitura do bipe (Enter).'}
-                  </p>
-                </div>
-                <button type="submit" className="hidden" disabled={isLocked}>Verificar</button>
-              </form>
-
-              {lastScanResult && (
-                <div className={`mt-8 p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center animate-in zoom-in duration-200 ${
-                  lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 
-                  lastScanResult.status === 'success_no_route' ? 'bg-orange-50 border-orange-200 text-orange-800' : 
-                  lastScanResult.status === 'high_priority' ? 'bg-yellow-400 border-yellow-500 text-yellow-900 shadow-[0_0_30px_rgba(250,204,21,0.5)]' :
-                  lastScanResult.status === 'high_priority_no_route' ? 'bg-red-600 border-red-700 text-white shadow-[0_0_30px_rgba(220,38,38,0.6)]' :
-                  'bg-red-50 border-red-200 text-red-800'
-                }`}>
-                  {lastScanResult.status === 'high_priority' ? (
-                    <AlertCircle className="w-20 h-20 text-yellow-800 mb-4 animate-bounce" />
-                  ) : lastScanResult.status === 'high_priority_no_route' ? (
-                    <Star className="w-20 h-20 text-white mb-4 animate-pulse fill-yellow-400" />
-                  ) : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? (
-                    <CheckCircle2 className={`w-20 h-20 mb-4 ${lastScanResult.status === 'success_no_route' ? 'text-orange-500' : 'text-emerald-500'}`} />
-                  ) : (
-                    <XCircle className="w-20 h-20 text-red-500 mb-4" />
-                  )}
-                  <p className="font-black text-3xl uppercase tracking-wide flex flex-col items-center gap-3">
-                    <span>{lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route' ? 'ALTA PRIORIDADE BPP' : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? 'ENCONTRADO' : 'NÃO ENCONTRADO'}</span>
-                    {(lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route') && lastScanResult.id && (
-                      <span className="text-4xl font-mono bg-black/10 px-6 py-2 rounded-xl mt-1 tracking-widest">{lastScanResult.id}</span>
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-sm font-bold text-[#333333] uppercase tracking-wider">Leitura de Pacotes</h3>
+                    {baseDate && (
+                      <span className="text-xs text-gray-400 font-medium">
+                        Base: {baseDate}
+                      </span>
                     )}
-                  </p>
-                  <p className={`text-xl font-bold mt-2 ${lastScanResult.status === 'high_priority_no_route' ? 'text-red-100' : ''}`}>{lastScanResult.message}</p>
-                  {lastScanResult.rota && (
-                    <div className={`mt-4 px-6 py-2 rounded-lg text-2xl font-black shadow-sm uppercase ${
-                       lastScanResult.status === 'high_priority' ? 'bg-yellow-100 text-yellow-900' : 
-                       lastScanResult.status === 'high_priority_no_route' ? 'bg-red-800 text-white' : 
-                       lastScanResult.status === 'success_no_route' ? 'bg-orange-100 text-orange-900' :
-                       'bg-white text-emerald-900'
-                    }`}>
-                      {lastScanResult.status === 'success_no_route' || lastScanResult.status === 'high_priority_no_route' || lastScanResult.rota.toUpperCase().includes('SEM ROTA') ? 'SEM ROTA' : `Rota: ${lastScanResult.rota}`}
+                  </div>
+
+                  <form onSubmit={handleBip} className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="block text-sm font-bold text-gray-700">
+                          Bipe o ID do pacote (Leitura Instantânea)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextLocked = !isLocked;
+                            setIsLocked(nextLocked);
+                            if (!nextLocked) {
+                              requestAnimationFrame(() => inputRef.current?.focus());
+                            }
+                          }}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors shadow-sm border ${
+                            isLocked
+                              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                          }`}
+                        >
+                          {isLocked ? (
+                            <><Lock className="w-4 h-4" /> Bip Travado</>
+                          ) : (
+                            <><Unlock className="w-4 h-4" /> Bip Liberado</>
+                          )}
+                        </button>
+                      </div>
+
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                          <Barcode className={`h-8 w-8 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
+                        </div>
+                        <input
+                          ref={inputRef}
+                          type="text"
+                          value={bipInput}
+                          onChange={(e) => setBipInput(e.target.value)}
+                          onBlur={() => {
+                            if (!isLocked) {
+                              requestAnimationFrame(focusScanner);
+                            }
+                          }}
+                          disabled={isLocked}
+                          className={`block w-full pl-16 pr-6 py-8 border-2 rounded-xl text-3xl font-mono font-bold transition-all ${
+                            isLocked
+                              ? 'bg-gray-50 border-gray-200 text-gray-400 placeholder-gray-300 cursor-not-allowed'
+                              : 'border-[#3483FA]/30 focus:ring-4 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-300'
+                          }`}
+                          placeholder={isLocked ? "SISTEMA TRAVADO" : "MLB..."}
+                          autoFocus
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400 mt-3 text-center font-medium">
+                        {isLocked ? 'Desbloqueie para voltar a ler pacotes.' : 'Resposta imediata do bip com gravação em segundo plano.'}
+                      </p>
                     </div>
-                  )}
+                    <button type="submit" className="hidden" disabled={isLocked}>Verificar</button>
+                  </form>
                 </div>
-              )}
-            </div>
-          </div>
 
-          {/* Scanned List Area */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col h-full min-h-[500px]">
-            {/* Headers and Controls */}
-            <div className="flex flex-col gap-4 mb-4 pb-4 border-b border-gray-100">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Histórico de Leitura</span>
-                <div className="flex items-center gap-2 flex-wrap justify-end">
-                  <span className="bg-yellow-100 text-yellow-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-yellow-300 flex items-center gap-1 shadow-sm">
-                    <AlertCircle className="w-3.5 h-3.5 text-yellow-600" /> Alta Prioridade (BPP): {highPriorityCount}
-                  </span>
-                  <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-emerald-200 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Encontrados: {foundCount}
-                  </span>
-                  <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-red-200 flex items-center gap-1">
-                    <XCircle className="w-3.5 h-3.5 text-red-600" /> Sem Rota: {notFoundCount}
-                  </span>
-                  <span className="bg-blue-100 text-blue-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-blue-200">
-                    Total: {scannedItems.length}
-                  </span>
-                </div>
-              </div>
-              
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="cursor-pointer bg-[#3483FA] hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5">
-                  <UploadCloud className="w-4 h-4" />
-                  Carregar Base
-                  <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-                </label>
-                <button
-                  onClick={clearData}
-                  className="px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1.5"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Limpar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenExportModal}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer border border-amber-600"
-                  title="Exporta pacotes sem rota (SEM ROTA) para uma Lista Branca no sistema e em CSV"
-                >
-                  <FilePlus className="w-4 h-4" />
-                  <span>Exportar Lista Branca</span>
-                  {semRotaCount > 0 && (
-                    <span className="bg-amber-700/60 text-white px-1.5 py-0.5 rounded text-[10px] font-mono">
-                      {semRotaCount}
-                    </span>
-                  )}
-                </button>
-
-                {scannedItems.length > 0 && (
-                  <>
-                    <button
-                      onClick={clearScans}
-                      className="px-3 py-1.5 text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors flex items-center gap-1.5"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      Limpar Bipados
-                    </button>
-                    <button
-                      onClick={exportScannedCSV}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 text-[#333333] text-xs font-bold rounded-lg transition-colors border border-gray-300 shadow-sm"
-                    >
-                      <Download className="w-4 h-4" />
-                      Baixar Bipados (CSV)
-                    </button>
-                  </>
+                {lastScanResult && (
+                  <div className={`mt-8 p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center animate-in zoom-in duration-200 ${
+                    lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
+                    lastScanResult.status === 'success_no_route' ? 'bg-orange-50 border-orange-200 text-orange-800' :
+                    lastScanResult.status === 'high_priority' ? 'bg-yellow-400 border-yellow-500 text-yellow-900 shadow-[0_0_30px_rgba(250,204,21,0.5)]' :
+                    lastScanResult.status === 'high_priority_no_route' ? 'bg-red-600 border-red-700 text-white shadow-[0_0_30px_rgba(220,38,38,0.6)]' :
+                    'bg-red-50 border-red-200 text-red-800'
+                  }`}>
+                    {lastScanResult.status === 'high_priority' ? (
+                      <AlertCircle className="w-20 h-20 text-yellow-800 mb-4 animate-bounce" />
+                    ) : lastScanResult.status === 'high_priority_no_route' ? (
+                      <Star className="w-20 h-20 text-white mb-4 animate-pulse fill-yellow-400" />
+                    ) : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? (
+                      <CheckCircle2 className={`w-20 h-20 mb-4 ${lastScanResult.status === 'success_no_route' ? 'text-orange-500' : 'text-emerald-500'}`} />
+                    ) : (
+                      <XCircle className="w-20 h-20 text-red-500 mb-4" />
+                    )}
+                    <div className="font-black text-3xl uppercase tracking-wide flex flex-col items-center gap-3">
+                      <span>{lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route' ? 'ALTA PRIORIDADE BPP' : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? 'ENCONTRADO' : 'NÃO ENCONTRADO'}</span>
+                      {(lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route') && lastScanResult.id && (
+                        <span className="text-4xl font-mono bg-black/10 px-6 py-2 rounded-xl mt-1 tracking-widest">{lastScanResult.id}</span>
+                      )}
+                    </div>
+                    <p className={`text-xl font-bold mt-2 ${lastScanResult.status === 'high_priority_no_route' ? 'text-red-100' : ''}`}>{lastScanResult.message}</p>
+                    {lastScanResult.rota && (
+                      <div className={`mt-4 px-6 py-2 rounded-lg text-2xl font-black shadow-sm uppercase ${
+                        lastScanResult.status === 'high_priority' ? 'bg-yellow-100 text-yellow-900' :
+                        lastScanResult.status === 'high_priority_no_route' ? 'bg-red-800 text-white' :
+                        lastScanResult.status === 'success_no_route' ? 'bg-orange-100 text-orange-900' :
+                        'bg-white text-emerald-900'
+                      }`}>
+                        {lastScanResult.status === 'success_no_route' || lastScanResult.status === 'high_priority_no_route' || lastScanResult.rota.toUpperCase().includes('SEM ROTA') ? 'SEM ROTA' : `Rota: ${lastScanResult.rota}`}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
-            
-            <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
-            <div className="overflow-y-auto flex-1 pr-2 space-y-2">
-                            {scannedItems.length > 0 ? (
-                scannedItems.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE).map((item) => {
-                  const isItemSemRota = item.status === 'not_found' || !item.rota || item.rota.toUpperCase() === 'SEM ROTA' || item.rota.toUpperCase() === 'SEM ROTA ';
-                  const itemRow = rowByCode.get(item.normalizedId || codeKey(item.id));
-                  const isBpp = Boolean(itemRow?.isHighPriority);
-                  
-                  // Color classes based on:
-                  // - With route: Green
-                  // - Sem rota BPP: Yellow (Amarelo)
-                  // - Sem rota normal: Red (Vermelho)
-                  let cardClasses = 'border-emerald-200 bg-emerald-50';
-                  let idColor = 'text-emerald-900';
-                  let badgeClasses = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                  
-                  if (isItemSemRota) {
-                    if (isBpp) {
-                      cardClasses = 'border-yellow-300 bg-yellow-50';
-                      idColor = 'text-yellow-900';
-                      badgeClasses = 'bg-yellow-100 text-yellow-900 border-yellow-300';
-                    } else {
-                      cardClasses = 'border-red-200 bg-red-50';
-                      idColor = 'text-red-900';
-                      badgeClasses = 'bg-red-100 text-red-800 border-red-200';
-                    }
-                  }
-                  
-                  return (
-                  <div key={item.id} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${cardClasses}`}>
-                    <div className="flex items-center gap-2">
-                      {!isItemSemRota ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                      ) : isBpp ? (
-                        <AlertCircle className="w-4 h-4 text-yellow-600" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-red-500" />
-                      )}
-                      <span className={`font-mono font-bold text-sm ${idColor}`}>{item.id}</span>
-                      {isBpp && isItemSemRota && (
-                        <span className="text-[10px] bg-yellow-200 text-yellow-800 font-bold px-1.5 py-0.5 rounded uppercase">BPP</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {!isItemSemRota ? (
-                        <div className="flex flex-col items-end">
-                          <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
-                            Rota: {item.rota}
-                          </span>
-                          {item.foundBy && (
-                            <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
-                              Encontrado por: <strong className="text-gray-700">{item.foundBy}</strong>
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-end">
-                          <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
-                            SEM ROTA
-                          </span>
-                          {item.foundBy && (
-                            <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
-                              Bipado por: <strong className="text-gray-700">{item.foundBy}</strong>
-                            </span>
-                          )}
-                        </div>
-                      )}
+
+            {/* Scanned List Area */}
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col h-full min-h-[500px]">
+              {/* Headers and Controls */}
+              <div className="flex flex-col gap-4 mb-4 pb-4 border-b border-gray-100">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Histórico de Leitura</span>
+                    {pendingSyncCount > 0 && (
+                      <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md text-[11px] font-medium border border-amber-200 flex items-center gap-1 animate-pulse">
+                        <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                        Sincronizando ({pendingSyncCount})
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <span className="bg-yellow-100 text-yellow-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-yellow-300 flex items-center gap-1 shadow-sm">
+                      <AlertCircle className="w-3.5 h-3.5 text-yellow-600" /> Alta Prioridade (BPP): {stats.highPriority}
+                    </span>
+                    <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-emerald-200 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Encontrados: {stats.found}
+                    </span>
+                    <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-red-200 flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5 text-red-600" /> Sem Rota: {stats.notFound}
+                    </span>
+                    <span className="bg-blue-100 text-blue-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-blue-200">
+                      Total: {scannedItems.length}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="cursor-pointer bg-[#3483FA] hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5">
+                    <UploadCloud className="w-4 h-4" />
+                    Carregar Base
+                    <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+                  </label>
+                  <button
+                    onClick={clearData}
+                    disabled={busy}
+                    className="px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Limpar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenExportModal}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer border border-amber-600"
+                    title="Exporta pacotes sem rota (SEM ROTA) para uma Lista Branca no sistema e em CSV"
+                  >
+                    <FilePlus className="w-4 h-4" />
+                    <span>Exportar Lista Branca</span>
+                    {semRotaCount > 0 && (
+                      <span className="bg-amber-700/60 text-white px-1.5 py-0.5 rounded text-[10px] font-mono">
+                        {semRotaCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {scannedItems.length > 0 && (
+                    <>
                       <button
-                        onClick={() => removeScan(item)}
-                        className="ml-1 text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
-                        title="Remover pacote"
+                        onClick={clearScans}
+                        disabled={busy}
+                        className="px-3 py-1.5 text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                       >
                         <Trash2 className="w-4 h-4" />
+                        Limpar Bipados
                       </button>
-                    </div>
+                      <button
+                        onClick={exportScannedCSV}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 text-[#333333] text-xs font-bold rounded-lg transition-colors border border-gray-300 shadow-sm"
+                      >
+                        <Download className="w-4 h-4" />
+                        Baixar Bipados (CSV)
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
+
+              <div className="overflow-y-auto flex-1 pr-2 space-y-2">
+                {scannedItems.length > 0 ? (
+                  scannedItems.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE).map((item) => {
+                    const isItemSemRota = item.status === 'not_found' || !item.rota || item.rota.toUpperCase() === 'SEM ROTA' || item.rota.toUpperCase() === 'SEM ROTA ';
+                    const itemRow = rowByCode.get(item.normalizedId || normalizeTrackingCode(item.id));
+                    const isBpp = Boolean(itemRow?.isHighPriority);
+
+                    let cardClasses = 'border-emerald-200 bg-emerald-50';
+                    let idColor = 'text-emerald-900';
+                    let badgeClasses = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+
+                    if (isItemSemRota) {
+                      if (isBpp) {
+                        cardClasses = 'border-yellow-300 bg-yellow-50';
+                        idColor = 'text-yellow-900';
+                        badgeClasses = 'bg-yellow-100 text-yellow-900 border-yellow-300';
+                      } else {
+                        cardClasses = 'border-red-200 bg-red-50';
+                        idColor = 'text-red-900';
+                        badgeClasses = 'bg-red-100 text-red-800 border-red-200';
+                      }
+                    }
+
+                    return (
+                      <div key={item.normalizedId || item.id} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${cardClasses}`}>
+                        <div className="flex items-center gap-2">
+                          {!isItemSemRota ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          ) : isBpp ? (
+                            <AlertCircle className="w-4 h-4 text-yellow-600" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-red-500" />
+                          )}
+                          <span className={`font-mono font-bold text-sm ${idColor}`}>{item.id}</span>
+                          {isBpp && isItemSemRota && (
+                            <span className="text-[10px] bg-yellow-200 text-yellow-800 font-bold px-1.5 py-0.5 rounded uppercase">BPP</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!isItemSemRota ? (
+                            <div className="flex flex-col items-end">
+                              <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
+                                Rota: {item.rota}
+                              </span>
+                              {item.foundBy && (
+                                <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
+                                  Encontrado por: <strong className="text-gray-700">{item.foundBy}</strong>
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-end">
+                              <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
+                                SEM ROTA
+                              </span>
+                              {item.foundBy && (
+                                <span className="text-[10px] text-gray-500 mt-0.5 font-medium">
+                                  Bipado por: <strong className="text-gray-700">{item.foundBy}</strong>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeScan(item)}
+                            className="ml-1 text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
+                            title="Remover pacote"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 text-center text-gray-500">
+                    <Barcode className="w-12 h-12 text-gray-300 mb-3" />
+                    <p className="text-base font-bold text-[#333333]">Nenhum pacote bipado</p>
+                    <p className="text-sm mt-1">Comece a ler os pacotes para ver o histórico.</p>
                   </div>
-                );
-                })
-              ) : (
-                <div className="flex flex-col items-center justify-center py-10 text-center text-gray-500">
-                   <Barcode className="w-12 h-12 text-gray-300 mb-3" />
-                   <p className="text-base font-bold text-[#333333]">Nenhum pacote bipado</p>
-                   <p className="text-sm mt-1">Comece a ler os pacotes para ver o histórico.</p>
+                )}
+              </div>
+
+              {scannedItems.length > 50 && (
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
                 </div>
               )}
             </div>
-            
-            {scannedItems.length > 50 && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
-              </div>
-            )}
-            
           </div>
         </div>
-      </div>
       )}
 
       {showExportModal && (
@@ -692,7 +964,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                 <h2 className="text-xl font-black text-gray-900 uppercase">Exportar Lista Branca</h2>
                 <p className="text-sm text-gray-500 mt-1 font-medium">Transferir pacotes sem rota para o sistema de coleta</p>
               </div>
-              <button 
+              <button
                 onClick={() => setShowExportModal(false)}
                 className="text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-2 transition-colors"
               >
@@ -796,13 +1068,13 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
             </div>
 
             <div className="mt-8 flex justify-end gap-3">
-              <button 
+              <button
                 onClick={() => setShowExportModal(false)}
                 className="px-5 py-2 text-sm font-bold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors uppercase"
               >
                 Cancelar
               </button>
-              <button 
+              <button
                 onClick={handleConfirmExport}
                 disabled={busy || (exportDestinationType === 'existing' && existingListas.length === 0)}
                 className="flex items-center gap-2 px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 uppercase cursor-pointer"
@@ -820,7 +1092,6 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
           </div>
         </div>
       )}
-
     </div>
   );
 }

@@ -19,11 +19,17 @@ const firebaseConfig = {
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
+// Suporte a detecção automática ou long polling configurável via variável de ambiente VITE_FIREBASE_AUTO_DETECT_POLLING.
+// Por padrão, experimentalForceLongPolling: true é mantido para garantir máxima compatibilidade com proxies/firewalls corporativos.
+const useAutoDetect = typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_AUTO_DETECT_POLLING === 'true';
+
 let firestoreInstance;
 try {
   firestoreInstance = initializeFirestore(app, {
     localCache: memoryLocalCache(),
-    experimentalForceLongPolling: true
+    ...(useAutoDetect
+      ? { experimentalAutoDetectLongPolling: true }
+      : { experimentalForceLongPolling: true })
   });
 } catch (_) {
   firestoreInstance = getFirestore(app);
@@ -326,6 +332,50 @@ export async function clearRefugoScans(): Promise<boolean> {
     console.error('Erro ao limpar scans de refugo:', error);
     throw error;
   }
+}
+
+export interface RefugoScanChange {
+  type: 'added' | 'modified' | 'removed';
+  scan: RefugoScan;
+}
+
+/**
+ * Escuta scans de refugo de forma incremental usando snapshot.docChanges().
+ * Na primeira execução (isInitial: true), carrega todos os scans de uma única vez.
+ * Em seguida, processa APENAS as alterações (added, modified, removed) sem reconstruir a coleção toda.
+ */
+export function listenToRefugoScansIncremental(
+  callback: (changes: RefugoScanChange[], isInitial: boolean, initialScans?: RefugoScan[]) => void,
+  onError?: (error: any) => void
+): () => void {
+  const colRef = collection(db, 'refugo_scans_items');
+  const q = query(colRef, orderBy('timestamp', 'desc'));
+  let isInitial = true;
+
+  return onSnapshot(q, (snap) => {
+    if (isInitial) {
+      const initialScans = snap.docs.map(docSnap => ({
+        ...docSnap.data(),
+        firestoreId: docSnap.id
+      } as RefugoScan));
+      callback([], true, initialScans);
+      isInitial = false;
+    } else {
+      const changes: RefugoScanChange[] = snap.docChanges().map(change => ({
+        type: change.type,
+        scan: {
+          ...change.doc.data(),
+          firestoreId: change.doc.id
+        } as RefugoScan
+      }));
+      if (changes.length > 0) {
+        callback(changes, false);
+      }
+    }
+  }, (error) => {
+    console.warn('Erro ao escutar refugo scans incremental:', error);
+    if (onError) onError(error);
+  });
 }
 
 export function listenToRefugoScans(callback: (scans: RefugoScan[]) => void): () => void {
