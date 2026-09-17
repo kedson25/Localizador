@@ -24,7 +24,7 @@ export const StatsSummary: React.FC<StatsSummaryProps> = ({ totalRows, groups })
           <Hash className="w-5 h-5" />
         </div>
         <div>
-          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block">Total de IDs</span>
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block">Total IDs</span>
           <span className="text-xl font-black text-gray-900 font-mono">{totalRows}</span>
         </div>
       </div>
@@ -35,7 +35,7 @@ export const StatsSummary: React.FC<StatsSummaryProps> = ({ totalRows, groups })
           <Layers className="w-5 h-5" />
         </div>
         <div>
-          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block">Grupos Mapeados</span>
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block">Grupos</span>
           <span className="text-xl font-black text-amber-600 font-mono">{groups.length}</span>
         </div>
       </div>

@@ -22,7 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           
           {/* Tab Navigation */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 overflow-x-auto app-scroll-x max-w-full pb-1 md:pb-0 flex-nowrap sm:flex-wrap">
             {/* Hub Button */}
             <button
               onClick={() => setActiveTab('tools')}

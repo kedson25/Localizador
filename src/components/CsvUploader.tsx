@@ -73,10 +73,10 @@ export const CsvUploader: React.FC<CsvUploaderProps> = ({
         </div>
 
         <h3 className="text-sm font-bold text-gray-900 mb-1 uppercase tracking-tight">
-          Arraste ou selecione seu arquivo
+          Importar Arquivo
         </h3>
         <p className="text-xs text-gray-500 max-w-sm mx-auto mb-3">
-          Suporta CSV, TXT e TSV
+          CSV, TXT ou TSV
         </p>
 
         <button
@@ -87,13 +87,13 @@ export const CsvUploader: React.FC<CsvUploaderProps> = ({
           }}
           className="px-4 py-2 bg-[#111827] hover:bg-black text-white rounded text-xs font-mono font-bold uppercase tracking-wider transition-colors shadow-sm"
         >
-          Escolher Arquivo
+          Selecionar
         </button>
 
         {currentTotalRows > 0 && (
           <div className="mt-4 pt-4 border-t border-gray-100">
             <span className="text-xs font-mono text-green-700 bg-green-50 px-2.5 py-1 rounded border border-green-200 font-bold">
-              ✓ {currentTotalRows} registros carregados no sistema
+              ✓ {currentTotalRows} registros carregados
             </span>
           </div>
         )}

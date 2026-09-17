@@ -841,8 +841,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left text-gray-700">
+            <div className="overflow-x-auto app-scroll-x -mx-4 sm:mx-0 px-4 sm:px-0">
+              <table className="w-full text-xs text-left text-gray-700 min-w-[850px]">
                 <thead className="bg-gray-50 font-bold uppercase tracking-wider text-gray-600 border-b border-gray-200">
                   <tr>
                     <th className="py-3 px-4">Nome da Lista</th>
@@ -1066,8 +1066,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
+            <div className="overflow-x-auto app-scroll-x -mx-4 sm:mx-0 px-4 sm:px-0">
+              <table className="w-full text-sm text-left min-w-[650px]">
                 <thead className="bg-gray-50 text-gray-600 font-bold uppercase text-xs border-b border-gray-200">
                   <tr>
                     <th className="px-4 py-3">Usuário / E-mail</th>
@@ -1488,8 +1488,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser }) => {
               {/* Tabela de Itens */}
               <div className="flex-1 overflow-y-auto p-4 max-h-[50vh]">
                 {listToDisplay.length > 0 ? (
-                  <div className="border border-gray-200 rounded-xl overflow-hidden shadow-2xs">
-                    <table className="w-full text-xs text-left text-gray-700 border-collapse">
+                  <div className="border border-gray-200 rounded-xl overflow-x-auto app-scroll-x shadow-2xs">
+                    <table className="w-full text-xs text-left text-gray-700 border-collapse min-w-[750px]">
                       <thead className="bg-gray-100 text-gray-700 font-black uppercase tracking-wider sticky top-0 z-10 border-b border-gray-200">
                         <tr>
                           <th className="py-2.5 px-3 text-center w-12 bg-gray-100 border-r border-gray-200">#</th>

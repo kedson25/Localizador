@@ -39,7 +39,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
       id: 'listas',
       path: '/listas',
       name: 'Listas de Coleta',
-      description: 'Filtrar remessas prontas, separar por tipo (Envios/Coletas) e gerar relatórios simplificados.',
+      description: 'Criação e bipagem de listas operacionais.',
       icon: ListTodo,
       iconColor: 'text-[#FACC15]',
       badgeBg: 'bg-[#FFF9C4] border-[#FBC02D] text-[#F57F17]',
@@ -48,8 +48,8 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
     {
       id: 'consulta',
       path: '/consulta',
-      name: 'Buscar grupos e IDs',
-      description: 'Consulte informações detalhadas sobre pacotes, agrupamentos e o status atualizado de cada ID na base.',
+      name: 'Buscar IDs',
+      description: 'Localização de pacotes e rotas na base.',
       icon: Search,
       iconColor: 'text-[#3483FA]',
       badgeBg: 'bg-blue-50 border-blue-200 text-blue-700',
@@ -58,8 +58,8 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
     {
       id: 'remover',
       path: '/remover',
-      name: 'Remover IDs em lote',
-      description: 'Escaneie pacotes fisicamente e dê baixa imediata no sistema. As quantidades são atualizadas na hora.',
+      name: 'Remover IDs',
+      description: 'Filtragem e baixa em lote.',
       icon: Trash2,
       iconColor: 'text-red-500',
       badgeBg: 'bg-red-50 border-red-200 text-red-700',
@@ -68,8 +68,8 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
     {
       id: 'reporte',
       path: '/reporte',
-      name: 'Gerar Reporte WhatsApp',
-      description: 'Gere um resumo formatado com as quantidades e pendências de cada grupo para enviar direto pelo WhatsApp.',
+      name: 'Reporte WhatsApp',
+      description: 'Resumo formatado para compartilhamento.',
       icon: MessageSquare,
       iconColor: 'text-emerald-500',
       badgeBg: 'bg-emerald-50 border-emerald-200 text-emerald-700',
@@ -89,10 +89,9 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
       id: 'refugo',
       path: '/refugo',
       name: 'Controle Refugo',
-      tag: 'Auditoria & Leitura',
-      description: 'Carregue a planilha de faltantes. Utilize o leitor de código de barras físico para bipar os pacotes localizados.',
+      tag: 'Auditoria',
+      description: 'Auditoria e conferência de faltantes.',
       icon: Barcode,
-  ListTodo,
       iconColor: 'text-[#3483FA]',
       badgeBg: 'bg-blue-50 text-[#3483FA] border-blue-200',
     }
@@ -114,8 +113,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
         </div>
 
         <div className="text-center pt-1">
-          <h1 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">Ferramentas de Base</h1>
-          <p className="text-gray-500 text-sm mt-1.5">Selecione o módulo que deseja utilizar</p>
+          <h1 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">Módulos</h1>
         </div>
       </div>
 
@@ -144,17 +142,14 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                   Lista Backlog
                 </h2>
                 <span className="text-[10px] font-mono text-gray-600 bg-gray-200 px-2 py-0.5 rounded-full font-medium">
-                  {backlogTools.length} ferramentas
+                  {backlogTools.length}
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Ferramentas essenciais para o fluxo de inventário, conciliação e comunicação
-              </p>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-gray-600 bg-white border border-gray-300 px-2.5 py-1 rounded-md">
             <span className={`w-2 h-2 rounded-full ${totalRows > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-            <span>{totalRows > 0 ? `${totalRows.toLocaleString()} IDs na memória` : 'Aguardando CSV'}</span>
+            <span>{totalRows > 0 ? `${totalRows.toLocaleString()} IDs` : 'Aguardando CSV'}</span>
           </div>
         </div>
 
@@ -196,7 +191,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 group-hover:text-[#3483FA] shrink-0 mt-2 sm:mt-0">
-                    <span>Acessar {tool.name.split(' ')[0]}</span>
+                    <span>Abrir</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </div>
                 </button>
@@ -213,7 +208,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                 className="px-4 py-2 text-xs font-bold text-white bg-[#3483FA] hover:bg-blue-600 rounded-md transition-colors flex items-center gap-1.5 shadow-sm"
               >
                 <UploadCloud className="w-4 h-4" />
-                {totalRows > 0 ? 'Atualizar Base CSV' : 'Carregar Base CSV'}
+                {totalRows > 0 ? 'Atualizar CSV' : 'Carregar CSV'}
               </button>
             )}
 
@@ -228,7 +223,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                   className="px-4 py-2 text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors flex items-center gap-1.5"
                 >
                   <Trash2 className="w-4 h-4" />
-                  Zerar Base
+                  Zerar
                 </button>
               )}
             </div>
@@ -263,12 +258,9 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                   Controle Refugo
                 </h2>
                 <span className="text-[10px] font-mono text-gray-600 bg-gray-200 px-2 py-0.5 rounded-full font-medium">
-                  {refugoTools.length} ferramenta
+                  {refugoTools.length}
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Conferência de pacotes faltantes via leitura de código de barras
-              </p>
             </div>
           </div>
         </div>
@@ -311,7 +303,7 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 group-hover:text-[#3483FA] shrink-0 mt-2 sm:mt-0">
-                    <span>Acessar {tool.name.split(' ')[0]}</span>
+                    <span>Abrir</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </div>
                 </button>
@@ -322,7 +314,6 @@ export const ToolsHub: React.FC<ToolsHubProps> = ({
           )}
         </AnimatePresence>
       </div>
-    
     </div>
   );
 };

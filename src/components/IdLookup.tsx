@@ -292,10 +292,10 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             type="button"
             onClick={() => { setLookupPage(1); setJumpLookupPageInput('1'); }}
             disabled={lookupPage === 1}
-            className="p-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            className="p-2 sm:p-1.5 min-h-[38px] min-w-[38px] sm:min-h-[28px] sm:min-w-[28px] flex items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
             title="Primeira página"
           >
-            <ChevronsLeft className="w-3.5 h-3.5" />
+            <ChevronsLeft className="w-4 h-4" />
           </button>
           <button
             type="button"
@@ -305,10 +305,10 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
               setJumpLookupPageInput(String(nextP));
             }}
             disabled={lookupPage === 1}
-            className="p-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
+            className="p-2 sm:p-1.5 min-h-[38px] min-w-[38px] sm:min-h-[28px] sm:min-w-[28px] flex items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs font-bold"
             title="Página anterior"
           >
-            <ChevronLeft className="w-3.5 h-3.5" />
+            <ChevronLeft className="w-4 h-4" />
           </button>
 
           <div className="hidden sm:flex items-center gap-1">
@@ -616,11 +616,11 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
             <button
               onClick={handleCopyResultsText}
               disabled={filteredMatches.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-gray-950 font-black rounded text-xs font-mono transition-colors shadow-sm uppercase tracking-wider"
+              className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3.5 py-2 sm:py-1 min-h-[40px] sm:min-h-[32px] bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-gray-950 font-black rounded text-xs font-mono transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
             >
               {copied ? (
                 <>
@@ -676,8 +676,8 @@ export const IdLookup: React.FC<IdLookupProps> = ({ rows, onNavigateToUpload }) 
       ) : matches.length > 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm flex flex-col">
           {renderLookupPagination('top')}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs font-mono">
+          <div className="overflow-x-auto app-scroll-x">
+            <table className="w-full text-left text-xs font-mono min-w-[620px]">
               <thead className="bg-gray-50 text-gray-500 font-bold border-b border-gray-200 uppercase tracking-wider text-[10px]">
                 <tr>
                   <th className="py-2 px-3 text-gray-400 w-10">#</th>

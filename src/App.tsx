@@ -125,19 +125,19 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#EBEBEB] text-[#333333] flex flex-col font-sans selection:bg-[#3483FA] selection:text-white">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#EBEBEB] text-[#333333] flex flex-col font-sans selection:bg-[#3483FA] selection:text-white">
       {/* Main Content Area */}
-      <main className={`flex-1 w-full mx-auto ${location.pathname === "/login" ? "" : location.pathname === "/listas" ? "px-4 sm:px-6 py-6 space-y-4" : "max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-4"}`}>
+      <main className={`flex-1 w-full min-w-0 mx-auto ${location.pathname === "/login" ? "" : location.pathname === "/listas" ? "px-3 sm:px-6 py-4 sm:py-6 space-y-4" : "max-w-7xl px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4"}`}>
         {/* Floating Notification */}
         {notification && (
-          <div className="bg-[#111827] text-white px-4 py-2.5 rounded shadow-md text-xs font-mono flex items-center justify-between border border-gray-700 animate-in fade-in">
-            <span className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
-              {notification}
+          <div className="bg-[#111827] text-white px-3.5 py-2.5 rounded-lg shadow-md text-xs font-mono flex items-center justify-between border border-gray-700 animate-in fade-in max-w-full">
+            <span className="flex items-center gap-2 min-w-0 break-words pr-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+              <span className="break-words">{notification}</span>
             </span>
             <button
               onClick={() => setNotification(null)}
-              className="ml-4 hover:text-gray-300 font-bold px-1"
+              className="ml-2 hover:text-gray-300 font-bold px-2 py-1 min-h-[36px] min-w-[36px] flex items-center justify-center shrink-0 cursor-pointer"
             >
               ✕
             </button>
@@ -145,7 +145,7 @@ export default function App() {
         )}
 
         {loadingFirebase && location.pathname !== '/refugo' ? (
-          <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300">
+          <div className="space-y-4 max-w-4xl mx-auto mt-4 animate-in fade-in duration-300 px-2">
             <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
             <div className="h-4 w-64 bg-gray-100 rounded animate-pulse mb-8"></div>
             
@@ -173,17 +173,17 @@ export default function App() {
         ) : (
           <>
             {isAuthenticated && location.pathname !== '/' && location.pathname !== '/login' && !location.pathname.startsWith('/listas/') && (
-              <div className="flex items-center gap-3 mb-4">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-3 sm:mb-4">
                 <button
                   onClick={() => navigate('/')}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm cursor-pointer"
+                  className="flex items-center gap-2 px-3.5 py-2 sm:py-1.5 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm cursor-pointer min-h-[40px] sm:min-h-0"
                 >
                   <ArrowLeft className="w-4 h-4 text-[#3483FA]" />
-                  Voltar para o Hub
+                  <span>Voltar para o Hub</span>
                 </button>
                 {getPageTitle() && (
                   <>
-                    <div className="h-4 w-px bg-gray-300 mx-1"></div>
+                    <div className="h-4 w-px bg-gray-300 mx-1 hidden sm:block"></div>
                     <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
                       {getPageTitle()}
                     </span>

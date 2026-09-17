@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import Papa from 'papaparse';
 import { 
   Barcode, 
@@ -28,6 +29,8 @@ import {
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
+  ChevronDown,
+  ChevronUp,
   AlertCircle,
   CheckSquare,
   Square,
@@ -76,6 +79,13 @@ import { cleanTrackingId } from '../utils/csvParser';
 interface ListasColetaProps {
   currentUser?: User | null;
 }
+
+type MotivoDropdownState = {
+  item: ColetaItem;
+  top: number;
+  left: number;
+  width: number;
+} | null;
 
 const SAIDAS_CICLOS_DISPONIVEIS = [
   'Ciclo 1 - Saída AM',
@@ -313,8 +323,21 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [selectedMotivo, setSelectedMotivo] = useState('');
   const [selectedRotaItem, setSelectedRotaItem] = useState('');
 
-  // Gaveta/Modal para mudar motivo do ID clicado
-  const [itemParaMudarMotivo, setItemParaMudarMotivo] = useState<ColetaItem | null>(null);
+  // Estados para dropdown rápido da célula e modal centralizado de motivos
+  const [
+    motivoDropdown,
+    setMotivoDropdown
+  ] = useState<MotivoDropdownState>(null);
+
+  const [
+    showMotivoModal,
+    setShowMotivoModal
+  ] = useState(false);
+
+  const [
+    itemParaMudarMotivo,
+    setItemParaMudarMotivo
+  ] = useState<ColetaItem | null>(null);
 
   // Seleção e Alteração em Massa de Motivos
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -1304,23 +1327,266 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     });
   }, [listaAtiva, refugoMap, selectedSaida, modoIndividual, itensModoIndividual, selectedMotivo, operanteNome]);
 
-  // Alterar motivo do item selecionado na gaveta
-  const handleMudarMotivoItem = async (novoMotivoEscolha: string) => {
-    if (!itemParaMudarMotivo || !listaAtiva) return;
+  // 4. Salvar motivo do item diretamente
+  const salvarMotivoDoItem = useCallback(
+    async (
+      item: ColetaItem,
+      novoMotivo: string
+    ) => {
+      if (!listaAtiva) return;
 
-    if (modoIndividual) {
-      setItensModoIndividual(prev => prev.map(item => {
-        if (item.id === itemParaMudarMotivo.id) {
-          return { ...item, motivo: novoMotivoEscolha };
+      const motivoLimpo = novoMotivo.trim();
+
+      if (!motivoLimpo) {
+        return;
+      }
+
+      if (modoIndividual) {
+        setItensModoIndividual(prev =>
+          prev.map(currentItem =>
+            currentItem.id === item.id
+              ? {
+                  ...currentItem,
+                  motivo: motivoLimpo
+                }
+              : currentItem
+          )
+        );
+
+        return;
+      }
+
+      await updateItemInLista(
+        listaAtiva.id,
+        item.id,
+        {
+          motivo: motivoLimpo
+        },
+        item
+      );
+    },
+    [
+      listaAtiva,
+      modoIndividual
+    ]
+  );
+
+  // 5. Handler do popup central de edição
+  const handleMudarMotivoItem = async (
+    novoMotivoEscolha: string
+  ) => {
+    if (!itemParaMudarMotivo) return;
+
+    const motivo = novoMotivoEscolha.trim();
+
+    if (!motivo) return;
+
+    try {
+      await salvarMotivoDoItem(
+        itemParaMudarMotivo,
+        motivo
+      );
+
+      setShowMotivoModal(false);
+      setItemParaMudarMotivo(null);
+    } catch (error) {
+      console.error(
+        'Erro ao alterar motivo:',
+        error
+      );
+    }
+  };
+
+  // 6 & 14. Abrir dropdown rápido ancorado com detecção de borda e posicionamento superior/inferior
+  const abrirMotivoDropdown = useCallback(
+    (
+      event: React.MouseEvent<HTMLButtonElement>,
+      item: ColetaItem
+    ) => {
+      event.stopPropagation();
+
+      const rect =
+        event.currentTarget.getBoundingClientRect();
+
+      const DROPDOWN_WIDTH = 230;
+      const ESTIMATED_HEIGHT = 260;
+      const GAP = 6;
+      const MARGIN = 8;
+
+      let left = rect.left;
+
+      if (
+        left + DROPDOWN_WIDTH >
+        window.innerWidth - MARGIN
+      ) {
+        left =
+          window.innerWidth -
+          DROPDOWN_WIDTH -
+          MARGIN;
+      }
+
+      left = Math.max(
+        MARGIN,
+        left
+      );
+
+      const spaceBelow =
+        window.innerHeight -
+        rect.bottom;
+
+      const shouldOpenAbove =
+        spaceBelow <
+          ESTIMATED_HEIGHT + GAP &&
+        rect.top >
+          ESTIMATED_HEIGHT + GAP;
+
+      let top = shouldOpenAbove
+        ? rect.top -
+          ESTIMATED_HEIGHT -
+          GAP
+        : rect.bottom + GAP;
+
+      top = Math.max(
+        MARGIN,
+        Math.min(
+          top,
+          window.innerHeight -
+            ESTIMATED_HEIGHT -
+            MARGIN
+        )
+      );
+
+      setMotivoDropdown(current => {
+        if (
+          current?.item.id === item.id
+        ) {
+          return null;
         }
-        return item;
-      }));
-    } else {
-      await updateItemInLista(listaAtiva.id, itemParaMudarMotivo.id, { motivo: novoMotivoEscolha }, itemParaMudarMotivo);
+
+        return {
+          item,
+          top,
+          left,
+          width: DROPDOWN_WIDTH
+        };
+      });
+    },
+    []
+  );
+
+  // 7. Abrir modal central de motivo
+  const abrirModalMotivo = useCallback(
+    (item: ColetaItem) => {
+      setMotivoDropdown(null);
+
+      setItemParaMudarMotivo({
+        ...item,
+        motivo: item.motivo || ''
+      });
+
+      setShowMotivoModal(true);
+    },
+    []
+  );
+
+  // 8. Selecionar motivo rápido na gaveta
+  const selecionarMotivoRapido = useCallback(
+    async (
+      item: ColetaItem,
+      motivo: string
+    ) => {
+      setMotivoDropdown(null);
+
+      try {
+        await salvarMotivoDoItem(
+          item,
+          motivo
+        );
+      } catch (error) {
+        console.error(
+          'Erro ao salvar motivo:',
+          error
+        );
+      }
+    },
+    [
+      salvarMotivoDoItem
+    ]
+  );
+
+  // 15. Fechar dropdown ao rolar a página ou tabela
+  useEffect(() => {
+    if (!motivoDropdown) return;
+
+    const close = () => {
+      setMotivoDropdown(null);
+    };
+
+    window.addEventListener(
+      'scroll',
+      close,
+      true
+    );
+
+    window.addEventListener(
+      'resize',
+      close
+    );
+
+    return () => {
+      window.removeEventListener(
+        'scroll',
+        close,
+        true
+      );
+
+      window.removeEventListener(
+        'resize',
+        close
+      );
+    };
+  }, [motivoDropdown]);
+
+  // 16. Fechar dropdown ou modal ao pressionar ESC
+  useEffect(() => {
+    if (
+      !motivoDropdown &&
+      !showMotivoModal
+    ) {
+      return;
     }
 
-    setItemParaMudarMotivo(null);
-  };
+    const handleEscape = (
+      event: KeyboardEvent
+    ) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      if (showMotivoModal) {
+        setShowMotivoModal(false);
+        setItemParaMudarMotivo(null);
+        return;
+      }
+
+      setMotivoDropdown(null);
+    };
+
+    window.addEventListener(
+      'keydown',
+      handleEscape
+    );
+
+    return () => {
+      window.removeEventListener(
+        'keydown',
+        handleEscape
+      );
+    };
+  }, [
+    motivoDropdown,
+    showMotivoModal
+  ]);
 
   // Limpar seleção de itens ao trocar de lista
   useEffect(() => {
@@ -2129,7 +2395,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               ))}
             </div>
           ) : filteredDashboardListas.length > 0 ? (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto app-scroll-x -mx-4 sm:mx-0 px-4 sm:px-0">
               <table className="w-full text-left text-xs text-gray-700 whitespace-nowrap min-w-[800px]">
                 <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 font-bold uppercase tracking-wider">
                   <tr>
@@ -2927,8 +3193,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </div>
                 )}
 
-                <div className="overflow-x-auto max-h-[70vh]">
-                  <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse">
+                <div className="overflow-x-auto app-scroll-x max-h-[70vh]">
+                  <table className="w-full text-[10px] xl:text-xs text-gray-700 border-collapse min-w-[650px]">
                     <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm text-gray-700 font-black uppercase tracking-wider">
                       <tr>
                         <th className="py-1 px-1 sm:px-2 text-center bg-gray-100 border-b border-r border-gray-200">
@@ -2957,17 +3223,16 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     <tbody className="divide-y divide-gray-200 font-sans">
                       {displayedItems.map((item, idx) => {
                         const isSelected = selectedItemIdsSet.has(item.id);
-                        const isEditingMotivo = itemParaMudarMotivo?.id === item.id;
                         const itemRota = getRotaItem(item);
                         const hasRota = itemRota && itemRota.trim() !== '' && itemRota.toLowerCase() !== 'sem rota' && itemRota !== '-';
                         return (
-                          <React.Fragment key={`frag-${item.id}-${idx}`}>
                           <tr 
+                            key={`item-${item.id}`}
                             className={`transition-all border-b border-gray-200 group ${
                               isSelected 
                                 ? 'bg-blue-50/90 font-bold' 
                                 : 'bg-white hover:bg-gray-50'
-                            } ${isEditingMotivo ? 'bg-blue-50/40' : ''}`}
+                            }`}
                           >
                             <td className="py-1 px-1 sm:px-2 text-center border-r border-gray-200">
                               <input
@@ -2979,9 +3244,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </td>
                             <td className="py-1 px-1 sm:px-2 text-center text-gray-500 font-bold border-r border-gray-200">{filteredItems.length - (startIndex + idx)}</td>
                           <td 
-                            onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors border-r border-gray-200"
-                            title="Clique para alterar o motivo deste ID"
+                            className="py-1 px-1 sm:px-2 text-left font-bold text-gray-900 border-r border-gray-200"
                           >
                             <div className="flex items-center gap-1.5 font-mono text-xs">
                               <Barcode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
@@ -2992,8 +3255,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           {/* COLUNA DE GRUPO (Se tipo = grupos) - NEUTRA SEM COR */}
                           {listaAtiva.tipo === 'grupos' && (
                             <td 
-                              onClick={() => setItemParaMudarMotivo(item)}
-                              className="py-1 px-1 sm:px-2 text-center border-r border-gray-200 cursor-pointer"
+                              className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
                             >
                               {(() => {
                                 const grupo = listaAtiva.grupos?.find(g => g.id === item.grupoId);
@@ -3049,9 +3311,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA ROTA - BASEADA NO ARQUIVO DE REFUGO ATUAL, SÓ TEM COR SE TIVER ROTA */}
                           <td 
-                            onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-1 sm:px-2 text-center cursor-pointer border-r border-gray-200"
-                            title="Clique para alterar o motivo deste ID"
+                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
                           >
                             {hasRota ? (
                               <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-bold text-xs inline-block shadow-2xs">
@@ -3066,9 +3326,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                           {/* COLUNA SAÍDA - NEUTRA SEM COR */}
                           <td 
-                            onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-1 sm:px-2 text-center cursor-pointer border-r border-gray-200"
-                            title="Clique para alterar o motivo deste ID"
+                            className="py-1 px-1 sm:px-2 text-center border-r border-gray-200"
                           >
                             <span className="text-gray-600 font-semibold text-xs uppercase">
                               {getShortSaida(item.saida)}
@@ -3076,15 +3334,75 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           </td>
 
                           {/* COLUNA MOTIVO - TEM COR */}
-                          <td 
-                            onClick={() => setItemParaMudarMotivo(item)}
-                            className="py-1 px-1 sm:px-2 text-center cursor-pointer border-r border-gray-200"
-                            title="Clique para abrir a gaveta e alterar o motivo"
+                          <td
+                            className="
+                              py-1
+                              px-1
+                              sm:px-2
+                              text-center
+                              border-r
+                              border-gray-200
+                            "
                           >
-                            <div className={`${getMotivoStyle(item.motivo)} border px-2 py-0.5 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs group-hover:shadow mx-auto uppercase tracking-wide rounded`}>
-                              <span>{item.motivo || 'Pendente'}</span>
-                              <Edit2 className="w-3 h-3 opacity-50 group-hover:opacity-100" />
-                            </div>
+                            <button
+                              type="button"
+                              onClick={(event) =>
+                                abrirMotivoDropdown(
+                                  event,
+                                  item
+                                )
+                              }
+                              className={`
+                                ${getMotivoStyle(item.motivo)}
+                                mx-auto
+                                inline-flex
+                                max-w-[130px]
+                                items-center
+                                justify-center
+                                gap-1
+                                rounded
+                                border
+                                px-2
+                                py-0.5
+                                text-[10px]
+                                font-bold
+                                uppercase
+                                tracking-wide
+                                shadow-xs
+                                transition-all
+                                hover:shadow-sm
+                                cursor-pointer
+                              `}
+                              title="Alterar motivo"
+                              aria-label={`Alterar motivo do pacote ${item.codigo}`}
+                              aria-expanded={
+                                motivoDropdown?.item.id ===
+                                item.id
+                              }
+                            >
+                              <span className="truncate">
+                                {item.motivo || 'Sem motivo'}
+                              </span>
+
+                              {motivoDropdown?.item.id ===
+                              item.id ? (
+                                <ChevronUp
+                                  className="
+                                    h-3
+                                    w-3
+                                    shrink-0
+                                  "
+                                />
+                              ) : (
+                                <ChevronDown
+                                  className="
+                                    h-3
+                                    w-3
+                                    shrink-0
+                                  "
+                                />
+                              )}
+                            </button>
                           </td>
 
                           {/* COLUNA DATA / HORA - NEUTRA */}
@@ -3111,70 +3429,6 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                             </div>
                           </td>
                         </tr>
-                        {isEditingMotivo && (
-                          <tr className="bg-blue-50/30 border-b border-gray-300 shadow-inner">
-                            <td colSpan={listaAtiva.tipo === 'grupos' ? 11 : 10} className="p-0">
-                              <div className="px-6 py-4 border-l-4 border-[#3483FA]">
-                                <div className="flex flex-col xl:flex-row gap-6 items-start xl:items-center justify-between">
-                                  <div className="flex-1 space-y-2 w-full max-w-md">
-                                    <label className="text-xs font-black text-[#3483FA] uppercase tracking-widest flex items-center gap-2">
-                                      <Edit2 className="w-4 h-4" /> Editando Motivo: {item.codigo}
-                                    </label>
-                                    <div className="flex gap-2 w-full">
-                                      <input
-                                        type="text"
-                                        placeholder="Escreva o motivo manualmente..."
-                                        value={itemParaMudarMotivo.motivo}
-                                        onChange={(e) => setItemParaMudarMotivo({ ...itemParaMudarMotivo, motivo: e.target.value })}
-                                        className="flex-1 bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-blue-100 transition-all"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() => handleMudarMotivoItem(itemParaMudarMotivo.motivo)}
-                                        className="px-5 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-lg text-sm font-black transition-colors active:scale-95 shadow-sm cursor-pointer"
-                                      >
-                                        Salvar
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setItemParaMudarMotivo(null)}
-                                        className="px-3 py-2 bg-white hover:bg-gray-100 border border-gray-300 text-gray-500 rounded-lg text-sm font-black transition-colors active:scale-95 cursor-pointer"
-                                        title="Cancelar"
-                                      >
-                                        <X className="w-5 h-5" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                  
-                                  <div className="flex-1 w-full xl:border-l xl:border-gray-200 xl:pl-6">
-                                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest mb-2 block">
-                                      Sugestões Rápidas
-                                    </label>
-                                    <div className="flex flex-wrap gap-2">
-                                      {MOTIVOS_DISPONIVEIS.map((m) => {
-                                        const isSelectedM = itemParaMudarMotivo.motivo === m;
-                                        return (
-                                          <button
-                                            key={m}
-                                            onClick={() => handleMudarMotivoItem(m)}
-                                            className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm hover:shadow active:scale-95 cursor-pointer ${
-                                              isSelectedM 
-                                                ? 'bg-[#3483FA] text-white border-[#3483FA]' 
-                                                : 'bg-white hover:bg-gray-50 text-gray-700 border-gray-300'
-                                            }`}
-                                          >
-                                            {m}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -3182,12 +3436,564 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               </div>
               {renderPagination('bottom')}
             </div>
-            ) : (
-              <div className="py-12 text-center text-gray-400">
-                <Barcode className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                <p className="font-bold text-gray-600 text-sm">Nenhum ID nesta lista ainda</p>
-                <p className="text-xs text-gray-400 mt-1">Bipe pacotes para dar entrada nesta lista.</p>
-              </div>
+          ) : (
+            <div className="py-12 text-center text-gray-400">
+              <Barcode className="w-10 h-10 mx-auto text-gray-300 mb-2" />
+              <p className="font-bold text-gray-600 text-sm">Nenhum ID nesta lista ainda</p>
+              <p className="text-xs text-gray-400 mt-1">Bipe pacotes para dar entrada nesta lista.</p>
+            </div>
+          )}
+
+          {/* 13. COMPONENTE DA GAVETA VIA PORTAL */}
+          {motivoDropdown &&
+            createPortal(
+              <>
+                <button
+                  type="button"
+                  aria-label="Fechar motivos"
+                  className="
+                    fixed
+                    inset-0
+                    z-[9990]
+                    cursor-default
+                    bg-transparent
+                  "
+                  onClick={() =>
+                    setMotivoDropdown(null)
+                  }
+                />
+
+                <div
+                  role="menu"
+                  className="
+                    fixed
+                    z-[9991]
+                    w-[230px]
+                    max-w-[calc(100vw-16px)]
+                    overflow-hidden
+                    rounded-xl
+                    border
+                    border-gray-200
+                    bg-white
+                    shadow-2xl
+                  "
+                  style={{
+                    top: motivoDropdown.top,
+                    left: motivoDropdown.left
+                  }}
+                  onClick={event =>
+                    event.stopPropagation()
+                  }
+                >
+                  <div
+                    className="
+                      flex
+                      items-center
+                      justify-between
+                      gap-2
+                      border-b
+                      border-gray-100
+                      px-3
+                      py-2
+                    "
+                  >
+                    <div className="min-w-0">
+                      <p
+                        className="
+                          text-[10px]
+                          font-black
+                          uppercase
+                          tracking-wider
+                          text-gray-500
+                        "
+                      >
+                        Motivo
+                      </p>
+
+                      <p
+                        className="
+                          truncate
+                          font-mono
+                          text-[10px]
+                          font-bold
+                          text-blue-600
+                        "
+                        title={
+                          motivoDropdown.item.codigo
+                        }
+                      >
+                        {
+                          motivoDropdown.item
+                            .codigo
+                        }
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMotivoDropdown(null)
+                      }
+                      className="
+                        flex
+                        h-7
+                        w-7
+                        shrink-0
+                        items-center
+                        justify-center
+                        rounded-md
+                        text-gray-400
+                        transition-colors
+                        hover:bg-gray-100
+                        hover:text-gray-700
+                      "
+                      title="Fechar"
+                      aria-label="Fechar"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div
+                    className="
+                      max-h-[320px]
+                      overflow-y-auto
+                      p-2
+                    "
+                  >
+                    <div
+                      className="
+                        flex
+                        flex-wrap
+                        gap-1.5
+                      "
+                    >
+                      {MOTIVOS_DISPONIVEIS.map(
+                        motivo => {
+                          const selecionado =
+                            motivoDropdown.item
+                              .motivo === motivo;
+
+                          return (
+                            <button
+                              key={motivo}
+                              type="button"
+                              role="menuitem"
+                              onClick={() =>
+                                void selecionarMotivoRapido(
+                                  motivoDropdown.item,
+                                  motivo
+                                )
+                              }
+                              className={`
+                                rounded-md
+                                border
+                                px-2
+                                py-1.5
+                                text-[10px]
+                                font-bold
+                                transition-colors
+                                ${
+                                  selecionado
+                                    ? `
+                                      border-[#3483FA]
+                                      bg-[#3483FA]
+                                      text-white
+                                    `
+                                    : `
+                                      border-gray-200
+                                      bg-white
+                                      text-gray-700
+                                      hover:border-blue-200
+                                      hover:bg-blue-50
+                                    `
+                                }
+                              `}
+                            >
+                              {motivo}
+                            </button>
+                          );
+                        }
+                      )}
+                    </div>
+
+                    <div
+                      className="
+                        mt-2
+                        border-t
+                        border-gray-100
+                        pt-2
+                      "
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          abrirModalMotivo(
+                            motivoDropdown.item
+                          )
+                        }
+                        className="
+                          flex
+                          w-full
+                          items-center
+                          justify-between
+                          rounded-lg
+                          px-2.5
+                          py-2
+                          text-left
+                          text-xs
+                          font-bold
+                          text-gray-600
+                          transition-colors
+                          hover:bg-gray-100
+                          hover:text-gray-900
+                        "
+                      >
+                        <span>
+                          Sem motivo
+                        </span>
+
+                        <Edit2
+                          className="
+                            h-3.5
+                            w-3.5
+                          "
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>,
+              document.body
+            )}
+
+          {/* 17. POPUP CENTRAL COMPACTO VIA PORTAL */}
+          {showMotivoModal &&
+            itemParaMudarMotivo &&
+            createPortal(
+              <div
+                className="
+                  fixed
+                  inset-0
+                  z-[10000]
+                  flex
+                  items-center
+                  justify-center
+                  bg-black/30
+                  p-3
+                  backdrop-blur-[1px]
+                "
+                onMouseDown={() => {
+                  setShowMotivoModal(false);
+                  setItemParaMudarMotivo(null);
+                }}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="motivo-modal-title"
+                  className="
+                    w-full
+                    max-w-[520px]
+                    overflow-hidden
+                    rounded-xl
+                    border
+                    border-gray-200
+                    bg-white
+                    shadow-2xl
+                  "
+                  onMouseDown={event =>
+                    event.stopPropagation()
+                  }
+                >
+                  <div
+                    className="
+                      flex
+                      items-start
+                      justify-between
+                      gap-3
+                      border-b
+                      border-gray-100
+                      px-4
+                      py-3
+                    "
+                  >
+                    <div className="min-w-0">
+                      <div
+                        className="
+                          flex
+                          items-center
+                          gap-1.5
+                        "
+                      >
+                        <Edit2
+                          className="
+                            h-3.5
+                            w-3.5
+                            shrink-0
+                            text-[#3483FA]
+                          "
+                        />
+
+                        <h3
+                          id="motivo-modal-title"
+                          className="
+                            text-xs
+                            font-black
+                            uppercase
+                            tracking-wide
+                            text-gray-800
+                          "
+                        >
+                          Editar motivo
+                        </h3>
+                      </div>
+
+                      <p
+                        className="
+                          mt-0.5
+                          truncate
+                          font-mono
+                          text-[10px]
+                          font-bold
+                          text-[#3483FA]
+                        "
+                      >
+                        {
+                          itemParaMudarMotivo
+                            .codigo
+                        }
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMotivoModal(false);
+                        setItemParaMudarMotivo(null);
+                      }}
+                      className="
+                        flex
+                        h-8
+                        w-8
+                        shrink-0
+                        items-center
+                        justify-center
+                        rounded-lg
+                        text-gray-400
+                        transition-colors
+                        hover:bg-gray-100
+                        hover:text-gray-700
+                      "
+                      title="Fechar"
+                      aria-label="Fechar edição"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div
+                    className="
+                      space-y-4
+                      p-4
+                    "
+                  >
+                    <div>
+                      <label
+                        htmlFor="motivo-manual"
+                        className="
+                          mb-1.5
+                          block
+                          text-[10px]
+                          font-black
+                          uppercase
+                          tracking-wider
+                          text-gray-500
+                        "
+                      >
+                        Motivo
+                      </label>
+
+                      <div
+                        className="
+                          flex
+                          flex-col
+                          gap-2
+                          sm:flex-row
+                        "
+                      >
+                        <input
+                          id="motivo-manual"
+                          type="text"
+                          autoFocus
+                          value={
+                            itemParaMudarMotivo
+                              .motivo
+                          }
+                          onChange={event =>
+                            setItemParaMudarMotivo(
+                              current =>
+                                current
+                                  ? {
+                                      ...current,
+                                      motivo:
+                                        event.target
+                                          .value
+                                    }
+                                  : null
+                            )
+                          }
+                          onKeyDown={event => {
+                            if (
+                              event.key ===
+                              'Enter'
+                            ) {
+                              event.preventDefault();
+
+                              const motivo =
+                                itemParaMudarMotivo
+                                  .motivo
+                                  .trim();
+
+                              if (motivo) {
+                                void handleMudarMotivoItem(
+                                  motivo
+                                );
+                              }
+                            }
+                          }}
+                          placeholder="Motivo"
+                          className="
+                            h-10
+                            min-w-0
+                            flex-1
+                            rounded-lg
+                            border
+                            border-gray-300
+                            bg-white
+                            px-3
+                            text-sm
+                            font-bold
+                            text-gray-800
+                            outline-none
+                            transition-all
+                            focus:border-[#3483FA]
+                            focus:ring-2
+                            focus:ring-blue-100
+                          "
+                        />
+
+                        <button
+                          type="button"
+                          disabled={
+                            !itemParaMudarMotivo
+                              .motivo
+                              .trim()
+                          }
+                          onClick={() => {
+                            const motivo =
+                              itemParaMudarMotivo
+                                .motivo
+                                .trim();
+
+                            if (motivo) {
+                              void handleMudarMotivoItem(
+                                motivo
+                              );
+                            }
+                          }}
+                          className="
+                            h-10
+                            shrink-0
+                            rounded-lg
+                            bg-[#3483FA]
+                            px-5
+                            text-xs
+                            font-black
+                            text-white
+                            transition-colors
+                            hover:bg-blue-600
+                            disabled:cursor-not-allowed
+                            disabled:bg-gray-200
+                            disabled:text-gray-400
+                          "
+                        >
+                          Salvar
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p
+                        className="
+                          mb-2
+                          text-[10px]
+                          font-black
+                          uppercase
+                          tracking-wider
+                          text-gray-500
+                        "
+                      >
+                        Sugestões
+                      </p>
+
+                      <div
+                        className="
+                          flex
+                          flex-wrap
+                          gap-1.5
+                        "
+                      >
+                        {MOTIVOS_DISPONIVEIS.map(
+                          motivo => {
+                            const selecionado =
+                              itemParaMudarMotivo
+                                .motivo === motivo;
+
+                            return (
+                              <button
+                                key={motivo}
+                                type="button"
+                                onClick={() =>
+                                  void handleMudarMotivoItem(
+                                    motivo
+                                  )
+                                }
+                                className={`
+                                  rounded-md
+                                  border
+                                  px-2.5
+                                  py-1.5
+                                  text-[10px]
+                                  font-bold
+                                  transition-colors
+                                  ${
+                                    selecionado
+                                      ? `
+                                        border-[#3483FA]
+                                        bg-[#3483FA]
+                                        text-white
+                                      `
+                                      : `
+                                        border-gray-200
+                                        bg-white
+                                        text-gray-700
+                                        hover:bg-gray-50
+                                      `
+                                  }
+                                `}
+                              >
+                                {motivo}
+                              </button>
+                            );
+                          }
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>,
+              document.body
             )}
           </div>
         </div>
@@ -3672,7 +4478,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
               <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
                 <ListPlus className="w-5 h-5 text-[#3483FA]" />
-                Verificação em Lote (Colar IDs Válidos)
+                Verificação em Lote
               </h3>
               <button onClick={() => setShowVerificarLoteModal(false)} className="text-gray-400 hover:text-black cursor-pointer">
                 <X className="w-5 h-5" />
@@ -3682,18 +4488,18 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
               <div className="space-y-4">
                 <div>
                   <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2 block">
-                    Cole os códigos verificados (um por linha)
+                    Códigos para validar (um por linha)
                   </label>
                   <textarea
                     value={verificarLoteText}
                     onChange={(e) => setVerificarLoteText(e.target.value)}
                     rows={8}
                     className="w-full bg-gray-50 border border-gray-300 rounded-xl p-3 text-xs font-mono focus:outline-none focus:border-[#3483FA] focus:ring-2 focus:ring-blue-100"
-                    placeholder="Cole aqui a lista de IDs...&#10;123456789&#10;987654321&#10;..."
+                    placeholder="Cole os IDs..."
                     autoFocus
                   />
                   <p className="text-[10px] text-gray-500 mt-2">
-                    Todos os pacotes que derem match com esta lista serão validados. Os restantes continuarão pendentes na lista (não validados).
+                    Pacotes coincidentes serão validados. Os demais continuarão pendentes.
                   </p>
                 </div>
               </div>
@@ -3726,7 +4532,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
             <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
               <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
                 <ListPlus className="w-5 h-5 text-[#3483FA]" />
-                Adicionar Lote de IDs na Lista
+                Adicionar Lote
               </h3>
               <button onClick={() => setShowModalLote(false)} className="text-gray-400 hover:text-black cursor-pointer">
                 <X className="w-5 h-5" />
@@ -3748,24 +4554,23 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   </div>
                   <p className="text-xs font-black text-[#3483FA]">{importProgress}% Concluído</p>
                 </div>
-                <p className="text-[11px] text-gray-400 font-medium">Processamento otimizado para carregar todos os IDs sem perdas.</p>
               </div>
             ) : (
               <form onSubmit={handleAdicionarLote} className="space-y-4">
                 <p className="text-xs text-gray-500">
-                  Cole múltiplos IDs abaixo (separados por linha ou vírgula). Todos serão vinculados ao ciclo <strong className="text-blue-700">{selectedSaida}</strong>.
+                  Cole múltiplos IDs (linha ou vírgula). Vinculados ao ciclo <strong className="text-blue-700">{selectedSaida}</strong>.
                 </p>
                 <textarea
                   value={loteText}
                   onChange={(e) => setLoteText(e.target.value)}
-                  placeholder="78230012345678&#10;78230098765432"
+                  placeholder="Cole os IDs..."
                   rows={5}
                   className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs font-mono focus:outline-none focus:border-[#3483FA]"
                   required
                 />
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] uppercase tracking-wider font-bold text-gray-500">Motivo para o Lote</label>
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-gray-500">Motivo</label>
                   <select
                     value={loteMotivo}
                     onChange={(e) => setLoteMotivo(e.target.value)}
@@ -3789,7 +4594,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     type="submit"
                     className="px-4 py-2 bg-[#3483FA] hover:bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
                   >
-                    Adicionar Lote
+                    Adicionar
                   </button>
                 </div>
               </form>
@@ -3886,7 +4691,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                 <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-emerald-50/60">
                   <div className="flex items-center gap-2 text-emerald-700">
                     <CheckCircle2 className="w-5 h-5" />
-                    <h3 className="text-base font-black uppercase tracking-tight">Finalizar Lista e Baixar CSV</h3>
+                    <h3 className="text-base font-black uppercase tracking-tight">Finalizar Lista</h3>
                   </div>
                   <button 
                     onClick={() => setListaParaFinalizar(null)}
@@ -3898,11 +4703,11 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
 
                 <div className="p-6 space-y-5">
                   <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-4 space-y-2">
-                    <p className="text-[10px] uppercase font-black text-emerald-600 tracking-wider">Lista Selecionada:</p>
+                    <p className="text-[10px] uppercase font-black text-emerald-600 tracking-wider">Lista:</p>
                     <div className="flex items-center justify-between">
                       <p className="text-base font-black text-emerald-900">{listaParaFinalizar.nome}</p>
                       <span className="text-xs font-bold text-emerald-700 bg-white px-2.5 py-1 rounded-lg border border-emerald-200">
-                        {codigosValidadosModal.length} IDs validados
+                        {codigosValidadosModal.length} validados
                       </span>
                     </div>
                   </div>
@@ -3914,10 +4719,10 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                         <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
                         <div>
                           <h4 className="text-sm font-black text-amber-900">
-                            Deseja juntar a lista validada com as brancas?
+                            Juntar com etiquetas brancas?
                           </h4>
                           <p className="text-xs text-amber-800/80 mt-0.5 leading-relaxed">
-                            Foram encontrados <strong>{brancasDisponiveis.length} IDs sem rota (brancas)</strong> na base do refugo.
+                            {brancasDisponiveis.length} sem rota no refugo.
                           </p>
                         </div>
                       </div>
@@ -3935,7 +4740,7 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-black flex items-center gap-1.5">
                               <CheckCircle2 className={`w-4 h-4 ${juntarComBrancas ? 'text-white' : 'text-emerald-600'}`} />
-                              Sim, Juntar Tudo
+                              Juntar Tudo
                             </span>
                             <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${juntarComBrancas ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
                               {totalComBrancasModal} IDs
@@ -3958,39 +4763,39 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-black flex items-center gap-1.5">
                               <Square className={`w-4 h-4 ${!juntarComBrancas ? 'text-white' : 'text-[#3483FA]'}`} />
-                              Apenas a Lista
+                              Apenas Lista
                             </span>
                             <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${!juntarComBrancas ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'}`}>
                               {codigosValidadosModal.length} IDs
                             </span>
                           </div>
                           <span className={`text-[10px] leading-tight ${!juntarComBrancas ? 'text-blue-50' : 'text-gray-500'}`}>
-                            Apenas os {codigosValidadosModal.length} IDs validados da lista
+                            {codigosValidadosModal.length} validados da lista
                           </span>
                         </button>
                       </div>
                     </div>
                   ) : (
                     <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-600">
-                      Nenhum ID sem rota (brancas) pendente na base de refugo. O CSV será baixado com os {codigosValidadosModal.length} IDs validados da lista.
+                      Nenhuma branca pendente. O CSV conterá {codigosValidadosModal.length} IDs validados.
                     </div>
                   )}
 
                   <div className="space-y-2">
-                    <h4 className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Resumo do Arquivo CSV:</h4>
+                    <h4 className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Resumo CSV:</h4>
                     <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 text-xs space-y-1.5">
                       <div className="flex justify-between text-gray-600">
-                        <span>IDs validados na lista:</span>
+                        <span>Validados:</span>
                         <strong className="text-gray-800">{codigosValidadosModal.length}</strong>
                       </div>
                       {brancasDisponiveis.length > 0 && juntarComBrancas && (
                         <div className="flex justify-between text-amber-700">
-                          <span>+ IDs sem rota (brancas do refugo):</span>
+                          <span>+ Brancas:</span>
                           <strong>{brancasDisponiveis.length}</strong>
                         </div>
                       )}
                       <div className="pt-1.5 border-t border-gray-200 flex justify-between text-emerald-800 font-black">
-                        <span>Total de IDs no CSV final:</span>
+                        <span>Total no CSV:</span>
                         <span>
                           {brancasDisponiveis.length > 0 && juntarComBrancas 
                             ? totalComBrancasModal 
@@ -4017,8 +4822,8 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                     <Download className="w-4 h-4" />
                     <span>
                       {brancasDisponiveis.length > 0 && juntarComBrancas 
-                        ? `FINALIZAR E BAIXAR (${totalComBrancasModal} IDs)` 
-                        : `FINALIZAR E BAIXAR (${codigosValidadosModal.length} IDs)`}
+                        ? `FINALIZAR (${totalComBrancasModal} IDs)` 
+                        : `FINALIZAR (${codigosValidadosModal.length} IDs)`}
                     </span>
                   </button>
                 </div>

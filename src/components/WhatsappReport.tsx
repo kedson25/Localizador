@@ -318,13 +318,13 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
           <div className="bg-white border border-gray-300 rounded-lg p-4 shadow-xs space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <label className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
-                Lista de IDs para o Reporte
+                IDs para o Reporte
               </label>
 
               <div className="flex items-center gap-1.5">
                 <label className="cursor-pointer inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 rounded text-[11px] font-bold transition-colors shadow-2xs">
                   <Upload className="w-3 h-3 text-amber-700" />
-                  <span>Carregar arquivo</span>
+                  <span>Arquivo</span>
                   <input
                     type="file"
                     accept=".csv,.txt,.tsv"
@@ -340,7 +340,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                       setUseAllBase(false);
                     }}
                     className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-[11px] font-medium transition-colors"
-                    title="Limpar texto colado"
+                    title="Limpar"
                   >
                     <Trash2 className="w-3 h-3 text-gray-500" />
                     <span>Limpar</span>
@@ -352,7 +352,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
             <div className="space-y-3">
               <div>
                 <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                  Calcular a partir de uma Lista do Sistema
+                  Lista do Sistema
                 </label>
                 <select
                   value={selectedListaId}
@@ -365,10 +365,10 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                   }}
                   className="w-full bg-white border border-gray-300 rounded p-2 text-xs font-bold text-gray-900 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 >
-                  <option value="">-- Nenhuma (Usar Colar IDs ou Base CSV) --</option>
+                  <option value="">-- Nenhuma --</option>
                   {listas.map((lista) => (
                     <option key={lista.id} value={lista.id}>
-                      {lista.nome} (Criada em: {lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
+                      {lista.nome} ({lista.data} - {lista.status === 'finalizada' ? 'Finalizada' : 'Em Andamento'})
                     </option>
                   ))}
                 </select>
@@ -386,7 +386,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                           : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
                       }`}
                     >
-                      <span>Colar Lista Específica</span>
+                      <span>Colar IDs</span>
                       {parsedIds.length > 0 && !useAllBase && (
                         <span className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
                           {parsedIds.length}
@@ -405,7 +405,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                           : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
                       }`}
                     >
-                      <span>Toda a Base CSV</span>
+                      <span>Base CSV</span>
                       <span className="bg-gray-700 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
                         {rows.length}
                       </span>
@@ -418,18 +418,15 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                         rows={8}
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
-                        placeholder={`Cole aqui os IDs a serem reportados (um por linha ou separados por vírgula)...&#10;Exemplo:&#10;47712645205&#10;47712645206&#10;47712645207`}
+                        placeholder="Cole os IDs (um por linha)..."
                         className="w-full bg-white border border-gray-300 rounded p-2.5 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 resize-y"
                       />
                     </div>
                   ) : (
-                    <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded p-2.5 text-xs text-emerald-900">
                       <p className="font-bold flex items-center gap-1.5">
                         <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                        Utilizando todos os {rows.length} registros da base CSV carregada.
-                      </p>
-                      <p className="text-[11px] text-emerald-800">
-                        Os totais e contagens de motivos abaixo refletem a base completa atualizada.
+                        Base CSV ({rows.length} registros).
                       </p>
                     </div>
                   )}
@@ -437,13 +434,10 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
               )}
 
               {selectedListaId && selectedLista && (
-                <div className="bg-emerald-50/70 border border-emerald-200 rounded p-3 text-xs text-emerald-900 space-y-1">
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded p-2.5 text-xs text-emerald-900">
                   <p className="font-bold flex items-center gap-1.5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                    Utilizando os {selectedListaItens.length} registros da lista selecionada.
-                  </p>
-                  <p className="text-[11px] text-emerald-800">
-                    Calculando motivos e saídas diretamente dos dados coletados na lista.
+                    Lista selecionada ({selectedListaItens.length} registros).
                   </p>
                 </div>
               )}
@@ -479,7 +473,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                 <div className="flex items-center justify-between font-bold text-red-800">
                   <span className="flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-                    {notFoundIds.length} ID(s) não constam na base CSV:
+                    {notFoundIds.length} não constam no CSV:
                   </span>
                 </div>
                 <div className="max-h-24 overflow-y-auto font-mono text-[11px] bg-white p-1.5 rounded border border-red-200 text-red-700 break-all space-y-0.5">
@@ -494,15 +488,15 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
           {/* Motivos Calculation Table */}
           <div className="bg-white border border-gray-300 rounded-lg p-3 shadow-xs space-y-2">
             <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide flex items-center justify-between">
-              <span>Cálculo dos Motivos Detectados</span>
+              <span>Motivos</span>
               <span className="text-[11px] font-mono font-normal text-gray-500">
-                {motivosCount.length} motivos
+                {motivosCount.length}
               </span>
             </h3>
 
             {motivosCount.length === 0 ? (
               <p className="text-xs text-gray-400 italic py-2 text-center">
-                Cole IDs ou carregue dados para visualizar o cálculo dos motivos.
+                Nenhum dado informado.
               </p>
             ) : (
               <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
@@ -537,11 +531,8 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
               <div>
                 <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                  Mensagem Formatada para WhatsApp
+                  Mensagem WhatsApp
                 </h3>
-                <p className="text-[11px] text-gray-500">
-                  Pronto para copiar e colar diretamente no chat do grupo.
-                </p>
               </div>
 
               {/* Action Buttons */}
@@ -555,16 +546,16 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
                   }`}
                 >
                   {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  <span>{copied ? 'Copiado!' : 'Copiar Texto'}</span>
+                  <span>{copied ? 'Copiado!' : 'Copiar'}</span>
                 </button>
 
                 <button
                   onClick={handleShareWhatsapp}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#25D366] hover:bg-[#20bd5a] text-gray-950 font-bold rounded-md text-xs transition-colors shadow-xs"
-                  title="Abrir diretamente no WhatsApp Web"
+                  title="Abrir no WhatsApp Web"
                 >
                   <Share2 className="w-4 h-4" />
-                  <span>Enviar no WhatsApp</span>
+                  <span>Enviar WhatsApp</span>
                 </button>
               </div>
             </div>

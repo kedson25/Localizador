@@ -667,12 +667,12 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
             {/* Scanner Area */}
             <div className="space-y-4">
-              <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm h-full flex flex-col justify-between">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-8 shadow-sm h-full flex flex-col justify-between">
                 <div>
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-sm font-bold text-[#333333] uppercase tracking-wider">Leitura de Pacotes</h3>
+                  <div className="flex items-center justify-between mb-4 sm:mb-6">
+                    <h3 className="text-xs sm:text-sm font-bold text-[#333333] uppercase tracking-wider">Leitura de Pacotes</h3>
                     {baseDate && (
-                      <span className="text-xs text-gray-400 font-medium">
+                      <span className="text-[11px] sm:text-xs text-gray-400 font-medium">
                         Base: {baseDate}
                       </span>
                     )}
@@ -680,8 +680,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
                   <form onSubmit={handleBip} className="space-y-4">
                     <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <label className="block text-sm font-bold text-gray-700">
+                      <div className="flex items-center justify-between mb-2 sm:mb-3">
+                        <label className="block text-xs sm:text-sm font-bold text-gray-700">
                           Bipe o ID do pacote (Leitura Instantânea)
                         </label>
                         <button
@@ -693,7 +693,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                               requestAnimationFrame(() => inputRef.current?.focus());
                             }
                           }}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors shadow-sm border ${
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors shadow-sm border cursor-pointer min-h-[36px] sm:min-h-0 ${
                             isLocked
                               ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
                               : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
@@ -708,8 +708,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       </div>
 
                       <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                          <Barcode className={`h-8 w-8 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
+                        <div className="absolute inset-y-0 left-0 pl-3.5 sm:pl-5 flex items-center pointer-events-none">
+                          <Barcode className={`h-6 w-6 sm:h-8 sm:w-8 ${isLocked ? 'text-gray-300' : 'text-[#3483FA]'}`} />
                         </div>
                         <input
                           ref={inputRef}
@@ -722,7 +722,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                             }
                           }}
                           disabled={isLocked}
-                          className={`block w-full pl-16 pr-6 py-8 border-2 rounded-xl text-3xl font-mono font-bold transition-all ${
+                          className={`block w-full pl-12 sm:pl-16 pr-4 sm:pr-6 py-4 sm:py-7 border-2 rounded-xl text-xl sm:text-3xl font-mono font-bold transition-all min-h-[54px] ${
                             isLocked
                               ? 'bg-gray-50 border-gray-200 text-gray-400 placeholder-gray-300 cursor-not-allowed'
                               : 'border-[#3483FA]/30 focus:ring-4 focus:ring-[#3483FA]/20 focus:border-[#3483FA] text-[#333333] placeholder-gray-300'
@@ -734,7 +734,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                           spellCheck="false"
                         />
                       </div>
-                      <p className="text-xs text-gray-400 mt-3 text-center font-medium">
+                      <p className="text-[11px] sm:text-xs text-gray-400 mt-2.5 text-center font-medium">
                         {isLocked ? 'Desbloqueie para voltar a ler pacotes.' : 'Resposta imediata do bip com gravação em segundo plano.'}
                       </p>
                     </div>
@@ -743,7 +743,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                 </div>
 
                 {lastScanResult && (
-                  <div className={`mt-8 p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center animate-in zoom-in duration-200 ${
+                  <div className={`mt-6 sm:mt-8 p-4 sm:p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center animate-in zoom-in duration-200 max-w-full overflow-hidden ${
                     lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
                     lastScanResult.status === 'success_no_route' ? 'bg-orange-50 border-orange-200 text-orange-800' :
                     lastScanResult.status === 'high_priority' ? 'bg-yellow-400 border-yellow-500 text-yellow-900 shadow-[0_0_30px_rgba(250,204,21,0.5)]' :
@@ -751,23 +751,23 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                     'bg-red-50 border-red-200 text-red-800'
                   }`}>
                     {lastScanResult.status === 'high_priority' ? (
-                      <AlertCircle className="w-20 h-20 text-yellow-800 mb-4 animate-bounce" />
+                      <AlertCircle className="w-14 h-14 sm:w-20 sm:h-20 text-yellow-800 mb-3 sm:mb-4 animate-bounce" />
                     ) : lastScanResult.status === 'high_priority_no_route' ? (
-                      <Star className="w-20 h-20 text-white mb-4 animate-pulse fill-yellow-400" />
+                      <Star className="w-14 h-14 sm:w-20 sm:h-20 text-white mb-3 sm:mb-4 animate-pulse fill-yellow-400" />
                     ) : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? (
-                      <CheckCircle2 className={`w-20 h-20 mb-4 ${lastScanResult.status === 'success_no_route' ? 'text-orange-500' : 'text-emerald-500'}`} />
+                      <CheckCircle2 className={`w-14 h-14 sm:w-20 sm:h-20 mb-3 sm:mb-4 ${lastScanResult.status === 'success_no_route' ? 'text-orange-500' : 'text-emerald-500'}`} />
                     ) : (
-                      <XCircle className="w-20 h-20 text-red-500 mb-4" />
+                      <XCircle className="w-14 h-14 sm:w-20 sm:h-20 text-red-500 mb-3 sm:mb-4" />
                     )}
-                    <div className="font-black text-3xl uppercase tracking-wide flex flex-col items-center gap-3">
+                    <div className="font-black text-xl sm:text-3xl uppercase tracking-wide flex flex-col items-center gap-2 sm:gap-3 max-w-full">
                       <span>{lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route' ? 'ALTA PRIORIDADE BPP' : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? 'ENCONTRADO' : 'NÃO ENCONTRADO'}</span>
                       {(lastScanResult.status === 'high_priority' || lastScanResult.status === 'high_priority_no_route') && lastScanResult.id && (
-                        <span className="text-4xl font-mono bg-black/10 px-6 py-2 rounded-xl mt-1 tracking-widest">{lastScanResult.id}</span>
+                        <span className="text-xl sm:text-3xl md:text-4xl font-mono bg-black/10 px-3 sm:px-6 py-1 sm:py-2 rounded-xl mt-1 tracking-widest break-all max-w-full">{lastScanResult.id}</span>
                       )}
                     </div>
-                    <p className={`text-xl font-bold mt-2 ${lastScanResult.status === 'high_priority_no_route' ? 'text-red-100' : ''}`}>{lastScanResult.message}</p>
+                    <p className={`text-sm sm:text-xl font-bold mt-2 break-words ${lastScanResult.status === 'high_priority_no_route' ? 'text-red-100' : ''}`}>{lastScanResult.message}</p>
                     {lastScanResult.rota && (
-                      <div className={`mt-4 px-6 py-2 rounded-lg text-2xl font-black shadow-sm uppercase ${
+                      <div className={`mt-3 sm:mt-4 px-4 sm:px-6 py-1.5 sm:py-2 rounded-lg text-lg sm:text-2xl font-black shadow-sm uppercase break-words max-w-full ${
                         lastScanResult.status === 'high_priority' ? 'bg-yellow-100 text-yellow-900' :
                         lastScanResult.status === 'high_priority_no_route' ? 'bg-red-800 text-white' :
                         lastScanResult.status === 'success_no_route' ? 'bg-orange-100 text-orange-900' :
@@ -782,9 +782,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
             </div>
 
             {/* Scanned List Area */}
-            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col h-full min-h-[500px]">
+            <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-6 shadow-sm flex flex-col h-full min-h-[400px] sm:min-h-[500px]">
               {/* Headers and Controls */}
-              <div className="flex flex-col gap-4 mb-4 pb-4 border-b border-gray-100">
+              <div className="flex flex-col gap-3 sm:gap-4 mb-4 pb-4 border-b border-gray-100">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Histórico de Leitura</span>
@@ -795,40 +795,40 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 flex-wrap justify-end">
-                    <span className="bg-yellow-100 text-yellow-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-yellow-300 flex items-center gap-1 shadow-sm">
-                      <AlertCircle className="w-3.5 h-3.5 text-yellow-600" /> Alta Prioridade (BPP): {stats.highPriority}
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-start sm:justify-end">
+                    <span className="bg-yellow-100 text-yellow-800 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-mono text-[11px] sm:text-xs font-bold border border-yellow-300 flex items-center gap-1 shadow-2xs">
+                      <AlertCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-yellow-600 shrink-0" /> BPP: {stats.highPriority}
                     </span>
-                    <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-emerald-200 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Encontrados: {stats.found}
+                    <span className="bg-emerald-100 text-emerald-800 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-mono text-[11px] sm:text-xs font-bold border border-emerald-200 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-600 shrink-0" /> Encontrados: {stats.found}
                     </span>
-                    <span className="bg-red-100 text-red-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-red-200 flex items-center gap-1">
-                      <XCircle className="w-3.5 h-3.5 text-red-600" /> Sem Rota: {stats.notFound}
+                    <span className="bg-red-100 text-red-800 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-mono text-[11px] sm:text-xs font-bold border border-red-200 flex items-center gap-1">
+                      <XCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-600 shrink-0" /> Sem Rota: {stats.notFound}
                     </span>
-                    <span className="bg-blue-100 text-blue-800 px-2.5 py-1 rounded-md font-mono text-xs font-bold border border-blue-200">
+                    <span className="bg-blue-100 text-blue-800 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-mono text-[11px] sm:text-xs font-bold border border-blue-200">
                       Total: {scannedItems.length}
                     </span>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="cursor-pointer bg-[#3483FA] hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5">
+                  <label className="cursor-pointer bg-[#3483FA] hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5 min-h-[36px] sm:min-h-0">
                     <UploadCloud className="w-4 h-4" />
-                    Carregar Base
+                    <span>Carregar Base</span>
                     <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
                   </label>
                   <button
                     onClick={clearData}
                     disabled={busy}
-                    className="px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    className="px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1.5 disabled:opacity-50 min-h-[36px] sm:min-h-0 cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Limpar
+                    <span>Limpar</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleOpenExportModal}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer border border-amber-600"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer border border-amber-600 min-h-[36px] sm:min-h-0"
                     title="Exporta pacotes sem rota (SEM ROTA) para uma Lista Branca no sistema e em CSV"
                   >
                     <FilePlus className="w-4 h-4" />
@@ -845,17 +845,17 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       <button
                         onClick={clearScans}
                         disabled={busy}
-                        className="px-3 py-1.5 text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                        className="px-3 py-1.5 text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors flex items-center gap-1.5 disabled:opacity-50 min-h-[36px] sm:min-h-0 cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" />
-                        Limpar Bipados
+                        <span>Limpar Bipados</span>
                       </button>
                       <button
                         onClick={exportScannedCSV}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 text-[#333333] text-xs font-bold rounded-lg transition-colors border border-gray-300 shadow-sm"
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 text-[#333333] text-xs font-bold rounded-lg transition-colors border border-gray-300 shadow-sm min-h-[36px] sm:min-h-0 cursor-pointer"
                       >
                         <Download className="w-4 h-4" />
-                        Baixar Bipados (CSV)
+                        <span>Baixar Bipados (CSV)</span>
                       </button>
                     </>
                   )}
@@ -957,16 +957,16 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       )}
 
       {showExportModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex justify-between items-start mb-6">
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl p-4 sm:p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-start mb-4 sm:mb-6">
               <div>
-                <h2 className="text-xl font-black text-gray-900 uppercase">Exportar Lista Branca</h2>
-                <p className="text-sm text-gray-500 mt-1 font-medium">Transferir pacotes sem rota para o sistema de coleta</p>
+                <h2 className="text-lg sm:text-xl font-black text-gray-900 uppercase">Exportar Lista Branca</h2>
+                <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1 font-medium">Transferir pacotes sem rota para o sistema de coleta</p>
               </div>
               <button
                 onClick={() => setShowExportModal(false)}
-                className="text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-2 transition-colors"
+                className="text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-2 transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1067,24 +1067,24 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
               </div>
             </div>
 
-            <div className="mt-8 flex justify-end gap-3">
+            <div className="mt-6 sm:mt-8 flex flex-col-reverse sm:flex-row justify-end gap-2.5 sm:gap-3">
               <button
                 onClick={() => setShowExportModal(false)}
-                className="px-5 py-2 text-sm font-bold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors uppercase"
+                className="w-full sm:w-auto px-5 py-2.5 sm:py-2 text-sm font-bold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors uppercase min-h-[44px] sm:min-h-0 flex items-center justify-center cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleConfirmExport}
                 disabled={busy || (exportDestinationType === 'existing' && existingListas.length === 0)}
-                className="flex items-center gap-2 px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 uppercase cursor-pointer"
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 sm:py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 uppercase cursor-pointer min-h-[44px] sm:min-h-0"
               >
                 {busy ? (
                   <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
                 ) : (
                   <>
                     <Check className="w-4 h-4" />
-                    Confirmar Exportação
+                    <span>Confirmar Exportação</span>
                   </>
                 )}
               </button>

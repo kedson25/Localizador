@@ -116,7 +116,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             step === 1 ? (
               <form onSubmit={handleNext} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-[13px] text-gray-600 font-medium">Username ou E-mail</label>
+                  <label className="text-[13px] text-gray-600 font-medium">Usuário ou e-mail</label>
                   <input 
                     type="text" 
                     value={username}
@@ -138,7 +138,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     onClick={() => { setMode('signup'); setErrorMsg(''); setSuccessMsg(''); setUsername(''); setPassword(''); }}
                     className="text-[12px] text-blue-600 hover:underline"
                   >
-                    Não tem uma conta? Criar usuário
+                    Criar conta
                   </button>
                 </div>
               </form>
@@ -146,13 +146,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
               <form onSubmit={handleLogin} className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                 <div className="space-y-1.5">
                   <div className="flex justify-between items-center">
-                     <label className="text-[13px] text-gray-600 font-medium">Password</label>
+                     <label className="text-[13px] text-gray-600 font-medium">Senha</label>
                      <button 
                        type="button" 
                        onClick={() => { setStep(1); setErrorMsg(''); setSuccessMsg(''); }}
                        className="text-[11px] text-blue-600 hover:underline"
                      >
-                       Alterar usuário
+                       Trocar
                      </button>
                   </div>
                   <div className="relative">
@@ -184,7 +184,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           ) : (
             <form onSubmit={handleSignup} className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="space-y-1.5">
-                <label className="text-[13px] text-gray-600 font-medium">Novo Username</label>
+                <label className="text-[13px] text-gray-600 font-medium">Usuário</label>
                 <input 
                   type="text" 
                   value={username}
@@ -203,7 +203,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[13px] text-gray-600 font-medium">Nova Senha</label>
+                <label className="text-[13px] text-gray-600 font-medium">Senha</label>
                 <div className="relative">
                   <input 
                     type={showPassword ? "text" : "password"} 
@@ -233,7 +233,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   onClick={() => { setMode('login'); setStep(1); setErrorMsg(''); setSuccessMsg(''); setUsername(''); setPassword(''); }}
                   className="text-[12px] text-blue-600 hover:underline"
                 >
-                  Já tem uma conta? Fazer login
+                  Fazer login
                 </button>
               </div>
             </form>

@@ -166,7 +166,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
               <FileCode className="w-4 h-4 text-blue-600" />
-              1. Lista Base CSV ({effectiveSourceRows.length} IDs)
+              Base CSV ({effectiveSourceRows.length} IDs)
             </label>
 
             {rows.length === 0 && !pastedCsvText && (
@@ -181,8 +181,8 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
             onChange={(e) => setPastedCsvText(e.target.value)}
             placeholder={
               rows.length > 0
-                ? `Usando os ${rows.length} IDs do CSV principal carregado.\n(Ou cole um novo CSV aqui para substituir)`
-                : `Cole aqui o relatório CSV com os IDs...\nExemplo:\nID\tSaída\tMOTIVO\nGRUPO 1\t\t\n47691021163\tSaída PM\tEtiqueta Branca`
+                ? `Usando os ${rows.length} IDs do CSV principal.\n(Ou cole um novo CSV aqui)`
+                : `Cole o CSV aqui...\nExemplo:\nID\tSaída\tMOTIVO\nGRUPO 1\t\t\n47691021163\tSaída PM\tEtiqueta Branca`
             }
             rows={5}
             className="w-full bg-gray-50/80 border border-gray-300 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/15 rounded-lg p-3 text-gray-900 font-mono text-xs leading-relaxed placeholder:text-gray-400 transition-all shadow-inner resize-y"
@@ -205,7 +205,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
               <Trash2 className="w-4 h-4 text-red-500" />
-              2. IDs para Remover ({totalTermsInput})
+              Remover ({totalTermsInput})
             </label>
 
             {removeText && (
@@ -221,7 +221,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
           <textarea
             value={removeText}
             onChange={(e) => setRemoveText(e.target.value)}
-            placeholder="Cole os IDs que deseja remover (ex: 47691021163, 47707799806)..."
+            placeholder="Cole os IDs para remover..."
             rows={5}
             className="w-full bg-gray-50/80 border border-gray-300 focus:border-red-500 focus:bg-white focus:ring-4 focus:ring-red-500/15 rounded-lg p-3 text-gray-900 font-mono text-xs leading-relaxed placeholder:text-gray-400 transition-all shadow-inner resize-y"
           />
@@ -232,7 +232,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
       <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="text-xs font-mono text-gray-700 flex flex-wrap items-center gap-3">
           <span className="font-bold text-amber-900 bg-amber-100 px-2 py-1 rounded border border-amber-200">
-            {displayedRows.length} IDs Exibidos {saidaFilter ? `(de ${remainingRows.length})` : ''}
+            {displayedRows.length} IDs {saidaFilter ? `(de ${remainingRows.length})` : ''}
           </span>
           {removedCount > 0 && (
             <span className="text-red-600 font-bold bg-red-50 px-2 py-1 rounded border border-red-200">
@@ -250,7 +250,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
                 onChange={(e) => setSaidaFilter(e.target.value)}
                 className="bg-transparent text-gray-800 text-xs font-mono focus:outline-none cursor-pointer"
               >
-                <option value="">Todas as Saídas</option>
+                <option value="">Todas</option>
                 {availableSaidas.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -262,7 +262,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
                 type="text"
                 value={saidaFilter}
                 onChange={(e) => setSaidaFilter(e.target.value)}
-                placeholder="Filtrar por Saída..."
+                placeholder="Filtrar..."
                 className="bg-transparent text-gray-800 text-xs font-mono focus:outline-none w-28 placeholder:text-gray-400"
               />
             )}
@@ -286,7 +286,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
             className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-gray-950 font-black rounded text-xs font-mono uppercase tracking-wider transition-colors shadow-sm flex items-center gap-1.5"
           >
             {copiedIds ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>Copiar Apenas IDs</span>
+            <span>Copiar IDs</span>
           </button>
 
           <button
@@ -295,7 +295,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
             className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-800 border border-gray-300 rounded text-xs font-mono font-semibold transition-colors flex items-center gap-1.5"
           >
             {copiedFullTable ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>Copiar Tabela</span>
+            <span>Tabela</span>
           </button>
 
           <button
@@ -304,7 +304,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
             className="px-3 py-1.5 bg-[#111827] hover:bg-black disabled:opacity-40 text-white rounded text-xs font-mono font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-1.5"
           >
             <Download className="w-3.5 h-3.5 text-amber-400" />
-            <span>Baixar CSV</span>
+            <span>Exportar</span>
           </button>
         </div>
       </div>
@@ -313,7 +313,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
       {displayedGroupCounts.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
           <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-1.5">
-            Quantidade de IDs por Grupo (Ordem 1, 2, 3...):
+            IDs por Grupo:
           </span>
           <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
             {displayedGroupCounts.map((g) => (
@@ -323,7 +323,7 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
               >
                 <span className="text-amber-900 font-bold">{g.name}:</span>
                 <span className="text-gray-900 font-black bg-white px-1.5 py-0.2 rounded border border-amber-200">
-                  {g.count} {g.count === 1 ? 'ID' : 'IDs'}
+                  {g.count}
                 </span>
               </div>
             ))}
@@ -336,13 +336,13 @@ export const IdRemover: React.FC<IdRemoverProps> = ({ rows }) => {
         <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-xs text-gray-500 font-mono">
           <AlertCircle className="w-5 h-5 mx-auto text-gray-400 mb-1" />
           {remainingRows.length > 0 && saidaFilter
-            ? `Nenhum ID encontrado com o filtro de Saída: "${saidaFilter}".`
-            : 'Nenhum ID restante para exibir. Carregue um CSV base ou insira novos dados.'}
+            ? `Nenhum ID encontrado para: "${saidaFilter}".`
+            : 'Nenhum ID restante.'}
         </div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs font-mono">
+          <div className="overflow-x-auto app-scroll-x">
+            <table className="w-full min-w-[500px] text-left text-xs font-mono">
               <thead className="bg-gray-50 text-gray-500 font-bold border-b border-gray-200 uppercase tracking-wider text-[10px]">
                 <tr>
                   <th className="py-2 px-3 text-gray-400 w-10">#</th>
