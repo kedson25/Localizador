@@ -86,12 +86,52 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
   const selectedLista = useMemo(() => listas.find(l => l.id === selectedListaId), [listas, selectedListaId]);
 
   const [selectedListaItens, setSelectedListaItens] = useState<ColetaItem[]>([]);
+  const [isLoadingListaItens, setIsLoadingListaItens] = useState(false);
+  const [listaItensError, setListaItensError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (selectedListaId) {
-      getAllItemsForExport(selectedListaId).then(setSelectedListaItens);
-    } else {
-      setSelectedListaItens([]);
+    let cancelled = false;
+
+    // Sempre zera os itens anteriores ao trocar de lista para evitar
+    // mostrar temporariamente dados da lista anterior.
+    setSelectedListaItens([]);
+    setListaItensError(null);
+
+    if (!selectedListaId) {
+      setIsLoadingListaItens(false);
+      return () => {
+        cancelled = true;
+      };
     }
+
+    setIsLoadingListaItens(true);
+
+    const carregarItensDaLista = async () => {
+      try {
+        const itens = await getAllItemsForExport(selectedListaId);
+
+        if (!cancelled) {
+          setSelectedListaItens(Array.isArray(itens) ? itens : []);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar itens da lista selecionada:', error);
+
+        if (!cancelled) {
+          setSelectedListaItens([]);
+          setListaItensError('Não foi possível carregar os dados desta lista.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingListaItens(false);
+        }
+      }
+    };
+
+    carregarItensDaLista();
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedListaId]);
 
   const { matchedRows, notFoundIds, detectedSaidaList, motivosCount } = useMemo(() => {
@@ -209,7 +249,7 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count),
     };
-  }, [rows, parsedIds, useAllBase, selectedLista]);
+  }, [rows, parsedIds, useAllBase, selectedLista, selectedListaItens]);
 
   // Set default cycle based on detected saidas if not manually modified
   useEffect(() => {
@@ -434,10 +474,27 @@ export function WhatsappReport({ rows }: WhatsappReportProps) {
               )}
 
               {selectedListaId && selectedLista && (
-                <div className="bg-emerald-50/70 border border-emerald-200 rounded p-2.5 text-xs text-emerald-900">
+                <div className={`rounded p-2.5 text-xs border ${
+                  listaItensError
+                    ? 'bg-red-50 border-red-200 text-red-900'
+                    : isLoadingListaItens
+                      ? 'bg-blue-50 border-blue-200 text-blue-900'
+                      : 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                }`}>
                   <p className="font-bold flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                    Lista selecionada ({selectedListaItens.length} registros).
+                    {listaItensError ? (
+                      <AlertCircle className="w-4 h-4 text-red-700" />
+                    ) : isLoadingListaItens ? (
+                      <RefreshCw className="w-4 h-4 text-blue-700 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                    )}
+
+                    {listaItensError
+                      ? listaItensError
+                      : isLoadingListaItens
+                        ? 'Carregando dados da lista...'
+                        : `Lista selecionada (${selectedListaItens.length} registros).`}
                   </p>
                 </div>
               )}
