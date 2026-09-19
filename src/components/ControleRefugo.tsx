@@ -124,6 +124,25 @@ function formatFirestoreDate(
   return date.toLocaleString('pt-BR');
 }
 
+
+const normalizeRoute = (route?: string | null) =>
+  String(route || '').trim().toUpperCase();
+
+const isSemRotaScan = (scan: Pick<RefugoScan, 'status' | 'rota'>) => {
+  const route = normalizeRoute(scan.rota);
+  return (
+    scan.status === 'not_found' ||
+    !route ||
+    route === 'SEM ROTA' ||
+    route.includes('BRANCA')
+  );
+};
+
+const getScanTimestamp = (scan?: RefugoScan | null) => {
+  const value = Number(scan?.timestamp || 0);
+  return Number.isFinite(value) ? value : 0;
+};
+
 export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [rows, setRows] = useState<RefugoRow[]>([]);
   const [scannedItems, setScannedItems] = useState<RefugoScan[]>([]);
@@ -153,6 +172,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   // Índice em memória ultra-rápido de scans para verificação de duplicidade O(1) e merge realtime
   const scanByCodeRef = useRef<Map<string, RefugoScan>>(new Map());
 
+  // Bips otimistas ainda não confirmados pelo listener realtime.
+  // Impede que eventos antigos/removidos façam o contador voltar para trás.
+  const pendingLocalScansRef = useRef<Map<string, RefugoScan>>(new Map());
+
   // Fila de sincronização em memória (executa gravações em background sem travar o scanner)
   const syncQueueRef = useRef<RefugoSyncQueue>(new RefugoSyncQueue());
 
@@ -170,6 +193,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     setRows([]);
     setScannedItems([]);
     scanByCodeRef.current.clear();
+    pendingLocalScansRef.current.clear();
     setBipInput('');
     setLastScanResult(null);
     setBaseDate(null);
@@ -197,7 +221,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     return map;
   }, [rows]);
 
-  // Contadores calculados em passagem única O(N) com lookups O(1) via Map
+  // Contadores derivados de uma única fonte de verdade.
+  // "Sem Rota" inclui not_found, rota vazia, SEM ROTA e Brancas.
   const stats = useMemo(() => {
     let found = 0;
     let notFound = 0;
@@ -205,36 +230,93 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
     for (let i = 0; i < scannedItems.length; i++) {
       const scan = scannedItems[i];
-      if (scan.status === 'found') {
-        found++;
-      } else {
+      const normalizedId =
+        scan.normalizedId || normalizeTrackingCode(scan.id);
+      const row = rowByCode.get(normalizedId);
+
+      if (isSemRotaScan(scan)) {
         notFound++;
+      } else {
+        found++;
       }
-      const row = rowByCode.get(scan.normalizedId);
+
       if (row?.isHighPriority) {
         highPriority++;
       }
     }
 
-    return { found, notFound, highPriority };
+    return {
+      found,
+      notFound,
+      highPriority,
+      total: scannedItems.length
+    };
   }, [scannedItems, rowByCode]);
 
   const semRotaCount = stats.notFound;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
 
-  // Função única e direta para focar o scanner sem timers redundantes
-  const focusScanner = useCallback(() => {
-    if (!isLocked && inputRef.current && document.activeElement !== inputRef.current) {
-      inputRef.current.focus();
+  // Foco do scanner sem roubar o foco de modais, selects, botões ou outros inputs.
+  const focusScanner = useCallback((force = false) => {
+    if (
+      isLocked ||
+      busy ||
+      showExportModal ||
+      !inputRef.current ||
+      document.activeElement === inputRef.current
+    ) {
+      return;
     }
-  }, [isLocked]);
 
-  // Foco inicial / ao destravar (sem recriação de timers a cada bip)
-  useEffect(() => {
-    if (!isLocked) {
-      focusScanner();
+    const activeElement = document.activeElement as HTMLElement | null;
+    const activeTag = activeElement?.tagName;
+
+    if (
+      !force &&
+      activeElement &&
+      activeElement !== document.body &&
+      (
+        activeTag === 'INPUT' ||
+        activeTag === 'TEXTAREA' ||
+        activeTag === 'SELECT' ||
+        activeTag === 'BUTTON' ||
+        activeElement.isContentEditable
+      )
+    ) {
+      return;
     }
-  }, [isLocked, focusScanner]);
+
+    inputRef.current.focus({ preventScroll: true });
+  }, [isLocked, busy, showExportModal]);
+
+  // Foco inicial / ao destravar.
+  useEffect(() => {
+    if (!isLocked && !showExportModal && !busy) {
+      requestAnimationFrame(() => focusScanner(true));
+    }
+  }, [isLocked, showExportModal, busy, focusScanner]);
+
+  // Fecha o modal com Escape e evita scroll da página enquanto ele estiver aberto.
+  useEffect(() => {
+    if (!showExportModal) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowExportModal(false);
+        setExportTargetCodes([]);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showExportModal]);
 
   // Configuração dos callbacks da fila de sincronização em memória
   useEffect(() => {
@@ -326,58 +408,152 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       setIsLoading(false);
     });
 
-    // Processamento incremental com snapshot.docChanges() para alta performance com milhares de scans
-    const unsubScans = listenToRefugoScansIncremental((changes: RefugoScanChange[], isInitial: boolean, initialScans?: RefugoScan[]) => {
-      if (isInitial && initialScans) {
-        const map = new Map<string, RefugoScan>();
-        for (let i = 0; i < initialScans.length; i++) {
-          const s = initialScans[i];
-          const k = s.normalizedId || normalizeTrackingCode(s.id);
-          map.set(k, { ...s, normalizedId: k });
-        }
-        scanByCodeRef.current = map;
-        setScannedItems(initialScans);
-        setScansReady(true);
-        return;
-      }
+    // Processamento incremental com reconciliação segura entre UI otimista e Firestore.
+    const unsubScans = listenToRefugoScansIncremental(
+      (changes: RefugoScanChange[], isInitial: boolean, initialScans?: RefugoScan[]) => {
+        if (isInitial) {
+          const map = new Map<string, RefugoScan>();
+          const source = initialScans || [];
 
-      if (changes && changes.length > 0) {
+          for (let i = 0; i < source.length; i++) {
+            const scan = source[i];
+            const normalizedId =
+              scan.normalizedId || normalizeTrackingCode(scan.id);
+
+            map.set(normalizedId, {
+              ...scan,
+              normalizedId
+            });
+          }
+
+          // Se houver bips otimistas durante uma reconexão, preserve a versão
+          // local até o servidor confirmar; o snapshot inicial não pode fazê-los sumir.
+          pendingLocalScansRef.current.forEach((pendingScan, normalizedId) => {
+            const remoteScan = map.get(normalizedId);
+            const remoteTimestamp = getScanTimestamp(remoteScan);
+            const pendingTimestamp = getScanTimestamp(pendingScan);
+
+            if (
+              !remoteScan ||
+              remoteTimestamp === 0 ||
+              pendingTimestamp >= remoteTimestamp
+            ) {
+              map.set(normalizedId, pendingScan);
+            }
+          });
+
+          scanByCodeRef.current = map;
+          setScannedItems(
+            Array.from(map.values()).sort(
+              (a, b) => getScanTimestamp(b) - getScanTimestamp(a)
+            )
+          );
+          setScansReady(true);
+          return;
+        }
+
+        if (!changes || changes.length === 0) {
+          return;
+        }
+
         setScannedItems(prev => {
-          let updated = [...prev];
+          let updated = prev;
           let hasChanges = false;
+
+          const ensureMutable = () => {
+            if (!hasChanges) {
+              updated = [...prev];
+              hasChanges = true;
+            }
+          };
 
           for (let i = 0; i < changes.length; i++) {
             const change = changes[i];
             const scan = change.scan;
-            const normId = scan.normalizedId || normalizeTrackingCode(scan.id);
-            const fullScan: RefugoScan = { ...scan, normalizedId: normId };
+            const normalizedId =
+              scan.normalizedId || normalizeTrackingCode(scan.id);
 
-            if (change.type === 'added') {
-              const existing = scanByCodeRef.current.get(normId);
-              scanByCodeRef.current.set(normId, fullScan);
+            const incomingScan: RefugoScan = {
+              ...scan,
+              normalizedId
+            };
 
-              if (existing) {
-                // Confirmação do item otimista enviado anteriormente: atualiza dados mantendo sem duplicação
-                const idx = updated.findIndex(s => s.normalizedId === normId);
-                if (idx >= 0) {
-                  updated[idx] = fullScan;
-                  hasChanges = true;
-                }
+            const pendingLocal =
+              pendingLocalScansRef.current.get(normalizedId);
+            const currentLocal =
+              scanByCodeRef.current.get(normalizedId);
+
+            const incomingTimestamp =
+              getScanTimestamp(incomingScan);
+            const localTimestamp =
+              getScanTimestamp(pendingLocal || currentLocal);
+
+            // Se o servidor mandar uma versão comprovadamente mais antiga,
+            // mantém o bip otimista mais novo.
+            const incomingIsOlder =
+              Boolean(pendingLocal) &&
+              incomingTimestamp > 0 &&
+              localTimestamp > incomingTimestamp;
+
+            if (change.type === 'added' || change.type === 'modified') {
+              if (incomingIsOlder) {
+                continue;
+              }
+
+              // O listener confirmou o scan local (ou trouxe uma versão mais nova).
+              pendingLocalScansRef.current.delete(normalizedId);
+              scanByCodeRef.current.set(normalizedId, incomingScan);
+
+              const index = updated.findIndex(item => {
+                const itemId =
+                  item.normalizedId || normalizeTrackingCode(item.id);
+                return itemId === normalizedId;
+              });
+
+              ensureMutable();
+
+              if (index >= 0) {
+                updated[index] = incomingScan;
               } else {
-                // Novo scan adicionado por outro usuário em tempo real
-                updated = [fullScan, ...updated.filter(s => s.normalizedId !== normId)];
-                hasChanges = true;
+                updated = [
+                  incomingScan,
+                  ...updated.filter(item => {
+                    const itemId =
+                      item.normalizedId ||
+                      normalizeTrackingCode(item.id);
+                    return itemId !== normalizedId;
+                  })
+                ];
               }
-            } else if (change.type === 'modified') {
-              scanByCodeRef.current.set(normId, fullScan);
-              const idx = updated.findIndex(s => s.normalizedId === normId);
-              if (idx >= 0) {
-                updated[idx] = fullScan;
-                hasChanges = true;
+
+              continue;
+            }
+
+            if (change.type === 'removed') {
+              // Um "removed" atrasado nunca pode apagar um bip que ainda
+              // está aguardando confirmação de gravação.
+              if (pendingLocal) {
+                continue;
               }
-            } else if (change.type === 'removed') {
-              scanByCodeRef.current.delete(normId);
-              const filtered = updated.filter(s => s.normalizedId !== normId);
+
+              // Também ignora remoção baseada em uma versão mais antiga
+              // que a versão atualmente mantida na UI.
+              if (
+                currentLocal &&
+                incomingTimestamp > 0 &&
+                getScanTimestamp(currentLocal) > incomingTimestamp
+              ) {
+                continue;
+              }
+
+              scanByCodeRef.current.delete(normalizedId);
+
+              const filtered = updated.filter(item => {
+                const itemId =
+                  item.normalizedId || normalizeTrackingCode(item.id);
+                return itemId !== normalizedId;
+              });
+
               if (filtered.length !== updated.length) {
                 updated = filtered;
                 hasChanges = true;
@@ -388,7 +564,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
           return hasChanges ? updated : prev;
         });
       }
-    });
+    );
 
     // Carregamento lazy/background das listas de coleta (NÃO bloqueia a inicialização do scanner)
     const unsubListas = listenToListas(data => {
@@ -438,11 +614,11 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     const cleanInput = cleanTrackingId(rawInput);
     if (!cleanInput) {
       setBipInput('');
-      focusScanner();
+      requestAnimationFrame(() => focusScanner(true));
       return;
     }
 
-    const key = normalizeTrackingCode(rawInput);
+    const key = normalizeTrackingCode(cleanInput);
 
     // 1. Verificação instantânea de duplicidade no índice local
     const alreadyScanned = scanByCodeRef.current.get(key);
@@ -454,7 +630,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
         rota: alreadyScanned.rota
       });
       setBipInput('');
-      focusScanner();
+      requestAnimationFrame(() => focusScanner(true));
       return;
     }
 
@@ -479,10 +655,13 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
     // 5. Limpa input e devolve o foco imediatamente para o próximo bip
     setBipInput('');
-    focusScanner();
+    requestAnimationFrame(() => focusScanner(true));
 
     // 6. Feedback visual imediato
-    const isSemRota = !foundRow?.rota || foundRow.rota.trim().toUpperCase() === 'SEM ROTA';
+    const isSemRota = isSemRotaScan({
+      status: foundRow ? 'found' : 'not_found',
+      rota: foundRow?.rota || ''
+    });
     if (foundRow) {
       if (foundRow.isHighPriority) {
         setLastScanResult({
@@ -513,7 +692,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     // 8. Garante visualização na primeira página
     setPage(0);
 
-    // 9. Enfileira na fila de background do Firestore (concorrência limitada, sem travar o scanner)
+    // 9. Marca como pendente antes de enfileirar, evitando race com eventos realtime antigos.
+    pendingLocalScansRef.current.set(key, newScan);
     syncQueueRef.current.enqueue(newScan);
   };
 
@@ -526,6 +706,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
     // Remove imediatamente da UI e do índice local
     scanByCodeRef.current.delete(targetId);
+    pendingLocalScansRef.current.delete(targetId);
     setScannedItems(prev => prev.filter(s => s.normalizedId !== targetId && s.id !== scan.id));
     syncQueueRef.current.cancel(targetId);
 
@@ -588,8 +769,11 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     if (!confirmed) return;
 
     await runOperation(async () => {
-      syncQueueRef.current.clear();
+      // Aguarda/cancela a fila antes de limpar o servidor para impedir
+      // que uma gravação atrasada recrie itens depois do reset.
+      await syncQueueRef.current.resetAndWait();
       scanByCodeRef.current.clear();
+      pendingLocalScansRef.current.clear();
       await clearRefugoScans();
 
       setScannedItems([]);
@@ -615,6 +799,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const closeExportModal = useCallback(() => {
@@ -638,13 +823,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       return;
     }
 
-    const scannedSemRota = scannedItems.filter(
-      s =>
-        s.status === 'not_found' ||
-        !s.rota ||
-        s.rota.trim().toUpperCase() === 'SEM ROTA' ||
-        s.rota.toLowerCase().includes('branca')
-    );
+    const scannedSemRota =
+      scannedItems.filter(isSemRotaScan);
 
     let targetCodes: string[] = [];
 
@@ -795,6 +975,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
       setShowExportModal(false);
       setExportTargetCodes([]);
@@ -818,7 +999,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   }
 
   return (
-    <div className="max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
+    <div className="max-w-7xl mx-auto w-full min-w-0 overflow-x-hidden pb-12">
       {syncError && (
         <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-center justify-between">
           <span>{syncError}</span>
@@ -827,7 +1008,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       )}
 
       {rows.length === 0 ? (
-        <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-12 flex flex-col items-center justify-center text-center mt-4">
+        <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-6 sm:p-12 flex flex-col items-center justify-center text-center mt-4 min-w-0">
           <div className="w-16 h-16 bg-[#E3F2FD] rounded-2xl flex items-center justify-center mb-4">
             <UploadCloud className="w-8 h-8 text-[#3483FA]" />
           </div>
@@ -843,15 +1024,15 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
         </div>
       ) : (
         <div className="space-y-4 w-full mt-2">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 w-full min-w-0 items-stretch">
             {/* Scanner Area */}
-            <div className="space-y-4">
+            <div className="space-y-4 min-w-0">
               <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-8 shadow-sm h-full flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-4 sm:mb-6">
                     <h3 className="text-xs sm:text-sm font-bold text-[#333333] uppercase tracking-wider">Leitura de Pacotes</h3>
                     {baseDate && (
-                      <span className="text-[11px] sm:text-xs text-gray-400 font-medium">
+                      <span className="text-[11px] sm:text-xs text-gray-400 font-medium truncate max-w-[55%]" title={baseDate || undefined}>
                         Base: {baseDate}
                       </span>
                     )}
@@ -897,7 +1078,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                           onChange={(e) => setBipInput(e.target.value)}
                           onBlur={() => {
                             if (!isLocked) {
-                              requestAnimationFrame(focusScanner);
+                              requestAnimationFrame(() => focusScanner(false));
                             }
                           }}
                           disabled={isLocked}
@@ -921,8 +1102,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                   </form>
                 </div>
 
-                {lastScanResult && (
-                  <div className={`mt-6 sm:mt-8 p-4 sm:p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center animate-in zoom-in duration-200 max-w-full overflow-hidden ${
+                <div className="mt-6 sm:mt-8 min-h-[240px] sm:min-h-[320px] flex w-full min-w-0">
+                {lastScanResult ? (
+                  <div className={`w-full p-4 sm:p-8 rounded-2xl border-2 flex flex-col items-center justify-center text-center max-w-full overflow-hidden ${
                     lastScanResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
                     lastScanResult.status === 'success_no_route' ? 'bg-orange-50 border-orange-200 text-orange-800' :
                     lastScanResult.status === 'high_priority' ? 'bg-yellow-400 border-yellow-500 text-yellow-900 shadow-[0_0_30px_rgba(250,204,21,0.5)]' :
@@ -930,9 +1112,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                     'bg-red-50 border-red-200 text-red-800'
                   }`}>
                     {lastScanResult.status === 'high_priority' ? (
-                      <AlertCircle className="w-14 h-14 sm:w-20 sm:h-20 text-yellow-800 mb-3 sm:mb-4 animate-bounce" />
+                      <AlertCircle className="w-14 h-14 sm:w-20 sm:h-20 text-yellow-800 mb-3 sm:mb-4" />
                     ) : lastScanResult.status === 'high_priority_no_route' ? (
-                      <Star className="w-14 h-14 sm:w-20 sm:h-20 text-white mb-3 sm:mb-4 animate-pulse fill-yellow-400" />
+                      <Star className="w-14 h-14 sm:w-20 sm:h-20 text-white mb-3 sm:mb-4 fill-yellow-400" />
                     ) : lastScanResult.status === 'success' || lastScanResult.status === 'success_no_route' ? (
                       <CheckCircle2 className={`w-14 h-14 sm:w-20 sm:h-20 mb-3 sm:mb-4 ${lastScanResult.status === 'success_no_route' ? 'text-orange-500' : 'text-emerald-500'}`} />
                     ) : (
@@ -956,19 +1138,26 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       </div>
                     )}
                   </div>
+                ) : (
+                  <div className="w-full min-h-[240px] sm:min-h-[320px] rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 flex flex-col items-center justify-center text-center px-4">
+                    <Barcode className="w-10 h-10 text-gray-300 mb-3" />
+                    <p className="text-sm font-bold text-gray-500">Aguardando leitura</p>
+                    <p className="text-xs text-gray-400 mt-1">O resultado do próximo bip aparecerá aqui.</p>
+                  </div>
                 )}
+                </div>
               </div>
             </div>
 
             {/* Scanned List Area */}
-            <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-6 shadow-sm flex flex-col h-full min-h-[400px] sm:min-h-[500px]">
+            <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-6 shadow-sm flex flex-col h-full min-h-[400px] sm:min-h-[500px] min-w-0 overflow-hidden">
               {/* Headers and Controls */}
               <div className="flex flex-col gap-3 sm:gap-4 mb-4 pb-4 border-b border-gray-100">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Histórico de Leitura</span>
                     {pendingSyncCount > 0 && (
-                      <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md text-[11px] font-medium border border-amber-200 flex items-center gap-1 animate-pulse">
+                      <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md text-[11px] font-medium border border-amber-200 flex items-center gap-1">
                         <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
                         Sincronizando ({pendingSyncCount})
                       </span>
@@ -985,7 +1174,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                       <XCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-600 shrink-0" /> Sem Rota: {stats.notFound}
                     </span>
                     <span className="bg-blue-100 text-blue-800 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-mono text-[11px] sm:text-xs font-bold border border-blue-200">
-                      Total: {scannedItems.length}
+                      Total: {stats.total}
                     </span>
                   </div>
                 </div>
@@ -1044,10 +1233,10 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
               <ResultPagination total={scannedItems.length} page={currentPage} onPageChange={setPage} />
 
-              <div className="overflow-y-auto flex-1 pr-2 space-y-2">
+              <div className="overflow-y-auto overflow-x-hidden flex-1 pr-1 sm:pr-2 space-y-2 min-w-0">
                 {scannedItems.length > 0 ? (
                   scannedItems.slice(currentPage * RESULTS_PAGE_SIZE, (currentPage + 1) * RESULTS_PAGE_SIZE).map((item) => {
-                    const isItemSemRota = item.status === 'not_found' || !item.rota || item.rota.toUpperCase() === 'SEM ROTA' || item.rota.toUpperCase() === 'SEM ROTA ';
+                    const isItemSemRota = isSemRotaScan(item);
                     const itemRow = rowByCode.get(item.normalizedId || normalizeTrackingCode(item.id));
                     const isBpp = Boolean(itemRow?.isHighPriority);
 
@@ -1068,24 +1257,24 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                     }
 
                     return (
-                      <div key={item.normalizedId || item.id} className={`flex justify-between items-center p-3 rounded-lg border transition-opacity ${cardClasses}`}>
-                        <div className="flex items-center gap-2">
+                      <div key={item.normalizedId || item.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg border transition-colors min-w-0 overflow-hidden ${cardClasses}`}>
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                           {!isItemSemRota ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                           ) : isBpp ? (
-                            <AlertCircle className="w-4 h-4 text-yellow-600" />
+                            <AlertCircle className="w-4 h-4 text-yellow-600 shrink-0" />
                           ) : (
-                            <XCircle className="w-4 h-4 text-red-500" />
+                            <XCircle className="w-4 h-4 text-red-500 shrink-0" />
                           )}
-                          <span className={`font-mono font-bold text-sm ${idColor}`}>{item.id}</span>
+                          <span className={`font-mono font-bold text-sm truncate min-w-0 ${idColor}`} title={item.id}>{item.id}</span>
                           {isBpp && isItemSemRota && (
-                            <span className="text-[10px] bg-yellow-200 text-yellow-800 font-bold px-1.5 py-0.5 rounded uppercase">BPP</span>
+                            <span className="text-[10px] bg-yellow-200 text-yellow-800 font-bold px-1.5 py-0.5 rounded uppercase shrink-0">BPP</span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0 shrink-0 max-w-[58%]">
                           {!isItemSemRota ? (
-                            <div className="flex flex-col items-end">
-                              <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
+                            <div className="flex flex-col items-end min-w-0">
+                              <span className={`px-2.5 py-1 rounded text-xs font-bold border max-w-full truncate ${badgeClasses}`} title={item.rota || "SEM ROTA"}>
                                 Rota: {item.rota}
                               </span>
                               {item.foundBy && (
@@ -1095,8 +1284,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                               )}
                             </div>
                           ) : (
-                            <div className="flex flex-col items-end">
-                              <span className={`px-2.5 py-1 rounded text-xs font-bold border ${badgeClasses}`}>
+                            <div className="flex flex-col items-end min-w-0">
+                              <span className={`px-2.5 py-1 rounded text-xs font-bold border max-w-full truncate ${badgeClasses}`}>
                                 SEM ROTA
                               </span>
                               {item.foundBy && (
@@ -1108,7 +1297,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                           )}
                           <button
                             onClick={() => removeScan(item)}
-                            className="ml-1 text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
+                            className="ml-1 shrink-0 text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
                             title="Remover pacote"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -1137,8 +1326,18 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       )}
 
       {showExportModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl p-4 sm:p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeExportModal();
+            }
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl p-4 sm:p-6 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
             <div className="flex justify-between items-start mb-4 sm:mb-6">
               <div>
                 <h2 className="text-lg sm:text-xl font-black text-gray-900 uppercase">Exportar Lista Branca</h2>
@@ -1225,7 +1424,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3 pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                 <div>
                   <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">Saída Padrão</label>
                   <input
