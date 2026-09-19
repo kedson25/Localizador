@@ -11,8 +11,8 @@ const GOOGLE_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 COLE_AQUI_A_SUA_CHAVE_PRIVADA_COMPLETA
 -----END PRIVATE KEY-----`;
 
-const GOOGLE_SHEET_ID = 'COLE_AQUI_O_ID_DA_PLANILHA';
-const SHEET_TAB_NAME = 'Lista do Dia';
+const GOOGLE_SHEET_ID = '1t4jwEUiYtNsh0S1kcRYrMfMdED3p8WbADWeLfSUyZbU';
+const SHEET_TAB_NAME = 'LISTA-PM/SD';
 
 function formatCicloShort(val: string): string {
   if (!val) return '';
