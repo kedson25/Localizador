@@ -70,8 +70,6 @@ export async function setNetworkMode(online: boolean) {
 const REFUGO_COLLECTION = 'refugo';
 const MAIN_REFUGO_DOC_ID = 'current_refugo_csv';
 const MAIN_REFUGO_SCANS_DOC_ID = 'current_refugo_scans';
-const LOCAL_STORAGE_REFUGO_KEY = 'refugo_current_csv_data';
-const LOCAL_STORAGE_REFUGO_SCANS_KEY = 'refugo_scanned_items';
 
 const COLETOR_COLLECTION = 'coletor';
 const MAIN_DOC_ID = 'current_csv';
@@ -87,18 +85,6 @@ export interface RefugoData {
 }
 
 export async function saveRefugo(rawText: string, totalRows: number, fileName?: string): Promise<boolean> {
-  const localData: RefugoData = {
-    rawText,
-    totalRows,
-    fileName: fileName || 'refugo.csv',
-    updatedAt: new Date().toISOString(),
-  };
-  try {
-    localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify(localData));
-  } catch (err) {
-    console.warn('Falha ao salvar refugo no localStorage:', err);
-  }
-
   try {
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
     await setDoc(refugoRef, {
@@ -110,49 +96,39 @@ export async function saveRefugo(rawText: string, totalRows: number, fileName?: 
     return true;
   } catch (error) {
     console.error('Erro ao salvar refugo:', error);
-    return true;
+    throw error;
   }
 }
 
 export async function loadRefugo(): Promise<RefugoData | null> {
-  let localData: RefugoData | null = null;
-  try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_REFUGO_KEY);
-    if (cached) {
-      localData = JSON.parse(cached) as RefugoData;
-    }
-  } catch (err) {
-    console.warn('Erro ao ler cache local de refugo:', err);
-  }
-
   try {
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
     const snap = await getDoc(refugoRef);
     if (snap.exists()) {
-      const remoteData = snap.data() as RefugoData;
-      if (remoteData && remoteData.rawText) {
-        try {
-          localStorage.setItem(LOCAL_STORAGE_REFUGO_KEY, JSON.stringify(remoteData));
-        } catch (_) {}
-        return remoteData;
-      }
+      return snap.data() as RefugoData;
     }
   } catch (error) {
     console.error('Erro ao carregar refugo:', error);
   }
-  return localData;
+  return null;
 }
 
 export async function clearRefugo(): Promise<boolean> {
   try {
-    localStorage.removeItem(LOCAL_STORAGE_REFUGO_KEY);
-  } catch (err) {
-    console.warn('Erro ao limpar localStorage de refugo:', err);
-  }
-
-  try {
     const refugoRef = doc(db, REFUGO_COLLECTION, MAIN_REFUGO_DOC_ID);
     await deleteDoc(refugoRef);
+
+    try {
+      const verify = await getDoc(refugoRef);
+      if (verify.exists()) {
+        throw new Error('A base do Refugo ainda existe no servidor após a exclusão.');
+      }
+    } catch (error: any) {
+      if (error?.code !== 'not-found' && !error?.message?.includes('No document')) {
+        throw error;
+      }
+    }
+
     return true;
   } catch (error) {
     console.error('Erro ao apagar refugo:', error);
@@ -359,6 +335,11 @@ export async function clearRefugoScans(): Promise<boolean> {
       });
       
       await batch.commit();
+    }
+
+    const remaining = await getCountFromServer(colRef);
+    if (remaining.data().count !== 0) {
+      throw new Error(`Ainda existem ${remaining.data().count} scans no Refugo.`);
     }
 
     return true;
@@ -1313,3 +1294,30 @@ export async function migrateLegacyListasToSubcollections(): Promise<{ migratedL
     return { migratedLists: 0, migratedItems: 0 };
   }
 }
+
+/**
+ * Sincroniza a Lista do Dia com o Google Sheets via API Vercel (apenas envio / espelho).
+ */
+export async function syncListaToGoogleSheets(listaId: string): Promise<{ success: boolean; synced: number }> {
+  try {
+    const res = await fetch(`/api/sheets?action=sync`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ listaId }),
+    });
+    const data = await res.json();
+    if (data.notConfigured) {
+      console.info('Google Sheets não configurado (opcional). Sincronização ignorada.');
+      return { success: false, synced: 0 };
+    }
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Erro ao sincronizar com Google Sheets');
+    }
+    return { success: true, synced: data.synced || 0 };
+  } catch (error) {
+    return { success: false, synced: 0 };
+  }
+}
+

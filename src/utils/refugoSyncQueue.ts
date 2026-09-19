@@ -4,6 +4,7 @@ export interface QueueItem {
   scan: Omit<RefugoScan, 'firestoreId'>;
   retries: number;
   addedAt: number;
+  generation: number;
 }
 
 /**
@@ -23,6 +24,7 @@ export class RefugoSyncQueue {
   private activeWrites = new Set<string>();
   private maxConcurrency: number = 3;
   private maxRetries: number = 3;
+  private generation = 0;
   private onSyncError?: (error: Error, scan: Omit<RefugoScan, 'firestoreId'>) => void;
   private onSyncSuccess?: (scan: Omit<RefugoScan, 'firestoreId'>) => void;
   private onQueueChange?: (pendingCount: number) => void;
@@ -65,7 +67,8 @@ export class RefugoSyncQueue {
     this.queue.push({
       scan,
       retries: 0,
-      addedAt: Date.now()
+      addedAt: Date.now(),
+      generation: this.generation
     });
     this.queuedIds.add(id);
 
@@ -80,8 +83,28 @@ export class RefugoSyncQueue {
   }
 
   public clear(): void {
+    this.generation++;
     this.queue = [];
     this.queuedIds.clear();
+    this.notifyQueueChange();
+  }
+
+  public async waitForIdle(timeoutMs = 10000): Promise<void> {
+    const startedAt = Date.now();
+    while (this.activeWrites.size > 0) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error('Tempo excedido aguardando sincronizações do Refugo.');
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 50));
+    }
+  }
+
+  public async resetAndWait(): Promise<void> {
+    this.generation++;
+    this.queue = [];
+    this.queuedIds.clear();
+    this.notifyQueueChange();
+    await this.waitForIdle();
     this.notifyQueueChange();
   }
 
@@ -113,6 +136,12 @@ export class RefugoSyncQueue {
     const item = this.queue.shift();
     if (!item) return;
 
+    const itemGeneration = item.generation;
+    if (itemGeneration !== this.generation) {
+      this.scheduleProcess();
+      return;
+    }
+
     const id = item.scan.normalizedId;
     this.queuedIds.delete(id);
     this.activeWrites.add(id);
@@ -134,11 +163,14 @@ export class RefugoSyncQueue {
       this.activeWrites.delete(id);
       this.notifyQueueChange();
 
-      if (item.retries < this.maxRetries) {
+      if (itemGeneration === this.generation && item.retries < this.maxRetries) {
         // Backoff exponencial curto: 300ms, 600ms, 1200ms
         const delay = Math.min(1500, 300 * Math.pow(2, item.retries));
         item.retries++;
         setTimeout(() => {
+          if (item.generation !== this.generation) {
+            return;
+          }
           // Só reinsere se o item não estiver atualmente em escrita ou cancelado
           if (!this.activeWrites.has(id)) {
             this.queue.push(item);

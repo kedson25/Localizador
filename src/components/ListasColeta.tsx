@@ -58,7 +58,8 @@ import {
   getListaSortTimestamp,
   listenToListaItens,
   reconcileListaCounts,
-  getAllItemsForExport
+  getAllItemsForExport,
+  syncListaToGoogleSheets
 } from '../lib/firebase';
 import { 
   apiBipItem, 
@@ -402,6 +403,27 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const [isItensLoaded, setIsItensLoaded] = useState(false);
 
   const [isCopiedPlanilha, setIsCopiedPlanilha] = useState(false);
+  const [isSyncingSheets, setIsSyncingSheets] = useState(false);
+
+  const handleManualSheetsSync = async () => {
+    if (!listaAtiva || isSyncingSheets) return;
+    setIsSyncingSheets(true);
+    try {
+      const res = await syncListaToGoogleSheets(listaAtiva.id);
+      if (res.success) {
+        alert(`Sincronizado com sucesso! ${res.synced} ID(s) atualizados na planilha do Google Sheets.`);
+      } else {
+        alert('Falha ao sincronizar com Google Sheets. Verifique o console ou a configuração da API.');
+      }
+    } catch (err: any) {
+      alert('Erro ao sincronizar com Google Sheets: ' + (err?.message || 'Erro desconhecido'));
+    } finally {
+      setIsSyncingSheets(false);
+    }
+  };
+
+  const rawListaAtiva = listas.find(l => l.id === activeListaId);
+  const listaAtiva = rawListaAtiva ? { ...rawListaAtiva, itens: activeItens } : undefined;
 
   useEffect(() => {
     if (activeListaId) {
@@ -421,8 +443,14 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
     }
   }, [activeListaId]);
 
-  const rawListaAtiva = listas.find(l => l.id === activeListaId);
-  const listaAtiva = rawListaAtiva ? { ...rawListaAtiva, itens: activeItens } : undefined;
+  // Sincronização em lote em background com debounce de 5s após alteração da lista ou itens (para não dar delay na coleta)
+  useEffect(() => {
+    if (!activeListaId) return;
+    const timer = setTimeout(() => {
+      syncListaToGoogleSheets(activeListaId).catch(() => {});
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [activeListaId, activeItens.length, activeItens.map(i => `${i.id}-${i.motivo}-${i.validado}-${i.saida}`).join('|')]);
 
   // Reconciliação automática caso os metadados da lista divirjam dos itens reais
   useEffect(() => {
@@ -2760,6 +2788,17 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
           <span className="bg-blue-50 text-[#3483FA] text-[11px] font-black px-2.5 py-1 rounded-lg border border-blue-200 uppercase">
             Em Andamento
           </span>
+        )}
+        {listaAtiva && (
+          <button
+            onClick={handleManualSheetsSync}
+            disabled={isSyncingSheets}
+            className={`flex items-center gap-1.5 px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded text-[10px] font-bold uppercase transition-colors shadow-sm cursor-pointer disabled:opacity-50 ${!(currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) ? 'ml-auto' : ''}`}
+            title="Sincronizar Lista atual com o Google Sheets"
+          >
+            {isSyncingSheets ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+            <span>Sincronizar Sheets</span>
+          </button>
         )}
         {listaAtiva && (currentUser?.isAdmin || currentUser?.username === listaAtiva.responsavel) && (
           <button

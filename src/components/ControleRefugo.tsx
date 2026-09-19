@@ -69,6 +69,61 @@ const playBeep = () => {
   }
 };
 
+function formatFirestoreDate(
+  value: unknown
+): string | null {
+  if (!value) return null;
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'toDate' in value &&
+    typeof (value as {
+      toDate?: unknown
+    }).toDate === 'function'
+  ) {
+    const date =
+      (value as {
+        toDate: () => Date
+      }).toDate();
+
+    return date.toLocaleString('pt-BR');
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'seconds' in value
+  ) {
+    const seconds =
+      Number(
+        (value as {
+          seconds: number
+        }).seconds
+      );
+
+    if (Number.isFinite(seconds)) {
+      return new Date(
+        seconds * 1000
+      ).toLocaleString('pt-BR');
+    }
+  }
+
+  const date = new Date(
+    value as string | number | Date
+  );
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return null;
+  }
+
+  return date.toLocaleString('pt-BR');
+}
+
 export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [rows, setRows] = useState<RefugoRow[]>([]);
   const [scannedItems, setScannedItems] = useState<RefugoScan[]>([]);
@@ -90,6 +145,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   // Busy state exclusivo para ações administrativas pesadas (upload CSV, clear, export)
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const resettingRefugoRef = useRef(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(0);
@@ -109,6 +165,23 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   const [exportSaida, setExportSaida] = useState('Ciclo 2 - Saída PM');
   const [exportMotivo, setExportMotivo] = useState('Brancas');
   const [exportTargetCodes, setExportTargetCodes] = useState<string[]>([]);
+
+  const resetRefugoLocalState = useCallback(() => {
+    setRows([]);
+    setScannedItems([]);
+    scanByCodeRef.current.clear();
+    setBipInput('');
+    setLastScanResult(null);
+    setBaseDate(null);
+    setExportTargetCodes([]);
+    setShowExportModal(false);
+    setExportListName('');
+    setSelectedListId('');
+    setExportDestinationType('new');
+    setPage(0);
+    setPendingSyncCount(0);
+    setSyncError(null);
+  }, []);
 
   const showError = useCallback((error: unknown) => {
     setSyncError(error instanceof Error ? error.message : 'Não foi possível confirmar a operação no servidor. Tente novamente.');
@@ -146,19 +219,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     return { found, notFound, highPriority };
   }, [scannedItems, rowByCode]);
 
-  // Contagem estática de itens sem rota na base CSV (calculada somente quando a base CSV muda)
-  const baseSemRotaCount = useMemo(() => {
-    let count = 0;
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      if (!r.rota || r.rota === 'Sem Rota' || r.rota === 'SEM ROTA' || r.rota.toLowerCase().includes('branca')) {
-        count++;
-      }
-    }
-    return count;
-  }, [rows]);
-
-  const semRotaCount = stats.notFound || baseSemRotaCount;
+  const semRotaCount = stats.notFound;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(scannedItems.length / RESULTS_PAGE_SIZE) - 1));
 
   // Função única e direta para focar o scanner sem timers redundantes
@@ -242,11 +303,24 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
   // Inscrição aos dados: CSV de Refugo e Scans incrementais
   useEffect(() => {
     const unsubRefugo = listenToRefugo(data => {
+      if (resettingRefugoRef.current) {
+        if (!data) {
+          setRows([]);
+          setBaseDate(null);
+        }
+        return;
+      }
+
       try {
-        setRows(data?.rawText ? parseCSV(data.rawText) : []);
-        setBaseDate(data?.updatedAt ? new Date(data.updatedAt).toLocaleString('pt-BR') : null);
+        setRows(
+          data?.rawText
+            ? parseCSV(data.rawText)
+            : []
+        );
+        setBaseDate(formatFirestoreDate(data?.updatedAt));
       } catch (error) {
         setRows([]);
+        setBaseDate(null);
         showError(error);
       }
       setIsLoading(false);
@@ -489,36 +563,20 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     if (!confirmed) return;
 
     await runOperation(async () => {
-      syncQueueRef.current.clear();
-      scanByCodeRef.current.clear();
-      await clearRefugo();
-      await clearRefugoScans();
-
-      // ZERA IMEDIATAMENTE A BASE LOCAL
-      setRows([]);
-
-      // ZERA IMEDIATAMENTE O HISTÓRICO LOCAL
-      setScannedItems([]);
-
-      // INVALIDA QUALQUER EXPORTAÇÃO PREPARADA ANTERIORMENTE
-      setExportTargetCodes([]);
-
-      // FECHA MODAL DE EXPORTAÇÃO CASO ESTEJA ABERTO
-      setShowExportModal(false);
-
-      // LIMPA DADOS DA EXPORTAÇÃO ANTERIOR
-      setExportListName('');
-      setSelectedListId('');
-
-      // LIMPA ESTADOS DA OPERAÇÃO
-      setLastScanResult(null);
-      setBaseDate(null);
-
-      // VOLTA PAGINAÇÃO
-      setPage(0);
-
-      // REMOVE ERRO ANTIGO
-      setSyncError(null);
+      resettingRefugoRef.current = true;
+      try {
+        await syncQueueRef.current.resetAndWait();
+        await clearRefugo();
+        await clearRefugoScans();
+        resetRefugoLocalState();
+      } catch (error) {
+        showError(error);
+        setExportTargetCodes([]);
+        setShowExportModal(false);
+        throw error;
+      } finally {
+        resettingRefugoRef.current = false;
+      }
     });
   };
 
@@ -559,18 +617,22 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
     document.body.removeChild(link);
   };
 
+  const closeExportModal = useCallback(() => {
+    setShowExportModal(false);
+    setExportTargetCodes([]);
+  }, []);
+
+  const canExportRefugo = scannedItems.length > 0;
+
   const handleOpenExportModal = () => {
     // Nunca reutilizar seleção de exportação antiga
     setExportTargetCodes([]);
 
-    if (
-      rows.length === 0 &&
-      scannedItems.length === 0
-    ) {
+    if (scannedItems.length === 0) {
       setShowExportModal(false);
 
       alert(
-        'Nenhum pacote disponível para exportar.'
+        'Nenhum pacote bipado disponível para exportar.'
       );
 
       return;
@@ -580,19 +642,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
       s =>
         s.status === 'not_found' ||
         !s.rota ||
-        s.rota.trim().toUpperCase() === 'SEM ROTA'
+        s.rota.trim().toUpperCase() === 'SEM ROTA' ||
+        s.rota.toLowerCase().includes('branca')
     );
-
-    const baseSemRota = rows.filter(r => {
-      const rota =
-        (r.rota || '').trim().toUpperCase();
-
-      return (
-        !rota ||
-        rota === 'SEM ROTA' ||
-        rota.includes('BRANCA')
-      );
-    });
 
     let targetCodes: string[] = [];
 
@@ -601,14 +653,9 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
         scannedSemRota.map(scan =>
           scan.id.trim().toUpperCase()
         );
-    } else if (baseSemRota.length > 0) {
-      targetCodes =
-        baseSemRota.map(row =>
-          row.id.trim().toUpperCase()
-        );
-    } else if (scannedItems.length > 0) {
+    } else {
       const confirmed = window.confirm(
-        'Não foram encontrados pacotes SEM ROTA. Deseja exportar todos os pacotes bipados?'
+        'Não foram encontrados pacotes SEM ROTA bipados. Deseja exportar todos os pacotes bipados?'
       );
 
       if (!confirmed) {
@@ -960,7 +1007,8 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                   <button
                     type="button"
                     onClick={handleOpenExportModal}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer border border-amber-600 min-h-[36px] sm:min-h-0"
+                    disabled={!canExportRefugo || semRotaCount === 0 || busy}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer border border-amber-600 min-h-[36px] sm:min-h-0 disabled:opacity-50"
                     title="Exporta pacotes sem rota (SEM ROTA) para uma Lista Branca no sistema e em CSV"
                   >
                     <FilePlus className="w-4 h-4" />
@@ -1097,7 +1145,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
                 <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1 font-medium">Transferir pacotes sem rota para o sistema de coleta</p>
               </div>
               <button
-                onClick={() => setShowExportModal(false)}
+                onClick={closeExportModal}
                 className="text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-2 transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
@@ -1201,7 +1249,7 @@ export function ControleRefugo({ currentUser }: { currentUser?: User | null }) {
 
             <div className="mt-6 sm:mt-8 flex flex-col-reverse sm:flex-row justify-end gap-2.5 sm:gap-3">
               <button
-                onClick={() => setShowExportModal(false)}
+                onClick={closeExportModal}
                 className="w-full sm:w-auto px-5 py-2.5 sm:py-2 text-sm font-bold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors uppercase min-h-[44px] sm:min-h-0 flex items-center justify-center cursor-pointer"
               >
                 Cancelar

@@ -2,6 +2,7 @@ import coletaRouter from '../coleta';
 import listasRouter from '../listas';
 import authRouter from '../auth';
 import refugoRouter from '../refugo';
+import sheetsRouter from '../sheets';
 import indexRouter from '../index';
 import { sendError } from './response';
 
@@ -38,6 +39,7 @@ export async function dispatchApiRoute(req: any, res: any) {
   if (urlPath === '/api/listas') return listasRouter(req, res);
   if (urlPath === '/api/auth') return authRouter(req, res);
   if (urlPath === '/api/refugo') return refugoRouter(req, res);
+  if (urlPath === '/api/sheets') return sheetsRouter(req, res);
   if (urlPath === '/api/health' || urlPath === '/api') return indexRouter(req, res);
   
   return sendError(res, 404, 'NOT_FOUND', `Rota de API não encontrada: ${urlPath}`);
