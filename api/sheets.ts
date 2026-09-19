@@ -3,7 +3,16 @@ import { adminDb } from './_lib/firebase-admin';
 import { sendSuccess, sendError } from './_lib/response';
 import { logApi } from './_lib/logger';
 
-const SHEET_TAB_NAME = process.env.GOOGLE_SHEET_TAB || 'Lista do Dia';
+// CONFIGURAÇÃO DIRETA NO CÓDIGO
+// IMPORTANTE: mantenha este arquivo somente no backend (/api) e NÃO exponha essas credenciais no frontend.
+const GOOGLE_SERVICE_ACCOUNT_EMAIL = 'SEU_SERVICE_ACCOUNT@SEU_PROJETO.iam.gserviceaccount.com';
+
+const GOOGLE_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+COLE_AQUI_A_SUA_CHAVE_PRIVADA_COMPLETA
+-----END PRIVATE KEY-----`;
+
+const GOOGLE_SHEET_ID = 'COLE_AQUI_O_ID_DA_PLANILHA';
+const SHEET_TAB_NAME = 'Lista do Dia';
 
 function formatCicloShort(val: string): string {
   if (!val) return '';
@@ -15,19 +24,26 @@ function formatCicloShort(val: string): string {
 }
 
 function isGoogleSheetsConfigured() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  return Boolean(email && key && sheetId && email.trim() !== '' && key.trim() !== '' && sheetId.trim() !== '');
+  return Boolean(
+    GOOGLE_SERVICE_ACCOUNT_EMAIL &&
+    GOOGLE_PRIVATE_KEY &&
+    GOOGLE_SHEET_ID &&
+    GOOGLE_SERVICE_ACCOUNT_EMAIL.trim() !== '' &&
+    GOOGLE_PRIVATE_KEY.trim() !== '' &&
+    GOOGLE_SHEET_ID.trim() !== '' &&
+    !GOOGLE_SERVICE_ACCOUNT_EMAIL.includes('planilhabot@kedson-fb038.iam.gserviceaccount.com') &&
+    !GOOGLE_PRIVATE_KEY.includes('-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDOBqxtE6p54r/M\nzFZQ1jyXW7zV+qpFgE/B2XrE4AJZKUB82nB2wnnOaPJPlU0o1Avq5z49rCpmBwxM\nF0rFTG7WvqG+fByhIjVdVZPCMvlBrhtkhZU1cILgWJLSxHrEv7NJg4MtGYQGQxYT\nwYwQe14B8Zc96oIUCpUOht9dFxG5SLhPanBLxt6f+XS0BKi716ZGN40Yw2PuTIBZ\nV8zQWEwE/t4zfDaqQNY6cuE9P1tBb7MmNDoLau7lci+tY7u5bI/40y6nlwi0ehNg\nAaooSksbBKRJjzUGnOKw1Q5tX6lE1a5Cg0nl5MRqD4VWdW+HGRVXnMoX1hqOBh0H\ngweYSEXfAgMBAAECggEAQgPqaRMVm3OYIJ/TApj7Fka7ZdcpixaXt9YfXAkpR3eL\n5dW6lpsvG4AOMIj3Dd+QKAdLrshFV6bnflQyTbD1jRLNUfOD2u/SqKL8swvRSYXn\n2hhhnJt+HDPVa/qwGe4RHTuqIx/baYRChTcN0dQt5bKLUzga0SAo7dwyoyn6sGL1\nBvaKSOqhGKHVSbnVjpAuMacU/c7jEx7RR5rQy1WJNOxVmyUcB6kUSUedD3222TQf\nXYjC4QpsFuBK7OY4X/fpUr7Ap128kSA2zUkWnN/f+aq3YCKLB+G3bOoMGE16HNNY\nhoRdhcxsPSAE+R4F5UEHVrnlyzLoq54Vmq48fAxiyQKBgQDtLzt2/yXkZhQVG6Eh\nid3Ro8ISvSLpQZRHh9aReszL+ys0asltYMvYCcPzFlJKg7v5K3VZUnWiBfKFHZv2\nTeJgV7uN9r/zPIk5zpfkEWc2ibg+RKsG1aZyZQM//X+xU/dB/Pd81UBhXDrJHgxc\nXKA8nRTYkzz6rShWAkwvdRdQ6QKBgQDeXqwrg30CKL6TyIEWVyej7z00INUQxG6V\nuBRuL6VZpOFzW8oflQOYVolwhNJy5V8EokHknq71Pf8yP6YPc8oZQ24BsPaiZswT\nyoc76FMVuBZNLRdkTpbb+1FzH7g+9eqUNdViTvfVD73mlnM3qWQb5YsTgr+vfcuB\nwVs1E47jhwKBgQCuiM03WbYmhj9M8RH3Ph5uwBR1+ZwRDWLx6DGqyDSf/enjHpmu\n1UXrafQ5kzlm/915E9O8sQNDASFfd1RnQRTOVID9jI/fi7JnSXFYML5E0b80gw9f\nbiSXlWF42y/165XNhzsPL1W6z0Wq7WOnK7n2IJlQbbi3tmgyMmqhmYZY0QKBgHWm\nfU0gallkGUCzSqj5P73aa/VSkagnZaLNG/IYP1GojKeuHsiK3LYSwvDHNVkYxib7\negVtd3/FZ2m8hy2Rw5GOPXujlznhTYQDGX22s47AMPxwKPonImYNF9DjLWYSUiRM\nPzOeOD1/8Kc5XohKlO61idmuyaAd3DgwhwMT7/utAoGAHWCdiC7MCUa3iExggHQm\n3zXTyXrwdmVcTbO5LAPGv2k9NyHtTmTtWV2JOQDxvo4stvRT0wxF/JhPcU713g5R\nSpRGfNAKixdlxjk/92sXm9fr1PVJTXcd4HTgm2gkkvGie/y0z2iiP35/5VWv+K7Q\nuVWXCTQmzQVWdjc4nlMLjzI=\n-----END PRIVATE KEY-----\n') &&
+    !GOOGLE_SHEET_ID.includes('1t4jwEUiYtNsh0S1kcRYrMfMdED3p8WbADWeLfSUyZbU')
+  );
 }
 
 function getGoogleSheetsClient() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  const sheetId = process.env.GOOGLE_SHEET_ID;
+  const email = GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const key = GOOGLE_PRIVATE_KEY;
+  const sheetId = GOOGLE_SHEET_ID;
 
-  if (!email || !key || !sheetId) {
-    throw new Error('GOOGLE_SHEETS_NOT_CONFIGURED: Credenciais do Google Sheets não configuradas.');
+  if (!isGoogleSheetsConfigured()) {
+    throw new Error('GOOGLE_SHEETS_NOT_CONFIGURED: Credenciais do Google Sheets não configuradas diretamente no arquivo.');
   }
 
   const auth = new google.auth.JWT({
@@ -75,7 +91,7 @@ export default async function handler(req: any, res: any) {
       return sendSuccess(res, {
         success: false,
         notConfigured: true,
-        message: 'Google Sheets não configurado nas variáveis de ambiente.',
+        message: 'Google Sheets não configurado diretamente no arquivo.',
       });
     }
 
@@ -247,11 +263,11 @@ export default async function handler(req: any, res: any) {
 
     } catch (err: any) {
       if (err.message && err.message.includes('GOOGLE_SHEETS_NOT_CONFIGURED')) {
-        logApi('info', 'Sincronização com Google Sheets ignorada: credenciais não configuradas', { listaId });
+        logApi('info', 'Sincronização com Google Sheets ignorada: credenciais diretas não configuradas', { listaId });
         return sendSuccess(res, {
           success: false,
           notConfigured: true,
-          message: 'Google Sheets não configurado nas variáveis de ambiente.',
+          message: 'Google Sheets não configurado diretamente no arquivo.',
         });
       }
       logApi('error', 'Erro ao sincronizar com Google Sheets', { listaId, error: err.message });
