@@ -2715,10 +2715,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
   const listToVerify = modoIndividual ? itensModoIndividual : listaAtiva.itens;
   const totalColetados = listToVerify.length;
 
-  // Contagem de IDs sem rota a somar sem estar na lista
+  // Quantidade de brancas disponíveis na base de Refugo.
+  // IMPORTANTE: elas NÃO entram no total de IDs coletados enquanto não estiverem fisicamente na lista.
   const totalBrancasSemRota = idsBrancasNaoNaLista.length;
-  // Total somado exibido no card de IDs Coletados
-  const totalColetadosComBrancas = modoIndividual ? totalColetados : (totalColetados + totalBrancasSemRota);
+
+  // O card "IDs Coletados" deve refletir SOMENTE os itens realmente presentes na lista atual.
+  // Antes este total somava toda a base de brancas/refugo, fazendo uma lista vazia exibir milhares de IDs.
+  const totalColetadosComBrancas = totalColetados;
 
   // Saídas presentes apenas nos IDs que realmente foram inseridos/bipados
   const saídasPresentes: string[] = Array.from(new Set(listToVerify.map(i => i.saida).filter(Boolean)));
@@ -4157,10 +4160,13 @@ export const ListasColeta: React.FC<ListasColetaProps> = ({ currentUser }) => {
                   {modoIndividual ? 'IDs Bipados na Sessão Individual' : 'IDs Coletados'}
                 </p>
                 {!modoIndividual && totalBrancasSemRota > 0 && (
-                  <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-white/90 border border-blue-200 rounded-full text-[11px] font-semibold text-gray-700 shadow-2xs">
+                  <div
+                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-white/90 border border-blue-200 rounded-full text-[11px] font-semibold text-gray-700 shadow-2xs"
+                    title="Esses IDs pertencem à base de Refugo e ainda não fazem parte desta lista"
+                  >
                     <span>{totalColetados} na lista</span>
                     <span className="text-gray-300">•</span>
-                    <span className="text-amber-700 font-bold">+{totalBrancasSemRota} sem rota (brancas)</span>
+                    <span className="text-amber-700 font-bold">{totalBrancasSemRota} brancas disponíveis</span>
                   </div>
                 )}
               </div>
