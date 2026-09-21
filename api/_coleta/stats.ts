@@ -1,5 +1,5 @@
-import { adminDb } from '../_lib/firebase-admin';
 import { sendSuccess, sendError } from '../_lib/response';
+import { getSupabaseAdmin } from '../_lib/supabase-admin';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET') {
@@ -12,28 +12,43 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { db } = adminDb;
-    const docSnap = await db.collection('coleta_listas').doc(listaId).get();
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('coleta_listas')
+      .select(
+        'id, nome, status, total_itens, total_validados, saidas_count, motivos_count, rotas_count, bips_por_operador, updated_at'
+      )
+      .eq('id', String(listaId))
+      .maybeSingle();
 
-    if (!docSnap.exists) {
+    if (error) throw error;
+    if (!data) {
       return sendError(res, 404, 'LISTA_NOT_FOUND', 'Lista não encontrada');
     }
 
-    const data = docSnap.data() || {};
-    const stats = {
-      listaId,
+    return sendSuccess(res, {
+      listaId: String(data.id),
       nome: data.nome,
       status: data.status,
-      totalItens: typeof data.totalItens === 'number' ? data.totalItens : 0,
-      totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0,
-      saidasCount: data.saidasCount || {},
-      motivosCount: data.motivosCount || {},
-      bipsPorOperador: data.bipsPorOperador || {},
-      updatedAt: data.updatedAt,
-    };
-
-    return sendSuccess(res, stats);
+      totalItens: Number(data.total_itens || 0),
+      totalValidados: Number(data.total_validados || 0),
+      totalPendentes: Math.max(
+        0,
+        Number(data.total_itens || 0) - Number(data.total_validados || 0)
+      ),
+      saidasCount: data.saidas_count || {},
+      motivosCount: data.motivos_count || {},
+      rotasCount: data.rotas_count || {},
+      bipsPorOperador: data.bips_por_operador || {},
+      updatedAt: data.updated_at,
+    });
   } catch (err: any) {
-    return sendError(res, 500, 'STATS_FAILED', 'Erro ao obter estatísticas da lista', err.message);
+    return sendError(
+      res,
+      500,
+      'STATS_FAILED',
+      'Erro ao obter estatísticas da lista',
+      err?.message
+    );
   }
 }
