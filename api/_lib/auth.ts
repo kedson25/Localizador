@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'http';
-import { adminDb } from './firebase-admin';
+import { getSupabaseAdmin } from './supabase-admin';
 
 export interface AuthenticatedUser {
   uid: string;
@@ -22,7 +22,9 @@ export class AuthError extends Error {
   }
 }
 
-function getBearerToken(req: IncomingMessage & { headers: Record<string, any> }): string {
+function getBearerToken(
+  req: IncomingMessage & { headers: Record<string, any> }
+): string {
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
 
   if (!authHeader || typeof authHeader !== 'string') {
@@ -43,35 +45,50 @@ export async function requireAuth(
   const token = getBearerToken(req);
 
   try {
-    const { auth, db } = adminDb;
+    const supabase = getSupabaseAdmin();
+    const { data: authData, error: authError } = await supabase.auth.getUser(token);
 
-    // checkRevoked=true: tokens revogados deixam de ser aceitos imediatamente.
-    const decodedToken = await auth.verifyIdToken(token, true);
-    const uid = decodedToken.uid;
-
-    const userDoc = await db.collection('users').doc(uid).get();
-    if (!userDoc.exists) {
-      throw new AuthError('PROFILE_NOT_FOUND', 'Perfil de usuário não encontrado.', 403);
+    if (authError || !authData.user) {
+      throw new AuthError(
+        'INVALID_TOKEN',
+        'Sessão inválida ou expirada. Faça login novamente.'
+      );
     }
 
-    const userData = userDoc.data() || {};
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('username, email, is_admin, is_approved, allowed_groups')
+      .eq('id', authData.user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      throw new AuthError(
+        'PROFILE_NOT_FOUND',
+        'Perfil de usuário não encontrado.',
+        403
+      );
+    }
 
     return {
-      uid,
-      email: decodedToken.email || userData.email,
-      displayName: decodedToken.name || userData.username || 'Usuário',
-      isAdmin: Boolean(userData.isAdmin),
-      isApproved: Boolean(userData.isApproved),
-      allowedGroups: Array.isArray(userData.allowedGroups)
-        ? userData.allowedGroups.filter((group: unknown): group is string => typeof group === 'string')
+      uid: authData.user.id,
+      email: authData.user.email || profile.email || undefined,
+      displayName:
+        profile.username || authData.user.user_metadata?.username || 'Usuário',
+      isAdmin: Boolean(profile.is_admin),
+      isApproved: Boolean(profile.is_approved),
+      allowedGroups: Array.isArray(profile.allowed_groups)
+        ? profile.allowed_groups.filter(
+            (group: unknown): group is string => typeof group === 'string'
+          )
         : [],
     };
   } catch (err: any) {
-    if (err instanceof AuthError) {
-      throw err;
-    }
+    if (err instanceof AuthError) throw err;
 
-    throw new AuthError('INVALID_TOKEN', 'Sessão inválida ou expirada. Faça login novamente.');
+    throw new AuthError(
+      'INVALID_TOKEN',
+      'Sessão inválida ou expirada. Faça login novamente.'
+    );
   }
 }
 
@@ -90,7 +107,11 @@ export async function requireAdmin(
 ): Promise<AuthenticatedUser> {
   const user = await requireApproved(req);
   if (!user.isAdmin) {
-    throw new AuthError('FORBIDDEN', 'Permissão de administrador obrigatória.', 403);
+    throw new AuthError(
+      'FORBIDDEN',
+      'Permissão de administrador obrigatória.',
+      403
+    );
   }
   return user;
 }
