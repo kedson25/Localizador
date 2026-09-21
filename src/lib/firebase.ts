@@ -7,14 +7,15 @@ try {
 } catch (_) {}
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC-9ZgBnd6sjkAS6phLsO5fp_19UYNL5s4",
-  authDomain: "ssp45-d1847.firebaseapp.com",
-  projectId: "ssp45-d1847",
-  storageBucket: "ssp45-d1847.firebasestorage.app",
-  messagingSenderId: "684115094877",
-  appId: "1:684115094877:web:dc6797f688ac5b84b50cb4",
-  measurementId: "G-1V7HWH4L37"
-};
+  apiKey: "AIzaSyCfpBmn3cdKP9vaGrDzKCB7oRPMSMx02tA",
+  authDomain: "ecooy-5b791.firebaseapp.com",
+  databaseURL: "https://ecooy-5b791-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "ecooy-5b791",
+  storageBucket: "ecooy-5b791.firebasestorage.app",
+  messagingSenderId: "824859587278",
+  appId: "1:824859587278:web:9a6b5a4485af41e70dd69f",
+  measurementId: "G-LDCXYXPEXF"
+}
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
