@@ -1,9 +1,9 @@
-import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '../_lib/firebase-admin';
 import { BatchImportSchema } from '../_lib/validation';
-import { normalizeCodigo, cleanDigits, getDeterministicItemId } from '../_lib/id';
+import { normalizeCodigo, getDeterministicItemId } from '../_lib/id';
 import { sendSuccess, sendError } from '../_lib/response';
 import { logApi } from '../_lib/logger';
+import { getSupabaseAdmin } from '../_lib/supabase-admin';
+import { itemToRow } from '../_lib/supabase-data';
 
 export default async function handler(req: any, res: any) {
   const startTime = Date.now();
@@ -13,115 +13,110 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const parseResult = BatchImportSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return sendError(res, 400, 'INVALID_PAYLOAD', 'Dados do lote inválidos', parseResult.error.format());
+    const parsed = BatchImportSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(
+        res,
+        400,
+        'INVALID_PAYLOAD',
+        'Dados do lote inválidos',
+        parsed.error.format()
+      );
     }
 
-    const { listaId, items, overwrite } = parseResult.data;
-    const { db } = adminDb;
+    const { listaId, items, overwrite } = parsed.data;
+    const supabase = getSupabaseAdmin();
 
-    const listaRef = db.collection('coleta_listas').doc(listaId);
-    const listaSnap = await listaRef.get();
-    if (!listaSnap.exists) {
+    const { data: lista, error: listaError } = await supabase
+      .from('coleta_listas')
+      .select('id, rota, saida_padrao, motivo_padrao')
+      .eq('id', listaId)
+      .maybeSingle();
+
+    if (listaError) throw listaError;
+    if (!lista) {
       return sendError(res, 404, 'LISTA_NOT_FOUND', 'Lista de coleta não encontrada');
     }
-
-    const listaData = listaSnap.data() || {};
-    const itemsCol = listaRef.collection('itens');
 
     let inserted = 0;
     let updated = 0;
     let duplicates = 0;
     let failed = 0;
 
-    const nowMs = Date.now();
-    const nowBR = new Date().toLocaleString('pt-BR');
-
-    // Chunks seguros de 400 (limite do Firestore é 500 por batch)
-    const CHUNK_SIZE = 400;
-
-    // Deduplicação inicial em memória pelo código normalizado
-    const uniqueMap = new Map<string, any>();
+    const unique = new Map<string, any>();
     for (const rawItem of items) {
       const code = normalizeCodigo(rawItem.codigo);
       if (!code) {
         failed++;
         continue;
       }
-      if (uniqueMap.has(code)) {
+      if (unique.has(code)) {
         duplicates++;
         continue;
       }
-      uniqueMap.set(code, rawItem);
+      unique.set(code, { ...rawItem, codigo: code });
     }
 
-    const uniqueItems = Array.from(uniqueMap.values());
+    const uniqueItems = Array.from(unique.values());
+    const CHUNK_SIZE = 500;
 
-    for (let i = 0; i < uniqueItems.length; i += CHUNK_SIZE) {
-      const chunk = uniqueItems.slice(i, i + CHUNK_SIZE);
-      const batch = db.batch();
-
-      // Busca prévia em paralelo para verificar documentos existentes neste chunk
-      const refs = chunk.map((item) => {
-        const cleanCode = normalizeCodigo(item.codigo);
-        const docId = getDeterministicItemId(cleanCode);
-        return { item, cleanCode, docId, ref: itemsCol.doc(docId) };
+    for (let start = 0; start < uniqueItems.length; start += CHUNK_SIZE) {
+      const chunk = uniqueItems.slice(start, start + CHUNK_SIZE);
+      const rows = chunk.map((item, index) => {
+        const id = getDeterministicItemId(item.codigo);
+        return itemToRow(
+          listaId,
+          {
+            ...item,
+            timestamp: item.timestamp || Date.now() - (start + index),
+          },
+          {
+            rota: lista.rota,
+            saidaPadrao: lista.saida_padrao,
+            motivoPadrao: lista.motivo_padrao,
+          },
+          id
+        );
       });
 
-      const docSnaps = await db.getAll(...refs.map((r) => r.ref));
+      const ids = rows.map((row) => row.id);
+      const { data: existingRows, error: existingError } = await supabase
+        .from('coleta_itens')
+        .select('id')
+        .eq('lista_id', listaId)
+        .in('id', ids);
 
-      refs.forEach((itemObj, index) => {
-        const snap = docSnaps[index];
-        const exists = snap && snap.exists;
+      if (existingError) throw existingError;
+      const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
 
-        if (exists && !overwrite) {
-          duplicates++;
-          return;
-        }
+      const rowsToWrite = overwrite
+        ? rows
+        : rows.filter((row) => {
+            if (existingIds.has(String(row.id))) {
+              duplicates++;
+              return false;
+            }
+            return true;
+          });
 
-        const cleanCode = itemObj.cleanCode;
-        const item = itemObj.item;
-        const itemData = {
-          id: itemObj.docId,
-          codigo: cleanCode,
-          codigoClean: cleanDigits(cleanCode),
-          rota: item.rota || listaData.rota || 'Sem Rota',
-          saida: item.saida || listaData.saidaPadrao || 'Ciclo 2 - Saída PM',
-          motivo: item.motivo || listaData.motivoPadrao || 'Pendente',
-          scannedAt: item.scannedAt || nowBR,
-          responsavel: item.responsavel || 'Operador',
-          grupoId: item.grupoId || undefined,
-          validado: Boolean(item.validado),
-          timestamp: nowMs - index * 2,
-          updatedAt: FieldValue.serverTimestamp(),
-          ...(exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
-        };
+      if (rowsToWrite.length === 0) continue;
 
-        batch.set(itemObj.ref, itemData, { merge: true });
+      const { error: upsertError } = await supabase
+        .from('coleta_itens')
+        .upsert(rowsToWrite, { onConflict: 'lista_id,id' });
 
-        if (exists) {
-          updated++;
-        } else {
-          inserted++;
-        }
-      });
+      if (upsertError) throw upsertError;
 
-      await batch.commit();
+      for (const row of rowsToWrite) {
+        if (existingIds.has(String(row.id))) updated++;
+        else inserted++;
+      }
     }
 
-    // Atualizar contadores na lista pai com contagem real e exata
-    try {
-      const countSnap = await listaRef.collection('itens').count().get();
-      const realTotal = countSnap.data().count;
-      await listaRef.set(
-        {
-          totalItens: realTotal,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-    } catch (_) {}
+    const { error: reconcileError } = await supabase.rpc('reconcile_lista_counts', {
+      p_lista_id: listaId,
+    });
+    if (reconcileError) throw reconcileError;
 
     const summary = {
       received: items.length,
@@ -131,7 +126,7 @@ export default async function handler(req: any, res: any) {
       failed,
     };
 
-    logApi('info', 'Importação em lote concluída', {
+    logApi('info', 'Importação Supabase em lote concluída', {
       endpoint: '/api/coleta/batch',
       listaId,
       ...summary,
@@ -140,6 +135,12 @@ export default async function handler(req: any, res: any) {
 
     return sendSuccess(res, summary);
   } catch (err: any) {
-    return sendError(res, 500, 'BATCH_FAILED', 'Erro ao processar lote no servidor', err.message);
+    return sendError(
+      res,
+      500,
+      'BATCH_FAILED',
+      'Erro ao processar lote no servidor',
+      err?.message
+    );
   }
 }
