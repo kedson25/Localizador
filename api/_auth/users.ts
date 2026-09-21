@@ -1,12 +1,9 @@
-import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '../_lib/firebase-admin';
+import { getSupabaseAdmin } from '../_lib/supabase-admin';
 import { requireAdmin, normalizeAuthError } from '../_lib/auth';
 import { sendSuccess, sendError } from '../_lib/response';
 import { logApi } from '../_lib/logger';
 
 export default async function handler(req: any, res: any) {
-  const { db, auth } = adminDb;
-
   let currentUser;
   try {
     currentUser = await requireAdmin(req);
@@ -15,24 +12,32 @@ export default async function handler(req: any, res: any) {
     return sendError(res, authError.statusCode, authError.code, authError.message);
   }
 
+  const supabase = getSupabaseAdmin();
+
   if (req.method === 'GET') {
     try {
-      const snap = await db.collection('users').get();
-      const users = snap.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          username: data.username,
-          email: data.email,
-          isAdmin: Boolean(data.isAdmin),
-          isApproved: Boolean(data.isApproved),
-          allowedGroups: Array.isArray(data.allowedGroups) ? data.allowedGroups : [],
-          createdAt: data.createdAt,
-        };
-      });
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, username, email, is_admin, is_approved, allowed_groups, created_at')
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      const users = (data || []).map((profile: any) => ({
+        id: String(profile.id),
+        username: String(profile.username || ''),
+        email: String(profile.email || ''),
+        isAdmin: Boolean(profile.is_admin),
+        isApproved: Boolean(profile.is_approved),
+        allowedGroups: Array.isArray(profile.allowed_groups)
+          ? profile.allowed_groups
+          : [],
+        createdAt: profile.created_at,
+      }));
+
       return sendSuccess(res, { users });
     } catch (err: any) {
-      return sendError(res, 500, 'FETCH_FAILED', 'Erro ao listar usuários', err.message);
+      return sendError(res, 500, 'FETCH_FAILED', 'Erro ao listar usuários', err?.message);
     }
   }
 
@@ -40,50 +45,82 @@ export default async function handler(req: any, res: any) {
     try {
       const { userId, updates } = req.body || {};
       if (!userId || !updates || typeof updates !== 'object') {
-        return sendError(res, 400, 'INVALID_PAYLOAD', 'userId e updates são obrigatórios');
+        return sendError(
+          res,
+          400,
+          'INVALID_PAYLOAD',
+          'userId e updates são obrigatórios'
+        );
       }
 
-      const targetRef = db.collection('users').doc(String(userId));
-      const targetSnap = await targetRef.get();
-      if (!targetSnap.exists) {
+      if (
+        currentUser.uid === userId &&
+        (updates.isAdmin === false || updates.isApproved === false)
+      ) {
+        return sendError(
+          res,
+          409,
+          'SELF_LOCKOUT_BLOCKED',
+          'Não é permitido remover seu próprio acesso administrativo'
+        );
+      }
+
+      const payload: Record<string, any> = {
+        updated_at: new Date().toISOString(),
+      };
+
+      if (updates.isAdmin !== undefined) {
+        if (typeof updates.isAdmin !== 'boolean') {
+          return sendError(
+            res,
+            400,
+            'INVALID_ADMIN_FLAG',
+            'isAdmin deve ser booleano'
+          );
+        }
+        payload.is_admin = updates.isAdmin;
+      }
+
+      if (updates.isApproved !== undefined) {
+        if (typeof updates.isApproved !== 'boolean') {
+          return sendError(
+            res,
+            400,
+            'INVALID_APPROVAL_FLAG',
+            'isApproved deve ser booleano'
+          );
+        }
+        payload.is_approved = updates.isApproved;
+      }
+
+      if (updates.allowedGroups !== undefined) {
+        if (
+          !Array.isArray(updates.allowedGroups) ||
+          !updates.allowedGroups.every((v: unknown) => typeof v === 'string')
+        ) {
+          return sendError(
+            res,
+            400,
+            'INVALID_GROUPS',
+            'allowedGroups deve ser uma lista de textos'
+          );
+        }
+        payload.allowed_groups = updates.allowedGroups;
+      }
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .update(payload)
+        .eq('id', String(userId))
+        .select('id')
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) {
         return sendError(res, 404, 'USER_NOT_FOUND', 'Usuário não encontrado');
       }
 
-      const allowedKeys = ['isAdmin', 'isApproved', 'allowedGroups'] as const;
-      const safeUpdates: Record<string, any> = {
-        updatedAt: FieldValue.serverTimestamp(),
-      };
-
-      for (const key of allowedKeys) {
-        if (updates[key] !== undefined) {
-          safeUpdates[key] = updates[key];
-        }
-      }
-
-      if (safeUpdates.allowedGroups !== undefined) {
-        if (!Array.isArray(safeUpdates.allowedGroups) || !safeUpdates.allowedGroups.every((v: unknown) => typeof v === 'string')) {
-          return sendError(res, 400, 'INVALID_GROUPS', 'allowedGroups deve ser uma lista de textos');
-        }
-      }
-
-      if (safeUpdates.isAdmin !== undefined && typeof safeUpdates.isAdmin !== 'boolean') {
-        return sendError(res, 400, 'INVALID_ADMIN_FLAG', 'isAdmin deve ser booleano');
-      }
-      if (safeUpdates.isApproved !== undefined && typeof safeUpdates.isApproved !== 'boolean') {
-        return sendError(res, 400, 'INVALID_APPROVAL_FLAG', 'isApproved deve ser booleano');
-      }
-
-      // Impede um administrador de remover acidentalmente o próprio acesso.
-      if (currentUser.uid === userId && (safeUpdates.isAdmin === false || safeUpdates.isApproved === false)) {
-        return sendError(res, 409, 'SELF_LOCKOUT_BLOCKED', 'Não é permitido remover seu próprio acesso administrativo');
-      }
-
-      await targetRef.set(safeUpdates, { merge: true });
-
-      // Revoga sessões antigas sempre que permissões são modificadas.
-      await auth.revokeRefreshTokens(String(userId));
-
-      logApi('info', 'Usuário atualizado por admin', {
+      logApi('info', 'Usuário Supabase atualizado por admin', {
         endpoint: '/api/auth/users',
         targetUserId: userId,
         updatedBy: currentUser.uid,
@@ -91,7 +128,13 @@ export default async function handler(req: any, res: any) {
 
       return sendSuccess(res, { updated: true, userId });
     } catch (err: any) {
-      return sendError(res, 500, 'UPDATE_FAILED', 'Erro ao atualizar usuário', err.message);
+      return sendError(
+        res,
+        500,
+        'UPDATE_FAILED',
+        'Erro ao atualizar usuário',
+        err?.message
+      );
     }
   }
 
@@ -103,17 +146,18 @@ export default async function handler(req: any, res: any) {
       }
 
       if (currentUser.uid === userId) {
-        return sendError(res, 409, 'SELF_DELETE_BLOCKED', 'Não é permitido excluir o próprio usuário administrador');
+        return sendError(
+          res,
+          409,
+          'SELF_DELETE_BLOCKED',
+          'Não é permitido excluir o próprio usuário administrador'
+        );
       }
 
-      await Promise.all([
-        db.collection('users').doc(String(userId)).delete(),
-        auth.deleteUser(String(userId)).catch((err: any) => {
-          if (err?.code !== 'auth/user-not-found') throw err;
-        }),
-      ]);
+      const { error } = await supabase.auth.admin.deleteUser(String(userId));
+      if (error && !/not found/i.test(error.message || '')) throw error;
 
-      logApi('info', 'Usuário excluído por admin', {
+      logApi('info', 'Usuário Supabase excluído por admin', {
         endpoint: '/api/auth/users',
         targetUserId: userId,
         deletedBy: currentUser.uid,
@@ -121,7 +165,13 @@ export default async function handler(req: any, res: any) {
 
       return sendSuccess(res, { deleted: true, userId });
     } catch (err: any) {
-      return sendError(res, 500, 'DELETE_FAILED', 'Erro ao excluir usuário', err.message);
+      return sendError(
+        res,
+        500,
+        'DELETE_FAILED',
+        'Erro ao excluir usuário',
+        err?.message
+      );
     }
   }
 
