@@ -1,11 +1,12 @@
-import { collection, doc, setDoc, getDocs, getDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
+import { getAuth, signInWithCustomToken, signOut } from 'firebase/auth';
 import { db } from './firebase';
 
 export interface User {
   id: string;
   username: string;
   email: string;
-  password?: string; // Mantido apenas para compatibilidade de tipos, nunca persistido em texto puro
+  password?: string;
   isAdmin: boolean;
   isApproved: boolean;
   allowedGroups: string[];
@@ -15,25 +16,18 @@ export interface User {
 const USERS_COLLECTION = 'users';
 const CURRENT_USER_KEY = 'app_current_user';
 
-// Limpeza preventiva de senhas em texto puro legadas salvas no navegador
 try {
   localStorage.removeItem('app_local_users_backup');
+  localStorage.removeItem('currentUser');
 } catch (_) {}
 
 export function getCurrentUser(): User | null {
   try {
-    let raw = localStorage.getItem(CURRENT_USER_KEY);
-    if (!raw) {
-      raw = localStorage.getItem('currentUser');
-    }
+    const raw = localStorage.getItem(CURRENT_USER_KEY);
     if (!raw) return null;
-    const u = JSON.parse(raw);
-    delete u.password;
-    if (u.email === 'matheuslite0333@gmail.com' || u.username === 'matheuslite') {
-       u.isAdmin = true;
-       u.isApproved = true;
-    }
-    return u;
+    const user = JSON.parse(raw) as User;
+    delete user.password;
+    return user;
   } catch {
     return null;
   }
@@ -43,22 +37,29 @@ export function setCurrentUser(user: User | null) {
   try {
     if (!user) {
       localStorage.removeItem(CURRENT_USER_KEY);
-      localStorage.removeItem('currentUser');
       return;
     }
+
     const safeUser = { ...user };
     delete safeUser.password;
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(safeUser));
   } catch (_) {}
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('Auth operation timed out')), ms)
-    ),
-  ]);
+async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const auth = getAuth();
+  const firebaseUser = auth.currentUser;
+  const saved = getCurrentUser();
+  const token = firebaseUser ? await firebaseUser.getIdToken() : saved?.token;
+
+  return fetch(input, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
 }
 
 export async function signupUser(
@@ -66,52 +67,25 @@ export async function signupUser(
   email: string,
   password: string
 ): Promise<{ success: boolean; message?: string }> {
-  // 1. Tenta cadastrar via API backend (segura, Firebase Admin Auth)
   try {
     const res = await fetch('/api/auth?action=signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password }),
+      body: JSON.stringify({ username: username.trim(), email: email.trim(), password }),
     });
+
     const data = await res.json();
-    if (data.ok) {
+    if (res.ok && data.ok) {
       return { success: true, message: data.data?.message };
     }
-    if (data.error) {
-      return { success: false, message: data.error.message };
-    }
-  } catch (apiErr) {
-    console.warn('Backend indisponível no cadastro, executando fallback seguro:', apiErr);
-  }
 
-  // 2. Fallback client-side no Firestore SEM salvar senha em texto puro
-  try {
-    const usersRef = collection(db, USERS_COLLECTION);
-
-    const qUser = query(usersRef, where('username', '==', username));
-    const userSnap = await withTimeout(getDocs(qUser), 3000);
-    if (!userSnap.empty) return { success: false, message: 'Usuário já existe' };
-
-    const qEmail = query(usersRef, where('email', '==', email));
-    const emailSnap = await withTimeout(getDocs(qEmail), 3000);
-    if (!emailSnap.empty) return { success: false, message: 'E-mail já cadastrado' };
-
-    const newDocRef = doc(usersRef);
-    const newUser: User = {
-      id: newDocRef.id,
-      username,
-      email,
-      // NUNCA salva password em texto puro
-      isAdmin: false,
-      isApproved: true,
-      allowedGroups: ['consulta', 'remover', 'reporte', 'listas', 'upload'],
+    return {
+      success: false,
+      message: data?.error?.message || 'Não foi possível realizar o cadastro',
     };
-
-    await withTimeout(setDoc(newDocRef, newUser), 3500);
-    return { success: true, message: 'Cadastro realizado com sucesso!' };
   } catch (error: any) {
     console.error('Erro no cadastro:', error);
-    return { success: false, message: 'Erro ao cadastrar usuário: ' + (error.message || '') };
+    return { success: false, message: 'Servidor indisponível. Tente novamente.' };
   }
 }
 
@@ -119,89 +93,48 @@ export async function loginUser(
   emailOrUsername: string,
   password: string
 ): Promise<{ success: boolean; user?: User; message?: string }> {
-  // 1. Tenta autenticar via API backend
   try {
     const res = await fetch('/api/auth?action=login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emailOrUsername, password }),
+      body: JSON.stringify({ emailOrUsername: emailOrUsername.trim(), password }),
     });
+
     const data = await res.json();
-    if (data.ok && data.data?.user) {
-      const user = {
-        ...data.data.user,
-        token: data.data.token,
+    if (!res.ok || !data.ok || !data.data?.user || !data.data?.customToken) {
+      return {
+        success: false,
+        message: data?.error?.message || 'Credenciais inválidas',
       };
-      setCurrentUser(user);
-      return { success: true, user };
-    }
-    if (data.error) {
-      return { success: false, message: data.error.message };
-    }
-  } catch (apiErr) {
-    console.warn('API backend indisponível, fallback client-side:', apiErr);
-  }
-
-  // 2. Fallback direto no Firestore
-  try {
-    const usersRef = collection(db, USERS_COLLECTION);
-    let q = query(usersRef, where('email', '==', emailOrUsername));
-    let snap = await withTimeout(getDocs(q), 3000);
-
-    if (snap.empty) {
-      q = query(usersRef, where('username', '==', emailOrUsername));
-      snap = await withTimeout(getDocs(q), 3000);
     }
 
-    if (!snap.empty) {
-      const user = snap.docs[0].data() as User;
-      delete user.password;
-      
-      // Auto-approve and Auto-admin for the master account
-      if (user.email === 'matheuslite0333@gmail.com' || user.username === 'matheuslite') {
-         user.isApproved = true;
-         user.isAdmin = true;
-         // Try to update it in the database
-         try {
-           updateDoc(snap.docs[0].ref, { isApproved: true, isAdmin: true }).catch(() => {});
-         } catch(e) {}
-      }
+    const credential = await signInWithCustomToken(getAuth(), data.data.customToken);
+    const freshIdToken = await credential.user.getIdToken(true);
 
-      
+    const user: User = {
+      ...data.data.user,
+      token: freshIdToken,
+    };
 
-      setCurrentUser(user);
-      return { success: true, user };
-    }
+    setCurrentUser(user);
+    return { success: true, user };
   } catch (error: any) {
-    console.warn('Erro ao consultar Firestore no login:', error);
+    console.error('Erro no login:', error);
+    return { success: false, message: 'Não foi possível autenticar. Tente novamente.' };
   }
-
-  return { success: false, message: 'Credenciais inválidas ou usuário não encontrado' };
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  // 1. Tenta via API backend
   try {
-    const res = await fetch('/api/auth?action=users');
+    const res = await authenticatedFetch('/api/auth?action=users');
     const data = await res.json();
-    if (data.ok && Array.isArray(data.data?.users)) {
+    if (res.ok && data.ok && Array.isArray(data.data?.users)) {
       return data.data.users;
     }
-  } catch (_) {}
-
-  // 2. Fallback Firestore
-  try {
-    const usersRef = collection(db, USERS_COLLECTION);
-    const snap = await withTimeout(getDocs(usersRef), 3000);
-    return snap.docs.map((d) => {
-      const u = d.data() as User;
-      delete u.password;
-      return { ...u, id: d.id };
-    });
   } catch (error) {
     console.warn('Erro ao buscar usuários:', error);
-    return [];
   }
+  return [];
 }
 
 export async function updateUserAdminStatus(
@@ -210,66 +143,56 @@ export async function updateUserAdminStatus(
 ): Promise<boolean> {
   const safeUpdates = { ...updates };
   delete safeUpdates.password;
+  delete safeUpdates.token;
+  delete safeUpdates.id;
+  delete safeUpdates.username;
+  delete safeUpdates.email;
 
-  // 1. Tenta via API backend
   try {
-    const res = await fetch('/api/auth?action=users', {
+    const res = await authenticatedFetch('/api/auth?action=users', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, updates: safeUpdates }),
     });
     const data = await res.json();
-    if (data.ok) return true;
-  } catch (_) {}
-
-  // 2. Fallback Firestore
-  try {
-    const userRef = doc(db, USERS_COLLECTION, userId);
-    await withTimeout(updateDoc(userRef, safeUpdates), 3000);
-    return true;
+    return Boolean(res.ok && data.ok);
   } catch (error) {
-    console.warn('Erro ao atualizar usuário no Firestore:', error);
+    console.warn('Erro ao atualizar usuário:', error);
     return false;
   }
 }
 
 export async function getUserById(userId: string): Promise<User | null> {
   try {
-    const userRef = doc(db, USERS_COLLECTION, userId);
-    const snap = await withTimeout(getDoc(userRef), 3000);
-    if (snap.exists()) {
-      const u = snap.data() as User;
-      delete u.password;
-      return { ...u, id: snap.id };
-    }
+    const snap = await getDoc(doc(db, USERS_COLLECTION, userId));
+    if (!snap.exists()) return null;
+
+    const user = snap.data() as User;
+    delete user.password;
+    return { ...user, id: snap.id };
   } catch (error) {
     console.warn('Erro ao buscar usuário por ID:', error);
+    return null;
   }
-  return null;
 }
 
 export async function deleteUser(userId: string): Promise<boolean> {
-  // 1. Tenta via API backend
   try {
-    const res = await fetch('/api/auth?action=users', {
+    const res = await authenticatedFetch('/api/auth?action=users', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId }),
     });
     const data = await res.json();
-    if (data.ok) return true;
-  } catch (_) {}
-
-  // 2. Fallback Firestore
-  try {
-    
-    const userRef = doc(db, USERS_COLLECTION, userId);
-    await withTimeout(deleteDoc(userRef), 3000);
-    return true;
+    return Boolean(res.ok && data.ok);
   } catch (error) {
-    console.warn('Erro ao excluir usuário no Firestore:', error);
+    console.warn('Erro ao excluir usuário:', error);
     return false;
   }
 }
 
-export function logoutUser() { setCurrentUser(null); window.location.reload(); }
+export async function logoutUser() {
+  try {
+    await signOut(getAuth());
+  } catch (_) {}
+  setCurrentUser(null);
+  window.location.reload();
+}

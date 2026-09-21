@@ -4,9 +4,17 @@ import itemsHandler from './_coleta/items';
 import searchHandler from './_coleta/search';
 import batchHandler from './_coleta/batch';
 import statsHandler from './_coleta/stats';
+import { requireApproved, normalizeAuthError } from './_lib/auth';
 import { sendError } from './_lib/response';
 
 export default async function handler(req: any, res: any) {
+  try {
+    await requireApproved(req);
+  } catch (err: any) {
+    const authError = normalizeAuthError(err);
+    return sendError(res, authError.statusCode, authError.code, authError.message);
+  }
+
   const { action } = req.query;
   switch (action) {
     case 'bip': return bipHandler(req, res);

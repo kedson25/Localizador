@@ -19,7 +19,7 @@ export function getFirebaseAdmin(): {
       const projectId =
         process.env.FIREBASE_PROJECT_ID ||
         process.env.VITE_FIREBASE_PROJECT_ID ||
-        'ecooy-5b791';
+        'ssp45-d1847';
 
       const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
       const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY;
@@ -36,10 +36,7 @@ export function getFirebaseAdmin(): {
       }
 
       try {
-        app = initializeApp({
-          credential,
-          projectId,
-        });
+        app = initializeApp({ credential, projectId });
       } catch (err: any) {
         const apps = getApps();
         if (apps.length > 0) {

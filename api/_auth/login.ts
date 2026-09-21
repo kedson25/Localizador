@@ -2,6 +2,7 @@ import { adminDb } from '../_lib/firebase-admin';
 import { LoginSchema } from '../_lib/validation';
 import { sendSuccess, sendError } from '../_lib/response';
 import { logApi } from '../_lib/logger';
+import { verifyEmailPassword } from '../_lib/password-auth';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -15,9 +16,8 @@ export default async function handler(req: any, res: any) {
     }
 
     const { emailOrUsername, password } = parseResult.data;
-    const { auth, db } = adminDb;
+    const { db, auth } = adminDb;
 
-    // 1. Localizar usuário por email ou username
     const userCol = db.collection('users');
     let snap = await userCol.where('email', '==', emailOrUsername).limit(1).get();
     if (snap.empty) {
@@ -25,29 +25,34 @@ export default async function handler(req: any, res: any) {
     }
 
     if (snap.empty) {
-      return sendError(res, 401, 'USER_NOT_FOUND', 'Usuário não encontrado');
+      return sendError(res, 401, 'INVALID_CREDENTIALS', 'Credenciais inválidas');
     }
 
     const userDoc = snap.docs[0];
     const userData = userDoc.data();
 
-    // 2. Verificar aprovação
     if (!userData.isApproved) {
-      return sendError(
-        res,
-        403,
-        'NOT_APPROVED',
-        'Acesso pendente de aprovação por um Administrador.'
-      );
+      return sendError(res, 403, 'NOT_APPROVED', 'Acesso pendente de aprovação por um Administrador.');
     }
 
-    // 3. Gerar custom token ou token de sessão do Firebase Auth
-    let token = `user_${userDoc.id}`;
+    let idToken: string;
     try {
-      token = await auth.createCustomToken(userDoc.id, {
-        admin: Boolean(userData.isAdmin),
+      idToken = await verifyEmailPassword(String(userData.email || ''), password);
+    } catch (authErr: any) {
+      logApi('warn', 'Tentativa de login rejeitada', {
+        endpoint: '/api/auth/login',
+        uid: userDoc.id,
+        reason: authErr?.message || 'INVALID_CREDENTIALS',
       });
-    } catch (_) {}
+
+      if (authErr?.message === 'AUTH_NOT_CONFIGURED') {
+        return sendError(res, 500, 'AUTH_NOT_CONFIGURED', 'Autenticação do servidor não configurada');
+      }
+
+      return sendError(res, 401, 'INVALID_CREDENTIALS', 'Credenciais inválidas');
+    }
+
+    const customToken = await auth.createCustomToken(userDoc.id);
 
     const safeUser = {
       id: userDoc.id,
@@ -55,7 +60,7 @@ export default async function handler(req: any, res: any) {
       email: userData.email,
       isAdmin: Boolean(userData.isAdmin),
       isApproved: Boolean(userData.isApproved),
-      allowedGroups: userData.allowedGroups || [],
+      allowedGroups: Array.isArray(userData.allowedGroups) ? userData.allowedGroups : [],
     };
 
     logApi('info', 'Login autenticado com sucesso', {
@@ -65,7 +70,8 @@ export default async function handler(req: any, res: any) {
     });
 
     return sendSuccess(res, {
-      token,
+      token: idToken,
+      customToken,
       user: safeUser,
     });
   } catch (err: any) {
