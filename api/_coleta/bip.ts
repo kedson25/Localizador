@@ -1,11 +1,9 @@
-import type { IncomingMessage, ServerResponse } from 'http';
-import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '../_lib/firebase-admin';
-import { requireAuth, AuthError } from '../_lib/auth';
 import { BipRequestSchema } from '../_lib/validation';
 import { normalizeCodigo, cleanDigits, getDeterministicItemId } from '../_lib/id';
 import { sendSuccess, sendError } from '../_lib/response';
 import { logApi } from '../_lib/logger';
+import { getSupabaseAdmin } from '../_lib/supabase-admin';
+import { itemFromRow } from '../_lib/supabase-data';
 
 export default async function handler(req: any, res: any) {
   const startTime = Date.now();
@@ -15,176 +13,98 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    // 1. Validar autenticação
-    let user;
-    try {
-      user = await requireAuth(req);
-    } catch (authErr: any) {
-      // Se não autenticado, fallback seguro para identificação pelo body para não bloquear operação
-      const bodyUser = req.body?.responsavel || 'Operador';
-      user = {
-        uid: 'anon',
-        displayName: bodyUser,
-        isAdmin: false,
-        isApproved: true,
-        allowedGroups: ['listas'],
-      };
-    }
-
-    // 2. Validar payload com Zod
-    const parseResult = BipRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
+    const parsed = BipRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
       return sendError(
         res,
         400,
         'INVALID_PAYLOAD',
         'Dados do bip inválidos',
-        parseResult.error.format()
+        parsed.error.format()
       );
     }
 
-    const { listaId, codigo, saida, motivo, rota, responsavel, grupoId } = parseResult.data;
-
-    // 3. Normalizar código e gerar ID determinístico
+    const { listaId, codigo, saida, motivo, rota, responsavel, grupoId } = parsed.data;
     const cleanCode = normalizeCodigo(codigo);
     if (!cleanCode) {
       return sendError(res, 400, 'EMPTY_CODE', 'Código não pode ser vazio');
     }
 
-    const docId = getDeterministicItemId(cleanCode);
-    const digitsOnly = cleanDigits(cleanCode);
-    const operante = responsavel || user.displayName || 'Operador';
+    const supabase = getSupabaseAdmin();
+    const { data: lista, error: listaError } = await supabase
+      .from('coleta_listas')
+      .select('id, rota, saida_padrao, motivo_padrao')
+      .eq('id', listaId)
+      .maybeSingle();
 
-    const { db } = adminDb;
-    const listaRef = db.collection('coleta_listas').doc(listaId);
-    const itemRef = listaRef.collection('itens').doc(docId);
+    if (listaError) throw listaError;
+    if (!lista) {
+      return sendError(res, 404, 'LISTA_NOT_FOUND', 'Lista de coleta não encontrada');
+    }
 
-    // 4. Executar transação atômica
-    const result = await db.runTransaction(async (transaction) => {
-      const [listaSnap, itemSnap] = await Promise.all([
-        transaction.get(listaRef),
-        transaction.get(itemRef),
-      ]);
+    const itemId = getDeterministicItemId(cleanCode);
+    const { data: existing, error: existingError } = await supabase
+      .from('coleta_itens')
+      .select('*')
+      .eq('lista_id', listaId)
+      .eq('id', itemId)
+      .maybeSingle();
 
-      if (!listaSnap.exists) {
-        throw new Error('LISTA_NOT_FOUND');
-      }
+    if (existingError) throw existingError;
 
-      const listaData = listaSnap.data() || {};
-      const nowMs = Date.now();
-      const nowBR = new Date().toLocaleString('pt-BR');
+    const row = {
+      lista_id: listaId,
+      id: itemId,
+      codigo: cleanCode,
+      codigo_clean: cleanDigits(cleanCode),
+      rota: rota || existing?.rota || lista.rota || 'Sem Rota',
+      saida:
+        saida || existing?.saida || lista.saida_padrao || 'Ciclo 2 - Saída PM',
+      motivo: motivo || existing?.motivo || lista.motivo_padrao || 'Pendente',
+      scanned_at: new Date().toLocaleString('pt-BR'),
+      responsavel: responsavel || existing?.responsavel || 'Operador',
+      grupo_id: grupoId !== undefined ? grupoId || null : existing?.grupo_id || null,
+      // Bip individual não valida automaticamente.
+      validado: existing ? Boolean(existing.validado) : false,
+      timestamp: Date.now(),
+      updated_at: new Date().toISOString(),
+    };
 
-      const targetSaida = saida || listaData.saidaPadrao || 'Ciclo 2 - Saída PM';
-      const targetMotivo = motivo || listaData.motivoPadrao || 'Pendente';
-      const targetRota = rota || listaData.rota || 'Sem Rota';
+    const { data, error } = await supabase
+      .from('coleta_itens')
+      .upsert(row, { onConflict: 'lista_id,id' })
+      .select('*')
+      .single();
 
-      if (itemSnap.exists) {
-        // Item já existia: atualizar dados sem duplicar
-        const prevItem = itemSnap.data() || {};
-        const prevSaida = prevItem.saida;
-        const prevMotivo = prevItem.motivo;
-        const prevOp = prevItem.responsavel;
+    if (error) throw error;
 
-        const updatedItem = {
-          ...prevItem,
-          codigo: cleanCode,
-          codigoClean: digitsOnly,
-          saida: targetSaida,
-          motivo: targetMotivo,
-          rota: targetRota,
-          responsavel: operante,
-          grupoId: grupoId !== undefined ? grupoId : prevItem.grupoId,
-          scannedAt: nowBR,
-          timestamp: nowMs,
-          updatedAt: FieldValue.serverTimestamp(),
-        };
+    const result = {
+      item: itemFromRow(data),
+      isNew: !existing,
+    };
 
-        transaction.set(itemRef, updatedItem, { merge: true });
-
-        // Atualizar métricas na lista se saída/motivo/operador mudaram
-        const listaUpdates: Record<string, any> = {
-          updatedAt: FieldValue.serverTimestamp(),
-        };
-
-        if (prevSaida && prevSaida !== targetSaida) {
-          listaUpdates[`saidasCount.${prevSaida}`] = FieldValue.increment(-1);
-          listaUpdates[`saidasCount.${targetSaida}`] = FieldValue.increment(1);
-        }
-        if (prevMotivo && prevMotivo !== targetMotivo) {
-          listaUpdates[`motivosCount.${prevMotivo}`] = FieldValue.increment(-1);
-          listaUpdates[`motivosCount.${targetMotivo}`] = FieldValue.increment(1);
-        }
-        if (prevOp && prevOp !== operante) {
-          listaUpdates[`bipsPorOperador.${prevOp}`] = FieldValue.increment(-1);
-          listaUpdates[`bipsPorOperador.${operante}`] = FieldValue.increment(1);
-        }
-
-        if (Object.keys(listaUpdates).length > 1) {
-          transaction.set(listaRef, listaUpdates, { merge: true });
-        }
-
-        return {
-          item: { ...updatedItem, id: docId },
-          isNew: false,
-        };
-      } else {
-        // Novo item na lista: inserção atômica
-        const newItem = {
-          id: docId,
-          codigo: cleanCode,
-          codigoClean: digitsOnly,
-          rota: targetRota,
-          saida: targetSaida,
-          motivo: targetMotivo,
-          scannedAt: nowBR,
-          responsavel: operante,
-          grupoId: grupoId || undefined,
-          validado: false,
-          timestamp: nowMs,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        };
-
-        transaction.set(itemRef, newItem);
-
-        // Incrementar contadores atômicos
-        const listaUpdates: Record<string, any> = {
-          totalItens: FieldValue.increment(1),
-          [`bipsPorOperador.${operante}`]: FieldValue.increment(1),
-          [`saidasCount.${targetSaida}`]: FieldValue.increment(1),
-          [`motivosCount.${targetMotivo}`]: FieldValue.increment(1),
-          updatedAt: FieldValue.serverTimestamp(),
-        };
-
-        transaction.set(listaRef, listaUpdates, { merge: true });
-
-        return {
-          item: newItem,
-          isNew: true,
-        };
-      }
-    });
-
-    logApi('info', 'Bip executado com sucesso', {
+    logApi('info', 'Bip Supabase executado com sucesso', {
       endpoint: '/api/coleta/bip',
       listaId,
-      docId,
+      itemId,
       isNew: result.isNew,
       durationMs: Date.now() - startTime,
     });
 
     return sendSuccess(res, result);
   } catch (err: any) {
-    if (err.message === 'LISTA_NOT_FOUND') {
-      return sendError(res, 404, 'LISTA_NOT_FOUND', 'Lista de coleta não encontrada');
-    }
-
-    logApi('error', 'Falha ao processar bip', {
+    logApi('error', 'Falha ao processar bip Supabase', {
       endpoint: '/api/coleta/bip',
-      error: err.message,
+      error: err?.message,
       durationMs: Date.now() - startTime,
     });
 
-    return sendError(res, 500, 'BIP_FAILED', 'Erro ao salvar bip no servidor', err.message);
+    return sendError(
+      res,
+      500,
+      'BIP_FAILED',
+      'Erro ao salvar bip no servidor',
+      err?.message
+    );
   }
 }
