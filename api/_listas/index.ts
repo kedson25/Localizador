@@ -1,92 +1,72 @@
-import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '../_lib/firebase-admin';
 import { SaveListaMetaSchema } from '../_lib/validation';
 import { sendSuccess, sendError } from '../_lib/response';
 import { logApi } from '../_lib/logger';
+import { getSupabaseAdmin } from '../_lib/supabase-admin';
+import { listaFromRow, listaPatchToRow } from '../_lib/supabase-data';
 
 export default async function handler(req: any, res: any) {
   const startTime = Date.now();
-  const { db } = adminDb;
+  const supabase = getSupabaseAdmin();
 
   if (req.method === 'GET') {
     try {
-      const snap = await db.collection('coleta_listas').get();
-      const listas = snap.docs.map((docSnap) => {
-        const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          nome: data.nome || 'Lista sem nome',
-          tipo: data.tipo || 'comum',
-          rota: data.rota || 'Brancas',
-          data: data.data || '',
-          responsavel: data.responsavel || 'Operador',
-          status: data.status || 'em_andamento',
-          saidaPadrao: data.saidaPadrao || 'Ciclo 2 - Saída PM',
-          motivoPadrao: data.motivoPadrao || 'Pendente',
-          totalItens: typeof data.totalItens === 'number' ? data.totalItens : 0,
-          totalValidados: typeof data.totalValidados === 'number' ? data.totalValidados : 0,
-          saidasCount: data.saidasCount || {},
-          motivosCount: data.motivosCount || {},
-          bipsPorOperador: data.bipsPorOperador || {},
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-          grupos: data.grupos || [],
-          grupoAtivoId: data.grupoAtivoId,
-          porcentagemAcerto: data.porcentagemAcerto,
-          fechamentoGaiola: data.fechamentoGaiola,
-          itensFaltaram: data.itensFaltaram,
-        };
-      });
+      const { data, error } = await supabase
+        .from('coleta_listas')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-      // Ordenar mais recentes primeiro
-      listas.sort((a, b) => {
-        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-        if (tA !== tB) return tB - tA;
-        return (b.id || '').localeCompare(a.id || '');
-      });
-
-      return sendSuccess(res, { listas });
+      if (error) throw error;
+      return sendSuccess(res, { listas: (data || []).map(listaFromRow) });
     } catch (err: any) {
-      return sendError(res, 500, 'FETCH_FAILED', 'Erro ao listar listas', err.message);
+      return sendError(res, 500, 'FETCH_FAILED', 'Erro ao listar listas', err?.message);
     }
   }
 
   if (req.method === 'POST') {
     try {
-      const parseResult = SaveListaMetaSchema.safeParse(req.body);
-      if (!parseResult.success) {
-        return sendError(res, 400, 'INVALID_PAYLOAD', 'Dados da lista inválidos', parseResult.error.format());
+      const parsed = SaveListaMetaSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(
+          res,
+          400,
+          'INVALID_PAYLOAD',
+          'Dados da lista inválidos',
+          parsed.error.format()
+        );
       }
 
-      const listaData = parseResult.data;
+      const listaData = parsed.data;
       const listaId = listaData.id || `lista-${Date.now()}`;
-      const docRef = db.collection('coleta_listas').doc(listaId);
-
-      const toSave = {
-        ...listaData,
+      const payload = {
         id: listaId,
-        totalItens: 0,
-        totalValidados: 0,
-        saidasCount: {},
-        motivosCount: {},
-        bipsPorOperador: {},
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+        ...listaPatchToRow(listaData),
+        total_itens: 0,
+        total_validados: 0,
+        saidas_count: {},
+        motivos_count: {},
+        rotas_count: {},
+        bips_por_operador: {},
+        created_at: new Date().toISOString(),
       };
 
-      await docRef.set(toSave, { merge: true });
+      const { data, error } = await supabase
+        .from('coleta_listas')
+        .insert(payload)
+        .select('*')
+        .single();
 
-      logApi('info', 'Nova lista criada', {
+      if (error) throw error;
+
+      logApi('info', 'Nova lista Supabase criada', {
         endpoint: '/api/listas',
         listaId,
         nome: listaData.nome,
         durationMs: Date.now() - startTime,
       });
 
-      return sendSuccess(res, toSave, 201);
+      return sendSuccess(res, listaFromRow(data), 201);
     } catch (err: any) {
-      return sendError(res, 500, 'CREATE_FAILED', 'Erro ao criar lista', err.message);
+      return sendError(res, 500, 'CREATE_FAILED', 'Erro ao criar lista', err?.message);
     }
   }
 
