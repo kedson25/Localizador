@@ -55,21 +55,6 @@ export function setCurrentUser(user: User | null) {
   } catch (_) {}
 }
 
-async function resolveLoginEmail(login: string): Promise<string> {
-  const trimmed = login.trim();
-  if (trimmed.includes('@')) return trimmed.toLowerCase();
-
-  const { data, error } = await supabase.rpc('resolve_login_email', {
-    p_login: trimmed,
-  });
-
-  if (error || !data) {
-    throw new Error('Credenciais inválidas');
-  }
-
-  return String(data).toLowerCase();
-}
-
 async function loadOwnProfile(userId: string): Promise<User | null> {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token || null;
@@ -94,36 +79,29 @@ export async function signupUser(
   password: string
 ): Promise<{ success: boolean; message?: string }> {
   try {
-    const cleanUsername = username.trim();
-    const cleanEmail = email.trim().toLowerCase();
-
-    const { data, error } = await supabase.auth.signUp({
-      email: cleanEmail,
-      password,
-      options: {
-        data: {
-          username: cleanUsername,
-        },
-      },
+    const response = await fetch('/api/auth?action=signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: username.trim(),
+        email: email.trim().toLowerCase(),
+        password,
+      }),
     });
 
-    if (error) {
-      const duplicate = /already|registered|exists|unique/i.test(error.message || '');
+    const json = await response.json();
+    if (!response.ok || json?.ok === false) {
       return {
         success: false,
-        message: duplicate
-          ? 'E-mail ou usuário já cadastrado.'
-          : error.message || 'Não foi possível realizar o cadastro.',
+        message: json?.error?.message || 'Não foi possível realizar o cadastro.',
       };
-    }
-
-    if (data.session) {
-      await supabase.auth.signOut();
     }
 
     return {
       success: true,
-      message: 'Cadastro realizado com sucesso! Aguarde aprovação de um Administrador.',
+      message:
+        json?.data?.message ||
+        'Cadastro realizado com sucesso! Aguarde aprovação de um Administrador.',
     };
   } catch (error: any) {
     console.error('Erro no cadastro Supabase:', error);
@@ -139,38 +117,58 @@ export async function loginUser(
   password: string
 ): Promise<{ success: boolean; user?: User; message?: string }> {
   try {
-    const email = await resolveLoginEmail(emailOrUsername);
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+    const response = await fetch('/api/auth?action=login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        emailOrUsername: emailOrUsername.trim(),
+        password,
+      }),
     });
 
-    if (error || !data.user || !data.session) {
+    const json = await response.json();
+    if (!response.ok || json?.ok === false || !json?.data?.user) {
       return {
         success: false,
-        message: 'Credenciais inválidas',
+        message: json?.error?.message || 'Credenciais inválidas',
       };
     }
 
-    const user = await loadOwnProfile(data.user.id);
-    if (!user) {
-      await supabase.auth.signOut();
+    const accessToken = json.data.accessToken;
+    const refreshToken = json.data.refreshToken;
+
+    if (!accessToken || !refreshToken) {
       return {
         success: false,
-        message: 'Perfil de usuário não encontrado.',
+        message: 'Sessão Supabase não recebida do servidor.',
       };
     }
 
-    if (!user.isApproved) {
-      await supabase.auth.signOut();
+    const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+
+    if (sessionError || !sessionData.session) {
+      console.error('Falha ao registrar sessão Supabase:', sessionError);
       return {
         success: false,
-        message: 'Acesso pendente de aprovação por um Administrador.',
+        message: 'Não foi possível iniciar a sessão. Tente novamente.',
       };
     }
 
-    user.token = data.session.access_token;
+    const user: User = {
+      id: String(json.data.user.id),
+      username: String(json.data.user.username || ''),
+      email: String(json.data.user.email || ''),
+      isAdmin: Boolean(json.data.user.isAdmin),
+      isApproved: Boolean(json.data.user.isApproved),
+      allowedGroups: Array.isArray(json.data.user.allowedGroups)
+        ? json.data.user.allowedGroups
+        : [],
+      token: sessionData.session.access_token,
+    };
+
     setCurrentUser(user);
     return { success: true, user };
   } catch (error: any) {
@@ -270,12 +268,18 @@ export async function getUserById(userId: string): Promise<User | null> {
 
 export async function deleteUser(userId: string): Promise<boolean> {
   try {
-    const { error } = await supabase.rpc('admin_delete_user', {
-      p_user_id: userId,
+    const token = await getSupabaseAccessToken();
+    const response = await fetch('/api/auth?action=users', {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ userId }),
     });
 
-    if (error) throw error;
-    return true;
+    const json = await response.json();
+    return Boolean(response.ok && json?.ok !== false);
   } catch (error) {
     console.warn('Erro ao excluir usuário no Supabase:', error);
     return false;
