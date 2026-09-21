@@ -16,7 +16,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const { emailOrUsername, password } = parseResult.data;
-    const { db } = adminDb;
+    const { db, auth } = adminDb;
 
     const userCol = db.collection('users');
     let snap = await userCol.where('email', '==', emailOrUsername).limit(1).get();
@@ -52,6 +52,8 @@ export default async function handler(req: any, res: any) {
       return sendError(res, 401, 'INVALID_CREDENTIALS', 'Credenciais inválidas');
     }
 
+    const customToken = await auth.createCustomToken(userDoc.id);
+
     const safeUser = {
       id: userDoc.id,
       username: userData.username,
@@ -69,6 +71,7 @@ export default async function handler(req: any, res: any) {
 
     return sendSuccess(res, {
       token: idToken,
+      customToken,
       user: safeUser,
     });
   } catch (err: any) {
