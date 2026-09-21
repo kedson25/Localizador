@@ -1,6 +1,4 @@
-import { doc, getDoc } from 'firebase/firestore';
-import { getAuth, signInWithCustomToken, signOut } from 'firebase/auth';
-import { db } from './firebase';
+import { supabase, getSupabaseAccessToken } from './supabase';
 
 export interface User {
   id: string;
@@ -13,13 +11,24 @@ export interface User {
   token?: string;
 }
 
-const USERS_COLLECTION = 'users';
 const CURRENT_USER_KEY = 'app_current_user';
 
 try {
   localStorage.removeItem('app_local_users_backup');
   localStorage.removeItem('currentUser');
 } catch (_) {}
+
+function profileToUser(profile: any, token?: string | null): User {
+  return {
+    id: String(profile.id),
+    username: String(profile.username || profile.email?.split('@')[0] || 'usuario'),
+    email: String(profile.email || ''),
+    isAdmin: Boolean(profile.is_admin),
+    isApproved: Boolean(profile.is_approved),
+    allowedGroups: Array.isArray(profile.allowed_groups) ? profile.allowed_groups : [],
+    token: token || undefined,
+  };
+}
 
 export function getCurrentUser(): User | null {
   try {
@@ -46,20 +55,37 @@ export function setCurrentUser(user: User | null) {
   } catch (_) {}
 }
 
-async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  const auth = getAuth();
-  const firebaseUser = auth.currentUser;
-  const saved = getCurrentUser();
-  const token = firebaseUser ? await firebaseUser.getIdToken() : saved?.token;
+async function resolveLoginEmail(login: string): Promise<string> {
+  const trimmed = login.trim();
+  if (trimmed.includes('@')) return trimmed.toLowerCase();
 
-  return fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+  const { data, error } = await supabase.rpc('resolve_login_email', {
+    p_login: trimmed,
   });
+
+  if (error || !data) {
+    throw new Error('Credenciais inválidas');
+  }
+
+  return String(data).toLowerCase();
+}
+
+async function loadOwnProfile(userId: string): Promise<User | null> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token || null;
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, username, email, is_admin, is_approved, allowed_groups')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.warn('Perfil do Supabase não encontrado:', error);
+    return null;
+  }
+
+  return profileToUser(data, token);
 }
 
 export async function signupUser(
@@ -68,24 +94,43 @@ export async function signupUser(
   password: string
 ): Promise<{ success: boolean; message?: string }> {
   try {
-    const res = await fetch('/api/auth?action=signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username.trim(), email: email.trim(), password }),
+    const cleanUsername = username.trim();
+    const cleanEmail = email.trim().toLowerCase();
+
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        data: {
+          username: cleanUsername,
+        },
+      },
     });
 
-    const data = await res.json();
-    if (res.ok && data.ok) {
-      return { success: true, message: data.data?.message };
+    if (error) {
+      const duplicate = /already|registered|exists|unique/i.test(error.message || '');
+      return {
+        success: false,
+        message: duplicate
+          ? 'E-mail ou usuário já cadastrado.'
+          : error.message || 'Não foi possível realizar o cadastro.',
+      };
+    }
+
+    if (data.session) {
+      await supabase.auth.signOut();
     }
 
     return {
-      success: false,
-      message: data?.error?.message || 'Não foi possível realizar o cadastro',
+      success: true,
+      message: 'Cadastro realizado com sucesso! Aguarde aprovação de um Administrador.',
     };
   } catch (error: any) {
-    console.error('Erro no cadastro:', error);
-    return { success: false, message: 'Servidor indisponível. Tente novamente.' };
+    console.error('Erro no cadastro Supabase:', error);
+    return {
+      success: false,
+      message: error?.message || 'Servidor indisponível. Tente novamente.',
+    };
   }
 }
 
@@ -94,105 +139,154 @@ export async function loginUser(
   password: string
 ): Promise<{ success: boolean; user?: User; message?: string }> {
   try {
-    const res = await fetch('/api/auth?action=login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emailOrUsername: emailOrUsername.trim(), password }),
+    const email = await resolveLoginEmail(emailOrUsername);
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
     });
 
-    const data = await res.json();
-    if (!res.ok || !data.ok || !data.data?.user || !data.data?.customToken) {
+    if (error || !data.user || !data.session) {
       return {
         success: false,
-        message: data?.error?.message || 'Credenciais inválidas',
+        message: 'Credenciais inválidas',
       };
     }
 
-    const credential = await signInWithCustomToken(getAuth(), data.data.customToken);
-    const freshIdToken = await credential.user.getIdToken(true);
+    const user = await loadOwnProfile(data.user.id);
+    if (!user) {
+      await supabase.auth.signOut();
+      return {
+        success: false,
+        message: 'Perfil de usuário não encontrado.',
+      };
+    }
 
-    const user: User = {
-      ...data.data.user,
-      token: freshIdToken,
-    };
+    if (!user.isApproved) {
+      await supabase.auth.signOut();
+      return {
+        success: false,
+        message: 'Acesso pendente de aprovação por um Administrador.',
+      };
+    }
 
+    user.token = data.session.access_token;
     setCurrentUser(user);
     return { success: true, user };
   } catch (error: any) {
-    console.error('Erro no login:', error);
-    return { success: false, message: 'Não foi possível autenticar. Tente novamente.' };
+    console.error('Erro no login Supabase:', error);
+    return {
+      success: false,
+      message: error?.message || 'Não foi possível autenticar. Tente novamente.',
+    };
+  }
+}
+
+export async function refreshCurrentUser(): Promise<User | null> {
+  try {
+    const { data } = await supabase.auth.getUser();
+    if (!data.user) {
+      setCurrentUser(null);
+      return null;
+    }
+
+    const user = await loadOwnProfile(data.user.id);
+    if (user?.isApproved) {
+      setCurrentUser(user);
+      return user;
+    }
+
+    setCurrentUser(null);
+    return null;
+  } catch {
+    return getCurrentUser();
   }
 }
 
 export async function getAllUsers(): Promise<User[]> {
   try {
-    const res = await authenticatedFetch('/api/auth?action=users');
-    const data = await res.json();
-    if (res.ok && data.ok && Array.isArray(data.data?.users)) {
-      return data.data.users;
-    }
+    const token = await getSupabaseAccessToken();
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, username, email, is_admin, is_approved, allowed_groups, created_at')
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    return (data || []).map((profile) => profileToUser(profile, token));
   } catch (error) {
-    console.warn('Erro ao buscar usuários:', error);
+    console.warn('Erro ao buscar usuários no Supabase:', error);
+    return [];
   }
-  return [];
 }
 
 export async function updateUserAdminStatus(
   userId: string,
   updates: Partial<User>
 ): Promise<boolean> {
-  const safeUpdates = { ...updates };
-  delete safeUpdates.password;
-  delete safeUpdates.token;
-  delete safeUpdates.id;
-  delete safeUpdates.username;
-  delete safeUpdates.email;
-
   try {
-    const res = await authenticatedFetch('/api/auth?action=users', {
-      method: 'PATCH',
-      body: JSON.stringify({ userId, updates: safeUpdates }),
-    });
-    const data = await res.json();
-    return Boolean(res.ok && data.ok);
+    const payload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (updates.isAdmin !== undefined) payload.is_admin = updates.isAdmin;
+    if (updates.isApproved !== undefined) payload.is_approved = updates.isApproved;
+    if (updates.allowedGroups !== undefined) payload.allowed_groups = updates.allowedGroups;
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(payload)
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    const current = getCurrentUser();
+    if (current?.id === userId) {
+      const refreshed = await loadOwnProfile(userId);
+      if (refreshed) setCurrentUser(refreshed);
+    }
+
+    return true;
   } catch (error) {
-    console.warn('Erro ao atualizar usuário:', error);
+    console.warn('Erro ao atualizar usuário no Supabase:', error);
     return false;
   }
 }
 
 export async function getUserById(userId: string): Promise<User | null> {
   try {
-    const snap = await getDoc(doc(db, USERS_COLLECTION, userId));
-    if (!snap.exists()) return null;
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, username, email, is_admin, is_approved, allowed_groups')
+      .eq('id', userId)
+      .maybeSingle();
 
-    const user = snap.data() as User;
-    delete user.password;
-    return { ...user, id: snap.id };
+    if (error || !data) return null;
+    return profileToUser(data, await getSupabaseAccessToken());
   } catch (error) {
-    console.warn('Erro ao buscar usuário por ID:', error);
+    console.warn('Erro ao buscar usuário no Supabase:', error);
     return null;
   }
 }
 
 export async function deleteUser(userId: string): Promise<boolean> {
   try {
-    const res = await authenticatedFetch('/api/auth?action=users', {
-      method: 'DELETE',
-      body: JSON.stringify({ userId }),
+    const { error } = await supabase.rpc('admin_delete_user', {
+      p_user_id: userId,
     });
-    const data = await res.json();
-    return Boolean(res.ok && data.ok);
+
+    if (error) throw error;
+    return true;
   } catch (error) {
-    console.warn('Erro ao excluir usuário:', error);
+    console.warn('Erro ao excluir usuário no Supabase:', error);
     return false;
   }
 }
 
 export async function logoutUser() {
   try {
-    await signOut(getAuth());
+    await supabase.auth.signOut();
   } catch (_) {}
+
   setCurrentUser(null);
   window.location.reload();
 }
