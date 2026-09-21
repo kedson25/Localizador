@@ -1,8 +1,9 @@
-import { adminDb } from '../_lib/firebase-admin';
 import { SearchItemsSchema } from '../_lib/validation';
 import { normalizeCodigo, cleanDigits, getDeterministicItemId } from '../_lib/id';
 import { sendSuccess, sendError } from '../_lib/response';
 import { logApi } from '../_lib/logger';
+import { getSupabaseAdmin } from '../_lib/supabase-admin';
+import { itemFromRow } from '../_lib/supabase-data';
 
 export default async function handler(req: any, res: any) {
   const startTime = Date.now();
@@ -12,66 +13,70 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const parseResult = SearchItemsSchema.safeParse(req.query || {});
-    if (!parseResult.success) {
-      return sendError(res, 400, 'INVALID_QUERY', 'Termo de busca e listaId são obrigatórios');
+    const parsed = SearchItemsSchema.safeParse(req.query || {});
+    if (!parsed.success) {
+      return sendError(
+        res,
+        400,
+        'INVALID_QUERY',
+        'Termo de busca e listaId são obrigatórios'
+      );
     }
 
-    const { listaId, q, limit: maxResults } = parseResult.data;
+    const { listaId, q, limit: maxResults } = parsed.data;
     const cleanQuery = normalizeCodigo(q);
     const digitsQuery = cleanDigits(cleanQuery);
+    const deterministicId = getDeterministicItemId(cleanQuery);
+    const supabase = getSupabaseAdmin();
+    const found = new Map<string, any>();
 
-    const { db } = adminDb;
-    const listaRef = db.collection('coleta_listas').doc(listaId);
-    const itemsCol = listaRef.collection('itens');
-    const resultsMap = new Map<string, any>();
+    const { data: direct, error: directError } = await supabase
+      .from('coleta_itens')
+      .select('*')
+      .eq('lista_id', listaId)
+      .eq('id', deterministicId)
+      .maybeSingle();
 
-    // 1. Busca Direta Determinística por Document ID (O(1))
-    try {
-      const deterministicId = getDeterministicItemId(cleanQuery);
-      const docSnap = await itemsCol.doc(deterministicId).get();
-      if (docSnap.exists) {
-        resultsMap.set(docSnap.id, { ...docSnap.data(), id: docSnap.id });
-      }
-    } catch (_) {}
+    if (directError) throw directError;
+    if (direct) found.set(String(direct.id), direct);
 
-    // 2. Busca exata por código no campo 'codigo'
-    if (resultsMap.size < maxResults) {
-      const exactSnap = await itemsCol
-        .where('codigo', '==', cleanQuery)
-        .limit(maxResults)
-        .get();
-      exactSnap.docs.forEach((d) => {
-        resultsMap.set(d.id, { ...d.data(), id: d.id });
-      });
+    if (found.size < maxResults) {
+      const { data, error } = await supabase
+        .from('coleta_itens')
+        .select('*')
+        .eq('lista_id', listaId)
+        .eq('codigo', cleanQuery)
+        .limit(maxResults);
+      if (error) throw error;
+      (data || []).forEach((row: any) => found.set(String(row.id), row));
     }
 
-    // 3. Busca por dígitos limpos no campo 'codigoClean'
-    if (digitsQuery && digitsQuery !== cleanQuery && resultsMap.size < maxResults) {
-      const cleanSnap = await itemsCol
-        .where('codigoClean', '==', digitsQuery)
-        .limit(maxResults)
-        .get();
-      cleanSnap.docs.forEach((d) => {
-        resultsMap.set(d.id, { ...d.data(), id: d.id });
-      });
+    if (digitsQuery && found.size < maxResults) {
+      const { data, error } = await supabase
+        .from('coleta_itens')
+        .select('*')
+        .eq('lista_id', listaId)
+        .eq('codigo_clean', digitsQuery)
+        .limit(maxResults - found.size);
+      if (error) throw error;
+      (data || []).forEach((row: any) => found.set(String(row.id), row));
     }
 
-    // 4. Busca por prefixo se ainda houver espaço
-    if (resultsMap.size < maxResults && cleanQuery.length >= 3) {
-      const prefixSnap = await itemsCol
-        .where('codigo', '>=', cleanQuery)
-        .where('codigo', '<=', cleanQuery + '\uf8ff')
-        .limit(maxResults)
-        .get();
-      prefixSnap.docs.forEach((d) => {
-        resultsMap.set(d.id, { ...d.data(), id: d.id });
-      });
+    if (cleanQuery.length >= 3 && found.size < maxResults) {
+      const escaped = cleanQuery.replace(/[%_]/g, '\\$&');
+      const { data, error } = await supabase
+        .from('coleta_itens')
+        .select('*')
+        .eq('lista_id', listaId)
+        .ilike('codigo', `${escaped}%`)
+        .limit(maxResults - found.size);
+      if (error) throw error;
+      (data || []).forEach((row: any) => found.set(String(row.id), row));
     }
 
-    const items = Array.from(resultsMap.values());
+    const items = Array.from(found.values()).slice(0, maxResults).map(itemFromRow);
 
-    logApi('info', 'Busca global realizada', {
+    logApi('info', 'Busca Supabase realizada', {
       endpoint: '/api/coleta/search',
       listaId,
       query: cleanQuery,
@@ -81,6 +86,6 @@ export default async function handler(req: any, res: any) {
 
     return sendSuccess(res, { items });
   } catch (err: any) {
-    return sendError(res, 500, 'SEARCH_FAILED', 'Erro ao pesquisar itens', err.message);
+    return sendError(res, 500, 'SEARCH_FAILED', 'Erro ao pesquisar itens', err?.message);
   }
 }
