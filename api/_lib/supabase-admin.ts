@@ -1,7 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 let adminClient: SupabaseClient | null = null;
-let authClient: SupabaseClient | null = null;
 
 function getSupabaseUrl(): string {
   const value = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -55,9 +54,7 @@ export function getSupabaseAdmin(): SupabaseClient {
 }
 
 export function getSupabaseAuthClient(): SupabaseClient {
-  if (!authClient) {
-    authClient = createClient(getSupabaseUrl(), getAnonKey(), commonOptions);
-  }
-
-  return authClient;
+  // Nova instância por requisição: evita compartilhar estado de sessão entre usuários
+  // em uma função serverless reutilizada pela Vercel.
+  return createClient(getSupabaseUrl(), getAnonKey(), commonOptions);
 }
